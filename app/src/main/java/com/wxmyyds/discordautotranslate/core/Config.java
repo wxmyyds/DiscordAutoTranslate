@@ -88,9 +88,8 @@ public final class Config {
     public static final int DEF_MAX_CONCURRENCY = 4;
 
     public static final String KEY_VERBOSE_LOG = "verbose_log";
-    // 排障期默认开启：详细日志会输出消息正文摘要与每一步 Hook 结果，
-    // 便于定位“无译文/无图标”类问题。稳定后可改回 false。
-    public static final boolean DEF_VERBOSE_LOG = true;
+    // 详细日志默认关闭；正文日志始终脱敏，不允许 verbose 解除脱敏。
+    public static final boolean DEF_VERBOSE_LOG = false;
 
     private Config() {
     }
@@ -156,12 +155,16 @@ public final class Config {
         }
 
         /**
-         * 配置版本：影响翻译结果的配置项参与哈希。
-         * 配置变化后旧译文不会与新配置的请求混淆（需求 §5.6）。
+         * 返回请求配置版本，并使用无歧义的字段边界编码。
          */
         public String version() {
-            return apiUrl + "|" + model + "|" + targetLang + "|" + responsePath + "|"
-                    + systemPrompt + "|" + bodyTemplate;
+            return encode(apiUrl) + encode(model) + encode(targetLang) + encode(responsePath)
+                    + encode(systemPrompt) + encode(bodyTemplate);
+        }
+
+        private static String encode(String value) {
+            String v = value == null ? "" : value;
+            return v.length() + ":" + v;
         }
 
         /** 是否已具备发起请求的最小配置。 */

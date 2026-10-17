@@ -147,11 +147,28 @@ public class JsonPathTest {
     @Test
     public void validateJsonAcceptsAndRejects() throws Exception {
         JsonPath.validateJson("{\"a\":[1,2]}", "x");
+        JsonPath.validateJson("{\"a\":1}   ", "x");
+        assertInvalidJson("{\"a\":1}garbage");
+        assertInvalidJson("{\"a\":1} {\"b\":2}");
+        assertInvalidJson("{oops");
+    }
+
+    private static void assertInvalidJson(String json) {
         try {
-            JsonPath.validateJson("{oops", "x");
-            fail("expected CONFIG error");
+            JsonPath.validateJson(json, "x");
+            fail("expected CONFIG error for: " + json);
         } catch (TranslationException e) {
             assertEquals(TranslationException.Kind.CONFIG, e.kind());
+        }
+    }
+
+    @Test
+    public void responseParserRejectsTrailingGarbage() {
+        try {
+            JsonPath.extractString("{\"a\":\"ok\"}garbage", "a");
+            fail("expected PARSE error");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
         }
     }
 

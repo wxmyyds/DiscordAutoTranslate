@@ -28,15 +28,12 @@ public final class StructurableTextFactory {
     private static volatile Class<?> sAnnotatedClass;
     private static volatile Constructor<?> sPrimitiveCtor;
     private static volatile Constructor<?> sAnnotatedCtor;
-    private static volatile boolean sInitTried;
 
     private StructurableTextFactory() {
     }
 
     /** 由模块入口在拿到目标 ClassLoader 后初始化。 */
     public static void init(@Nullable ClassLoader cl) {
-        sInitTried = true;
-
         sPrimitiveClass = Reflect.loadClass(cl,
                 "com.discord.chat.bridge.structurabletext.PrimitiveStructurableText");
         sAnnotatedClass = Reflect.loadClass(cl,
@@ -70,20 +67,6 @@ public final class StructurableTextFactory {
         sAnnotatedClass = null;
         sPrimitiveCtor = null;
         sAnnotatedCtor = null;
-        sInitTried = false;
-    }
-
-    public static boolean isReady() {
-        return sPrimitiveCtor != null || sAnnotatedCtor != null;
-    }
-
-    public static boolean isInitTried() {
-        return sInitTried;
-    }
-
-    /** 能否保留 Markdown（即能否构造 AnnotatedStructurableText）。 */
-    public static boolean canPreserveMarkdown() {
-        return sAnnotatedCtor != null;
     }
 
     /** 构造 {@code PrimitiveStructurableText(text)}；不可用时返回 null。 */

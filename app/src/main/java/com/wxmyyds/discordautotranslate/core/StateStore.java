@@ -80,16 +80,6 @@ public final class StateStore {
         XLog.i("state store reset, generation=" + generation.get());
     }
 
-    /** 自动翻译总开关关闭时调用：停止新任务，但保留已有译文（需求 §2.7）。 */
-    public void markAutoTranslateDisabled() {
-        for (Entry e : entries.values()) {
-            if (e.status == Status.TRANSLATING) {
-                // 在途任务的结果将被版本/开关校验丢弃。
-                e.status = e.translatedText != null ? Status.TRANSLATED : Status.IDLE;
-            }
-        }
-    }
-
     /**
      * 取得或创建某条消息的状态。若内容哈希变化（消息被编辑），
      * 立即失效旧译文（需求 §2.8）。

@@ -65,25 +65,39 @@ public final class JsonPath {
         return stringify(cur, path);
     }
 
-    /** 校验一段文本是否为合法 JSON。用于设置页的模板校验。 */
+    /** 校验一段文本是否为完整合法 JSON（允许尾随空白）。 */
     public static void validateJson(String text, String what) throws TranslationException {
+        if (text == null) {
+            throw new TranslationException(TranslationException.Kind.CONFIG,
+                    what + "不是完整合法 JSON：输入为空");
+        }
         try {
-            new JSONTokener(text).nextValue();
+            JSONTokener tokener = new JSONTokener(text);
+            tokener.nextValue();
+            if (tokener.nextClean() != 0) {
+                throw new JSONException("JSON 后存在额外内容");
+            }
         } catch (JSONException e) {
             throw new TranslationException(TranslationException.Kind.CONFIG,
-                    what + "不是合法 JSON：" + e.getMessage(), e);
+                    what + "不是完整合法 JSON：" + e.getMessage(), e);
         }
     }
 
+    /** 解析完整 JSON 文本；只允许尾随空白。 */
     private static Object parse(String json) throws TranslationException {
         if (json == null || json.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.PARSE, "响应体为空");
         }
         try {
-            return new JSONTokener(json).nextValue();
+            JSONTokener tokener = new JSONTokener(json);
+            Object value = tokener.nextValue();
+            if (tokener.nextClean() != 0) {
+                throw new JSONException("JSON 后存在额外内容");
+            }
+            return value;
         } catch (JSONException e) {
             throw new TranslationException(TranslationException.Kind.PARSE,
-                    "响应不是合法 JSON", e);
+                    "响应不是完整合法 JSON", e);
         }
     }
 
