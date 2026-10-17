@@ -203,8 +203,6 @@ public final class TranslationIconView extends View {
 
     // ------------------------------------------------------------------ 创建/挂载
 
-    /** 在消息容器（DecoratedMessageView，FrameLayout）右下角挂载或复用图标。 */
-    @Nullable
     /**
      * 在消息行容器上挂载或复用图标。
      *
