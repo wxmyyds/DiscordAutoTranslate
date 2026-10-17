@@ -182,12 +182,8 @@ public final class MessageHooks {
         if (messageId == null) {
             return;
         }
-        ViewGroup row = findRowContainer(contentView);
-        if (row == null) {
-            XLog.d("row container not found for " + messageId + "; icon not attached");
-            return;
-        }
-        IconRegistry.attach(messageId, row);
+        // 延迟到布局后：bind 时视图尚未 addView，getParent() 为 null。
+        attachIconDeferred(contentView, messageId);
     }
 
     // ------------------------------------------------- Hook 2: 展开式 setMessageContent
@@ -233,15 +229,9 @@ public final class MessageHooks {
                                 String messageId = HookBridge.get().messageIdOf(view);
                                 if (messageId != null) {
                                     RerenderRegistry.register(messageId, view, target);
-                                    ViewGroup row = findRowContainer(view);
-                                    if (row != null) {
-                                        TranslationIconView icon =
-                                                IconRegistry.attach(messageId, row);
-                                        if (icon != null
-                                                && !messageId.equals(icon.getMessageId())) {
-                                            icon.setMessageId(messageId);
-                                        }
-                                    }
+                                    // 此处也可能早于 addView（RecyclerView 绑定阶段），
+                                    // 故统一走延迟挂载。
+                                    attachIconDeferred(view, messageId);
                                     IconRegistry.refresh(messageId);
                                     if (structurable != null) {
                                         HookBridge.get().onMessageBound(
@@ -461,6 +451,97 @@ public final class MessageHooks {
     @Nullable
     private static View asView(@Nullable Object o) {
         return o instanceof View ? (View) o : null;
+    }
+
+    /**
+     * 延迟挂图标：等视图真正被加入视图树后再沿父链找行容器。
+     *
+     * <p><b>为何必须延迟</b>：正文视图 {@code MessageContentView} 是
+     * {@code MessageAccessoriesView}（一个 RecyclerView）的 itemView。
+     * RecyclerView 的顺序是<b>先 {@code onBindViewHolder}（即 bind 与首次
+     * setMessageContent）后 {@code addView}</b>。因此在 Hook 触发的那一刻，
+     * {@code contentView.getParent()} 仍为 null，沿 {@code getParent()} 上溯
+     * 必然失败。</p>
+     *
+     * <p>而译文走的是「内容对象身份映射」，与视图层级无关，所以会出现
+     * “译文正常但图标全无”的现象。把挂载 post 到下一次布局即可解决。</p>
+     *
+     * <p>不依赖 {@code View.post} 的具体时机猜测定论：若 post 时仍未挂上，
+     * 则用 {@code OnAttachStateChangeListener} 兜底，确保最终一定会尝试挂载。</p>
+     */
+    private static void attachIconDeferred(@Nullable View contentView, @Nullable String messageId) {
+        if (contentView == null || messageId == null) {
+            return;
+        }
+        final View view = contentView;
+        final String id = messageId;
+        view.post(() -> {
+            if (!id.equals(HookBridge.get().messageIdOf(view))) {
+                // 视图已被复用到别的消息（需求 §风险 2）。
+                return;
+            }
+            if (tryAttachIcon(view, id)) {
+                return;
+            }
+            // post 时仍未挂上：注册一次性 attach 监听兜底。
+            view.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+                @Override
+                public void onViewAttachedToWindow(View v) {
+                    v.removeOnAttachStateChangeListener(this);
+                    if (!id.equals(HookBridge.get().messageIdOf(view))) {
+                        return;
+                    }
+                    tryAttachIcon(view, id);
+                }
+
+                @Override
+                public void onViewDetachedFromWindow(View v) {
+                    v.removeOnAttachStateChangeListener(this);
+                }
+            });
+        });
+    }
+
+    /** 尝试挂载图标；成功返回 true。失败时输出父链诊断日志。 */
+    private static boolean tryAttachIcon(View contentView, String messageId) {
+        ViewGroup row = findRowContainer(contentView);
+        if (row == null) {
+            // 关键诊断：把实际父链打出来，便于确定行控件的真实类名与层级。
+            XLog.d("row container not found for " + messageId
+                    + "; parent chain=" + describeParentChain(contentView));
+            return false;
+        }
+        TranslationIconView icon = IconRegistry.attach(messageId, row);
+        if (icon == null) {
+            XLog.d("icon attach returned null for " + messageId
+                    + "; row=" + row.getClass().getSimpleName()
+                    + " children=" + row.getChildCount());
+            return false;
+        }
+        XLog.d("icon attached " + messageId + " via " + row.getClass().getSimpleName()
+                + " size=" + icon.getWidth() + "x" + icon.getHeight()
+                + " vis=" + icon.getVisibility());
+        return true;
+    }
+
+    /** 把视图的父链描述为 "A <- B <- C"，用于排障。 */
+    private static String describeParentChain(@Nullable View view) {
+        StringBuilder sb = new StringBuilder();
+        View current = view;
+        int depth = 0;
+        while (current != null && depth < 12) {
+            if (depth > 0) {
+                sb.append(" <- ");
+            }
+            sb.append(current.getClass().getSimpleName());
+            android.view.ViewParent vp = current.getParent();
+            current = vp instanceof View ? (View) vp : null;
+            depth++;
+        }
+        if (current != null) {
+            sb.append(" <- ...");
+        }
+        return sb.toString();
     }
 
     /**

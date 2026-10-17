@@ -322,6 +322,9 @@ public final class HookBridge {
         entry.status = StateStore.Status.TRANSLATING;
         XLog.i("translate start " + messageId + " " + v.reason
                 + " text=" + XLog.text(ex.text));
+        // 立即刷新，让「翻译中」旋转图标显示出来；同时也便于排障时
+        // 直接看出图标是否已成功挂载。
+        IconRegistry.refresh(messageId);
 
         Scheduler.get().submit(messageId, hash, ex.text, engine,
                 (generationSnapshot, contentHash) -> {
