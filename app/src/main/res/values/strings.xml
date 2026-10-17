@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="module_name">Discord 自动翻译</string>
+    <string name="module_description">将 Discord 消息自动翻译为简体中文，支持译文/原文切换。</string>
+</resources>

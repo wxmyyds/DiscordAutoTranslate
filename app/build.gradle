@@ -1,0 +1,57 @@
+// Discord 自动翻译模块 —— 阶段 1 可行性原型
+//
+// 构建说明：本仓库禁止本地构建，所有编译/打包必须通过 GitHub Actions 执行。
+// 见 .github/workflows/build.yml
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.wxmyyds.discordautotranslate"
+    // compileSdk 37 为强制项：io.github.libxposed:api:102.0.0 与 :service:102.0.0
+    // 的 AAR 元数据均声明 minCompileSdk=37，低于该值 Gradle 会直接报错。
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "com.wxmyyds.discordautotranslate"
+        // libxposed api/service 的 AAR 均声明 minSdkVersion 26。
+        minSdk 26
+        targetSdk 37
+        versionCode 1
+        versionName "0.1.0-stage1"
+    }
+
+    buildTypes {
+        release {
+            // 阶段 1 关闭混淆：Hook 依赖类名/方法名匹配，先排除混淆变量，
+            // 集中验证 Hook 点本身。proguard 规则已备好，阶段 5 再启用。
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+dependencies {
+    // 模块运行在 Discord 进程内，XposedModule/XposedInterface 由 LSPosed 框架提供，
+    // 因此用 compileOnly，不打包进 APK。
+    compileOnly "io.github.libxposed:api:102.0.0"
+
+    // 设置 Activity 运行在模块自身进程，需要 XposedService/XposedProvider（服务端通信），
+    // 必须打进 APK，因此用 implementation。该 AAR 自带 XposedProvider 的 manifest 声明。
+    implementation "io.github.libxposed:service:102.0.0"
+
+    // api 与 service 的 AAR 均未传递 androidx.annotation，但其 API 使用 @NonNull 等注解，
+    // 因此显式声明注解库。annotation 是纯注解 jar，compileOnly 即可。
+    compileOnly "androidx.annotation:annotation:1.9.1"
+}

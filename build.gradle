@@ -1,0 +1,6 @@
+// AGP 9.4.x 是当前能支持 compileSdk 37 的稳定版本。
+// 依据官方兼容表：AGP 9.4 需要 Gradle >= 9.6.0、JDK 17、Build Tools 36.0.0。
+// 该插件版本由 GitHub Actions 构建时解析，本地不执行构建。
+plugins {
+    id "com.android.application" version "9.4.1" apply false
+}

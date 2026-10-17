@@ -1,0 +1,24 @@
+# Discord 官方 APK 反编译产物（仅作本地逆向分析用，不属于本仓库源码）
+# 版权属 Discord Inc.，禁止提交。
+/smali/
+
+# Android / Gradle 构建产物
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+local.properties
+captures/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 系统
+.DS_Store
+Thumbs.db

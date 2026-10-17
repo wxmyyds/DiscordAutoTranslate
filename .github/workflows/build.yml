@@ -1,0 +1,106 @@
+name: Build module APK
+
+# 依据项目规则：编译/打包/构建产物只能通过 GitHub Actions 执行，禁止本地构建。
+# 触发方式：手动触发（workflow_dispatch），或向 main 的 PR、以及功能分支推送时自动构建验证。
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "构建类型"
+        required: true
+        default: "Debug"
+        type: choice
+        options:
+          - Debug
+          - Release
+
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/**'
+
+  push:
+    branches-ignore: [ main ]
+    paths:
+      - 'app/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Assemble APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-37" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Resolve requested build type
+        id: cfg
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "task=${{ github.event.inputs.build_type }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=Debug" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify xposed resources are present
+        run: |
+          set -e
+          for f in app/src/main/resources/META-INF/xposed/java_init.list \
+                   app/src/main/resources/META-INF/xposed/module.prop \
+                   app/src/main/resources/META-INF/xposed/scope.list; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+          echo "entry class: $(cat app/src/main/resources/META-INF/xposed/java_init.list)"
+
+      - name: Assemble
+        run: gradle --no-daemon assemble${{ steps.cfg.outputs.task }}
+
+      - name: Verify APK contents (xposed entry + scope)
+        run: |
+          set -e
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -n 1)
+          echo "APK: $APK"
+          test -n "$APK" || { echo "no apk produced"; exit 1; }
+          echo "--- META-INF/xposed entries ---"
+          unzip -l "$APK" | grep -i 'META-INF/xposed' || { echo "xposed metadata missing from APK"; exit 1; }
+          echo "--- java_init.list ---"
+          unzip -p "$APK" META-INF/xposed/java_init.list
+          echo "--- module.prop ---"
+          unzip -p "$APK" META-INF/xposed/module.prop
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiscordAutoTranslate-${{ steps.cfg.outputs.task }}-${{ github.sha }}
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error

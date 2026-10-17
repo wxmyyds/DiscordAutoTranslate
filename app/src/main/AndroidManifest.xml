@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 模块自身进程需要访问网络（翻译 API）与网络状态判断 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:label="@string/module_name"
+        android:description="@string/module_description"
+        android:supportsRtl="true">
+
+        <!-- 设置入口：第一版采用独立设置 Activity（需求 §5.7 备用方案）。
+             原因见 docs/design-stage1.md：Discord 340.13 的设置界面由 RN/Hermes 渲染，
+             无法在不注入 JS bundle 的前提下插入设置项。 -->
+        <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="true"
+            android:label="@string/module_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 注意：io.github.libxposed.service.XposedProvider 由
+             io.github.libxposed:service 这个 AAR 自带的 manifest 声明并合并进来，
+             此处不要重复声明，否则会因 authority 重复而构建失败。 -->
+
+    </application>
+</manifest>
