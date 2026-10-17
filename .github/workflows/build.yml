@@ -50,13 +50,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools，
+      # 这里直接复用，避免 android-actions/setup-android 在较新镜像上
+      # 执行已移除的 `sdkmanager tools` 而失败。
       - name: Install required SDK packages
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-37" "build-tools;36.0.0"
+          set -e
+          SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then
+            SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort | tail -n 1)
+          fi
+          echo "sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" "platforms;android-37" "build-tools;36.0.0"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
