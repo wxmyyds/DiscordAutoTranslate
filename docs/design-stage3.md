@@ -148,7 +148,49 @@ copy(...)                   -> 重建节点
 
 ## 7. 验证
 
-### 7.1 单元测试（`ContentNodesTest`）
+### 7.0 真机失败与核验修正记录
+
+用户实测反馈「无图标、无翻译」。逐个 Hook 点与 smali 对照核验后，
+发现并修复了 5 个真实错误。根因与修正汇总：
+
+| # | 位置 | 错误 | 后果 |
+|---|---|---|---|
+| 1 | `toSpannable` | 阶段 1 误判 6 参 `setMessageContent` 为唯一漏斗；实际它是 `TextDisplayComponentView` 专用，不在消息路径上 | 翻译从未启动 |
+| 2 | `findRowContainer` | 找 `DecoratedMessageView`；实际行控件是 `MessageView` | 图标从未被添加 |
+| 3 | `TranslationIconView.attachTo` | 只处理 `FrameLayout`；`MessageView` 是 `RelativeLayout` | 图标会跑到左上角 |
+| 4 | 图标点击 | `MessageView.onInterceptTouchEvent` 返回 `!allowChildGestures`，会接管手势 | 图标点不动 |
+| 5 | `toSpannable` 重载选择 | 同名重载两个（29 参 / 4 参），取第一个匹配则顺序不确定 | 可能挂错方法 |
+| 6 | `XLog` | 有框架时只写框架日志，**不写 logcat** | `adb logcat` 什么都看不到，无法排障 |
+
+### 7.1 已核验正确的 Hook 点（逐项对照 smali）
+
+| Hook | 核验内容 | 结果 |
+|---|---|---|
+| `MessageContentViewHolder.bind` | 17 参、首参 `MessageContentAccessory`；字段 `messageContentView`；`getMessageId-3Eiw7ao()` | ✅ |
+| 展开式 `setMessageContent` | 34 参、首参 `MessageMargins`、`getArg(1)` 为 `StructurableText`；`$default` 因首参不是 `MessageMargins` 被正确排除 | ✅ |
+| `configureReply` | 3 参、首参 `ReferencedMessage`；`LoadedReferencedMessage.getMessage()` 存在 | ✅ |
+| 回复引用渲染路径 | 确实**直接**调 `toSpannable`（全文件 3 处，不经 `setMessageContent`） | ✅ `toSpannable` Hook 可覆盖 |
+| 消息正文本路径 | `-hYrISQc`（1835 行起）内含 `toSpannable` 调用（2213 行） | ✅ 修复方向正确 |
+| 聊天列表实现 | `RegularMessageDelegate.createView()` 返回 `MessageView`；由 `ChatListAdapterConfiguratorKt` 装配，原生 RecyclerView（非 RN） | ✅ 原生 Hook 路线成立 |
+
+### 7.2 诊断日志
+
+排障期已开启以下机制（见 `XLog` 与 `MessageHooks.install`）：
+
+- 日志**同时**写 `android.util.Log` 与框架日志，`adb logcat` 可见。
+- 启动时输出单行摘要：`hook pipeline armed: N/4`。
+  期望为 4；每个 Hook 失败时上方均有具体原因日志。
+- 关键流程日志：`bind <id>` → `translate start <id>` → `translate done <id>`；
+  以及 `toSpannable substituted for <id>`。
+- 详细日志默认开启（`Config.DEF_VERBOSE_LOG = true`）。
+
+抓日志：
+
+```
+adb logcat -s DiscordAutoTranslate
+```
+
+### 7.3 单元测试（`ContentNodesTest`）
 
 Discord 真实节点类在单测环境不存在，但 `ContentNodes` 完全通过反射
 （`getContent`/`getItems`/`componentN`/`copy`/`<init>(String)`）操作节点。
