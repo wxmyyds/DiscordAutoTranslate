@@ -50,6 +50,39 @@ public final class TranslationIconView extends View {
         setAlpha(0.75f);
     }
 
+    /**
+     * 拦截触摸，防止父容器抢走手势。
+     *
+     * <p>必要性：消息行 {@code MessageView} 覆盖了
+     * {@code onInterceptTouchEvent}，当其 {@code allowChildGestures} 为 false 时
+     * 会直接返回 true 并接管整个手势（已核对 smali：
+     * {@code return !allowChildGestures}），导致子视图收不到点击。
+     * 在 ACTION_DOWN 时请求父级不要拦截，可保证图标仍可点击。
+     * 若完全未收到 ACTION_DOWN，再由 {@link #setOnClickListener} 兼容处理。</p>
+     */
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                android.view.ViewParent parent = getParent();
+                if (parent != null) {
+                    parent.requestDisallowInterceptTouchEvent(true);
+                }
+                setAlpha(1f);
+                return true;
+            case android.view.MotionEvent.ACTION_UP:
+                setAlpha(0.75f);
+            case android.view.MotionEvent.ACTION_CANCEL:
+                android.view.ViewParent p2 = getParent();
+                if (p2 != null) {
+                    p2.requestDisallowInterceptTouchEvent(false);
+                }
+                return true;
+            default:
+                return super.onTouchEvent(event);
+        }
+    }
+
     public void setMessageId(String id) {
         this.messageId = id;
     }
@@ -172,6 +205,16 @@ public final class TranslationIconView extends View {
 
     /** 在消息容器（DecoratedMessageView，FrameLayout）右下角挂载或复用图标。 */
     @Nullable
+    /**
+     * 在消息行容器上挂载或复用图标。
+     *
+     * <p>容器类型：聊天列表的行控件是 {@code MessageView}
+     * （{@code extends ChatListRelativeLayout extends RelativeLayout}），
+     * RN 组件场景是 {@code DecoratedMessageView}（FrameLayout）。
+     * 两者均需按对应类型设置 LayoutParams 并停靠右下角，
+     * 否则图标会被放到左上角并可能扰乱原有布局。</p>
+     */
+    @Nullable
     public static TranslationIconView attachTo(@Nullable ViewGroup container) {
         if (container == null) {
             return null;
@@ -190,20 +233,40 @@ public final class TranslationIconView extends View {
         int size = Math.round(SIZE_DP * d);
         int margin = Math.round(MARGIN_DP * d);
 
-        ViewGroup.LayoutParams lp;
+        created.setLayoutParams(buildLayoutParams(container, size, margin));
+        container.addView(created);
+        return created;
+    }
+
+    /** 按容器类型生成右下角停靠的 LayoutParams。 */
+    private static ViewGroup.LayoutParams buildLayoutParams(ViewGroup container, int size, int margin) {
+        if (container instanceof android.widget.RelativeLayout) {
+            // MessageView / ChatListRelativeLayout 走这一支。
+            android.widget.RelativeLayout.LayoutParams rlp =
+                    new android.widget.RelativeLayout.LayoutParams(size, size);
+            rlp.addRule(android.widget.RelativeLayout.ALIGN_PARENT_BOTTOM);
+            rlp.addRule(android.widget.RelativeLayout.ALIGN_PARENT_RIGHT);
+            rlp.bottomMargin = margin;
+            rlp.rightMargin = margin;
+            return rlp;
+        }
         if (container instanceof android.widget.FrameLayout) {
             android.widget.FrameLayout.LayoutParams flp =
                     new android.widget.FrameLayout.LayoutParams(size, size);
             flp.gravity = android.view.Gravity.END | android.view.Gravity.BOTTOM;
             flp.rightMargin = margin;
             flp.bottomMargin = margin;
-            lp = flp;
-        } else {
-            lp = new ViewGroup.LayoutParams(size, size);
+            return flp;
         }
-        created.setLayoutParams(lp);
-        container.addView(created);
-        return created;
+        if (container instanceof android.widget.LinearLayout) {
+            android.widget.LinearLayout.LayoutParams llp =
+                    new android.widget.LinearLayout.LayoutParams(size, size);
+            llp.gravity = android.view.Gravity.END | android.view.Gravity.BOTTOM;
+            llp.rightMargin = margin;
+            llp.bottomMargin = margin;
+            return llp;
+        }
+        return new ViewGroup.LayoutParams(size, size);
     }
 
     private static final String TAG_KEY = "dat_translate_icon";

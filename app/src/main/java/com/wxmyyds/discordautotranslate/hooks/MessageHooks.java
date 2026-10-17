@@ -56,8 +56,22 @@ public final class MessageHooks {
             "com.discord.chat.presentation.message.messagepart.MessageContentAccessory";
     private static final String CLS_MESSAGE_MARGINS =
             "com.discord.chat.presentation.message.messagepart.MessageMargins";
+
+    /**
+     * 聊天列表的<b>行容器</b>。
+     *
+     * <p>已核对：{@code RegularMessageDelegate.createView()} 返回的是
+     * {@code MessageView}（{@code extends ChatListRelativeLayout extends RelativeLayout}），
+     * <b>不是</b> {@code DecoratedMessageView}。后者只用于 React Native 组件
+     * {@code DCDMessageView}（另一个使用场景）。
+     * 阶段 1 误以为行容器是 {@code DecoratedMessageView}，导致图标永远挂不上。</p>
+     */
+    private static final String CLS_MESSAGE_VIEW =
+            "com.discord.chat.presentation.message.MessageView";
     private static final String CLS_DECORATED_MESSAGE_VIEW =
             "com.discord.chat.presentation.message.DecoratedMessageView";
+    private static final String CLS_CHAT_LIST_RELATIVE_LAYOUT =
+            "com.discord.chat.presentation.list.ChatListRelativeLayout";
     private static final String CLS_REPLY_PREVIEW =
             "com.discord.chat.presentation.message.MessageViewReplyPreview";
     private static final String CLS_TEXT_UTILS =
@@ -76,11 +90,19 @@ public final class MessageHooks {
 
     /** 安装全部 Hook，返回句柄供热重载清理。 */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
-        List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(4);
         installBindHook(module, cl, handles);
         installExpandedRenderHook(module, cl, handles);
         installToSpannableHook(module, cl, handles);
         installReplyHook(module, cl, handles);
+
+        // 单行启动摘要：排障时一眼看出四个关键 Hook 是否都就位。
+        // 期望看到 4；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
+        XLog.i("hook pipeline armed: " + handles.size() + "/4 "
+                + "(bind, expandedRender, toSpannable, configureReply)");
+        if (handles.size() < 2) {
+            XLog.w("too few hooks installed; module will not function on this Discord version");
+        }
         return handles;
     }
 
@@ -289,15 +311,32 @@ public final class MessageHooks {
             XLog.w("TextUtilsKt not found; translation display disabled");
             return;
         }
+        Class<?> structurableCls = Reflect.loadClass(cl, CLS_STRUCTURABLE);
         Method toSpannable = null;
         for (Method m : textUtils.getDeclaredMethods()) {
-            if ("toSpannable".equals(m.getName()) && m.getParameterCount() >= 4) {
+            // 必须选中首参为 StructurableText 的重载。
+            // 注意 TextUtilsKt 中有<b>两个</b>方法名以 toSpannable 开头的重载：
+            //   29 参 首参 StructurableText  ← 需要这个
+            //    4 参 首参 List             ← 内部递归用，不能选
+            // 原实现用 getParameterCount() >= 4 取第一个匹配，顺序不确定。
+            boolean nameMatches = m.getName().startsWith("toSpannable");
+            if (!nameMatches) {
+                continue;
+            }
+            // 排除 Kotlin 生成的 $default / $lambda 合成方法。
+            if (m.getName().contains("$")) {
+                continue;
+            }
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length >= 4 && structurableCls != null
+                    && (ps[0].isAssignableFrom(structurableCls)
+                    || structurableCls.isAssignableFrom(ps[0]))) {
                 toSpannable = m;
                 break;
             }
         }
         if (toSpannable == null) {
-            XLog.w("TextUtilsKt.toSpannable not found");
+            XLog.w("TextUtilsKt.toSpannable(StructurableText, ...) not found");
             return;
         }
         toSpannable.setAccessible(true);
@@ -338,7 +377,7 @@ public final class MessageHooks {
                     }
                     return chain.proceed();
                 }));
-        XLog.i("hooked TextUtilsKt.toSpannable");
+        XLog.i("hooked TextUtilsKt.toSpannable (" + toSpannable.getParameterCount() + " params)");
     }
 
     // ------------------------------------------------------------- Hook 4: 回复引用
@@ -425,16 +464,25 @@ public final class MessageHooks {
     }
 
     /**
-     * 从正文视图向父链上溯到消息行容器（{@code DecoratedMessageView}）。
-     * 遇到回复引用容器时返回 null，避免在引用行内叠加图标。
+     * 从正文视图向父链上溯找到消息行容器。
+     *
+     * <p>可行容器的类名（按优先级）：{@code MessageView}（聊天列表真实行控件）、
+     * {@code DecoratedMessageView}（RN 组件场景）。两者都是可叠加子视图的容器。</p>
+     *
+     * <p>遇到回复引用容器时返回 null：回复引用内也含一个 {@code MessageContentView}，
+     * 但它不是独立消息行，不应挂图标。</p>
+     *
+     * <p>注意正文视图实际位于 {@code MessageAccessoriesView}（RecyclerView）内部，
+     * 与行控件之间隔着 RecyclerView 层级，因此需要足够的深度上限。</p>
      */
     @Nullable
     static ViewGroup findRowContainer(@Nullable View contentView) {
         View current = contentView;
         int depth = 0;
-        while (current != null && depth < 12) {
+        while (current != null && depth < 24) {
             String name = current.getClass().getName();
-            if (CLS_DECORATED_MESSAGE_VIEW.equals(name)) {
+            if (CLS_MESSAGE_VIEW.equals(name)
+                    || CLS_DECORATED_MESSAGE_VIEW.equals(name)) {
                 return current instanceof ViewGroup ? (ViewGroup) current : null;
             }
             if (CLS_REPLY_PREVIEW.equals(name)) {

@@ -67,27 +67,34 @@ public final class XLog {
     }
 
     private static void log(int priority, String msg, @Nullable Throwable tr) {
-        XposedInterface x = sXposed;
+        // 1) 写 logcat。
+        //
+        // 为什么两者都写：XposedInterface.log() 的输出进了 LSPosed 自己的日志
+        // （需在 LSPosed 管理器里查看），adb logcat 默认看不到。
+        // 排查阶段必须让 adb logcat 也能看到，否则无法定位问题。
         try {
-            if (x != null) {
+            if (tr != null) {
+                android.util.Log.println(priority, TAG,
+                        msg + "\n" + android.util.Log.getStackTraceString(tr));
+            } else {
+                android.util.Log.println(priority, TAG, msg);
+            }
+        } catch (Throwable ignored) {
+            // logcat 不可用时忽略
+        }
+
+        // 2) 同步写框架日志（LSPosed 管理器可见，且与框架日志同处便于对照）。
+        XposedInterface x = sXposed;
+        if (x != null) {
+            try {
                 if (tr != null) {
                     x.log(priority, TAG, msg, tr);
                 } else {
                     x.log(priority, TAG, msg);
                 }
-                return;
+            } catch (Throwable ignored) {
+                // 框架日志不可用时忽略
             }
-        } catch (Throwable ignored) {
-            // 框架日志不可用时继续走 android.util.Log
-        }
-        try {
-            if (tr != null) {
-                android.util.Log.println(priority, TAG, msg + "\n" + android.util.Log.getStackTraceString(tr));
-            } else {
-                android.util.Log.println(priority, TAG, msg);
-            }
-        } catch (Throwable ignored) {
-            // 最坏情况静默
         }
     }
 

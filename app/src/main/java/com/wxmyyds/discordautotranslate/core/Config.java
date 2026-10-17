@@ -60,7 +60,9 @@ public final class Config {
     public static final int DEF_MAX_CONCURRENCY = 4;
 
     public static final String KEY_VERBOSE_LOG = "verbose_log";
-    public static final boolean DEF_VERBOSE_LOG = false;
+    // 排障期默认开启：详细日志会输出消息正文摘要与每一步 Hook 结果，
+    // 便于定位“无译文/无图标”类问题。稳定后可改回 false。
+    public static final boolean DEF_VERBOSE_LOG = true;
 
     private Config() {
     }
