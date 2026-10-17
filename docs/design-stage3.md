@@ -7,6 +7,39 @@
 
 ---
 
+## 0. 阶段 1 错误判断的修正（重要）
+
+阶段 1 曾断言「6 参 `setMessageContent` 是所有正文渲染的唯一漏斗」。
+**该断言是错的**，导致真机实测时既不显示译文也无图标。
+
+核对后的真实调用链：
+
+```
+消息列表  MessageContentViewHolder.bind
+            → MessageContentView.setMessageContent-hYrISQc$default
+            → MessageContentView.setMessageContent-hYrISQc   (展开式，34 参)
+            → TextUtilsKt.toSpannable                         (结构 → Spannable)
+回复引用  MessageViewReplyPreview → TextUtilsKt.toSpannable   (不经 setMessageContent)
+```
+
+- 6 参 `setMessageContent`（L1587）**只被 `TextDisplayComponentView` 调用**，
+  不在消息路径上；它自己也会转发到 `-hYrISQc$default`。
+- 真正的唯一收敛点是 **`TextUtilsKt.toSpannable`**。
+
+修正后的 Hook 布局：
+
+| Hook | 作用 |
+|---|---|
+| `MessageContentViewHolder.bind` | 唯一可靠的「视图 → 消息 ID」来源 |
+| `MessageContentView` 展开式 `setMessageContent` | 提供「视图 + 内容」：挂图标、登记重渲染、触发翻译 |
+| `TextUtilsKt.toSpannable` | 所有文本渲染的唯一汇聚点：**翻译替换在此完成** |
+| `MessageViewReplyPreview.configureReply` | 回复引用内的内容关联到被引用消息 |
+
+展开式方法用「名字前缀 + 参数最多 + 首参为 `MessageMargins`」定位，
+而不是匹配方法名哈希后缀（`-hYrISQc` 会随版本变化）。
+
+---
+
 ## 1. 关键发现：文本渲染的唯一漏斗与类型约束（事实）
 
 核对 `smali/com/discord/chat/presentation/textutils/TextUtilsKt.smali` 的
@@ -99,10 +132,19 @@ copy(...)                   -> 重建节点
 
 ## 6. 编辑后重新翻译（需求 §2.8）
 
-已有机制在阶段 3 得到完整覆盖：消息编辑后 Discord 会重新调用
-`setMessageContent` → `interceptRender` 记录新的原文参数 → `onMessageBound` 计算新
-`contentHash` → `StateStore.obtain` 检测到哈希变化，立即清空旧译文与状态 →
-重新发起翻译。回写前再次校验 `contentHash`，旧请求结果被丢弃。
+消息编辑后 Discord 会重新走渲染链 → 展开式 Hook 记录新的原文参数 →
+`onMessageBound` 计算新 `contentHash` → `StateStore.obtain` 检测到哈希变化，
+立即清空旧译文与状态 → 重新发起翻译。
+回写前再次校验 `contentHash`，旧请求结果被丢弃。
+
+## 6.1 失败后不自动重试（重要）
+
+`toSpannable` 会被频繁调用（动画、滚动、主题变化等都会重绘）。
+若在 `FAILED` 状态下无条件地重试，会造成请求风暴并可能触发 API 限流。
+
+因此：`onMessageBound` 遇到 `FAILED` 直接返回，不自动重试；
+失败后统一由用户点击图标重试（需求 §2.6）。
+重渲染（本模块自行发起）时会设置标记，渲染 Hook 不再重复触发翻译。
 
 ## 7. 验证
 

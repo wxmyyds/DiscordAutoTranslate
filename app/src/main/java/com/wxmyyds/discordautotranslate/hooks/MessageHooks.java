@@ -19,24 +19,29 @@ import io.github.libxposed.api.XposedModule;
 /**
  * Discord 消息渲染 Hook 的安装与实现。
  *
- * <p>已确认的 Hook 点（基于 Discord 340.13 smali 静态分析）：
- * <ol>
- *   <li><b>消息绑定</b>：
- *       {@code MessageContentViewHolder.bind(MessageContentAccessory, ...)}（17 个参数）。
- *       此处能拿到权威的消息 ID（{@code MessageContentAccessory.getMessageId-3Eiw7ao()}），
- *       用于建立 <b>正文视图 → 消息 ID</b> 的关联。这一步是防串位的关键：
- *       RecyclerView 会把同一个 {@code MessageContentView} 复用到不同消息上。</li>
- *   <li><b>正文渲染漏斗</b>：
- *       {@code MessageContentView.setMessageContent(MessageMargins, StructurableText,
- *       MarkdownTextRenderOptions, MarkdownTextRenderEventHandlers, Float, boolean)}。
- *       已确认这是所有路径（消息列表、回复引用、TextDisplay 组件、四个 Embed 视图）
- *       最终汇入的<b>唯一</b> 6 参重载：4 参的 {@code MarkdownTextRenderOptions} 版本会把
- *       参数展开后转发给它。因此只 Hook 这一个方法即可覆盖全部正文渲染，
- *       且无需引用 Kotlin 默认参数合成方法（其方法名带哈希后缀，会随版本变化）。</li>
- * </ol>
+ * <p><b>已核对的真实渲染链（Discord 340.13）</b>：
+ * <pre>
+ * 消息列表  MessageContentViewHolder.bind
+ *             → MessageContentView.setMessageContent-hYrISQc$default
+ *             → MessageContentView.setMessageContent-hYrISQc   (展开式，34 参)
+ *             → TextUtilsKt.toSpannable                         (真正把结构转成 Spannable)
+ * 回复引用  MessageViewReplyPreview → TextUtilsKt.toSpannable   (不经 setMessageContent)
+ * </pre>
  *
- * <p>图标挂在 {@code DecoratedMessageView}（FrameLayout，消息行最外层原生容器）上，
- * 与正文视图分离，避免干扰 Discord 原有布局。</p>
+ * <p>因此本类安装三个 Hook：</p>
+ * <ol>
+ *   <li><b>bind</b>：{@code MessageContentViewHolder.bind} —— 唯一可靠的
+ *       「视图 → 消息 ID」来源（{@code MessageContentAccessory.getMessageId}）。</li>
+ *   <li><b>渲染入口</b>：{@code MessageContentView} 上的展开式 {@code setMessageContent}
+ *       （参数最多、首参为 {@code MessageMargins} 的那个重载）——
+ *       提供「视图 + 内容」，用于挂图标、登记重渲染、触发翻译。
+ *       注意：<b>不能</b> Hook 6 参的 {@code setMessageContent}，它只被
+ *       {@code TextDisplayComponentView} 调用，不在消息路径上。</li>
+ *   <li><b>文本漏斗</b>：{@code TextUtilsKt.toSpannable} —— 所有文本渲染的唯一汇聚点
+ *       （含回复引用与 Embed）。翻译替换在此处完成，因为该方法是静态的、
+ *       接收的 {@code StructurableText} 与 bind 阶段是同一实例，
+ *       可用身份映射反查消息 ID。</li>
+ * </ol>
  *
  * <p>所有 Hook 均以 {@code ExceptionMode.PROTECTIVE} 安装，保证模块自身异常不会
  * 让 Discord 崩溃（需求 §5.1）。</p>
@@ -49,13 +54,22 @@ public final class MessageHooks {
             "com.discord.chat.presentation.message.viewholder.MessageContentViewHolder";
     private static final String CLS_CONTENT_ACCESSORY =
             "com.discord.chat.presentation.message.messagepart.MessageContentAccessory";
+    private static final String CLS_MESSAGE_MARGINS =
+            "com.discord.chat.presentation.message.messagepart.MessageMargins";
     private static final String CLS_DECORATED_MESSAGE_VIEW =
             "com.discord.chat.presentation.message.DecoratedMessageView";
     private static final String CLS_REPLY_PREVIEW =
             "com.discord.chat.presentation.message.MessageViewReplyPreview";
+    private static final String CLS_TEXT_UTILS =
+            "com.discord.chat.presentation.textutils.TextUtilsKt";
+    private static final String CLS_STRUCTURABLE =
+            "com.discord.chat.bridge.structurabletext.StructurableText";
 
     /** bind 的参数个数（340.13 已确认）。 */
     private static final int BIND_PARAM_COUNT = 17;
+
+    /** 展开式 setMessageContent 的参数个数下限（实测 34，留出余量以耐受版本差异）。 */
+    private static final int EXPANDED_PARAM_COUNT_MIN = 20;
 
     private MessageHooks() {
     }
@@ -64,113 +78,10 @@ public final class MessageHooks {
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
         installBindHook(module, cl, handles);
-        installRenderHook(module, cl, handles);
+        installExpandedRenderHook(module, cl, handles);
+        installToSpannableHook(module, cl, handles);
         installReplyHook(module, cl, handles);
         return handles;
-    }
-
-    // ------------------------------------------------------------- Hook 3: 回复引用
-
-    /**
-     * Hook {@code MessageViewReplyPreview.configureReply}，把回复引用中的正文视图
-     * 映射到<b>被引用消息自己的 ID</b>。
-     *
-     * <p>为何需要单独处理：回复引用内也含一个 {@code MessageContentView}，
-     * 但它不在 {@code MessageContentViewHolder} 的绑定流程里，因此没有 messageId 映射，
-     * 渲染 Hook 会直接跳过。经此 Hook 后，回复引用内的正文也能翻译，
-     * 且状态按被引用消息的 ID 关联（滚动、复用与编辑都跟随真实消息）。</p>
-     *
-     * <p>图标不会挂到回复引用里：{@link #findRowContainer} 遇到
-     * {@code MessageViewReplyPreview} 会返回 null，避免在引用行内叠加图标。</p>
-     */
-    private static void installReplyHook(XposedModule module, ClassLoader cl,
-                                         List<XposedInterface.HookHandle> out) {
-        Class<?> replyPreview = Reflect.loadClass(cl, CLS_REPLY_PREVIEW);
-        if (replyPreview == null) {
-            XLog.d("MessageViewReplyPreview not found; reply content translation disabled");
-            return;
-        }
-        Method configure = Reflect.findMethod(replyPreview, "configureReply", 3);
-        if (configure == null) {
-            XLog.w("MessageViewReplyPreview.configureReply(int,boolean,Function0) not found");
-            return;
-        }
-
-        out.add(module.hook(configure)
-                .setId("dat.configureReply")
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(chain -> {
-                    try {
-                        replyPre(chain);
-                    } catch (Throwable t) {
-                        XLog.w("configureReply pre failed", t);
-                    }
-                    Object result = chain.proceed();
-                    try {
-                        replyPost(chain.getThisObject());
-                    } catch (Throwable t) {
-                        XLog.w("configureReply post failed", t);
-                    }
-                    return result;
-                }));
-        XLog.i("hooked MessageViewReplyPreview.configureReply");
-    }
-
-    /** 从回复引用实例取出其内部正文视图。 */
-    @Nullable
-    private static View replyTextViewOf(@Nullable Object replyPreview) {
-        Object binding = Reflect.getField(replyPreview, "binding");
-        if (binding == null) {
-            return null;
-        }
-        return asView(Reflect.getField(binding, "replyText"));
-    }
-
-    /** 前置：参数是被引用的消息对象，取出其 ID 并登记到回复正文视图。 */
-    private static void replyPre(XposedInterface.Chain chain) {
-        Object referenced = chain.getArg(0);
-        if (referenced == null) {
-            return;
-        }
-        // 只有 LoadedReferencedMessage 带真实消息；SystemReferencedMessage 是系统文案。
-        if (!Reflect.isInstanceOfName(referenced,
-                "com.discord.chat.bridge.referencedmessage.LoadedReferencedMessage")) {
-            return;
-        }
-        Object message = Reflect.call(Reflect.findMethod(
-                referenced.getClass(), "getMessage", 0), referenced);
-        if (message == null) {
-            return;
-        }
-        String messageId = Reflect.callString(message, "getId");
-        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
-            return;
-        }
-        View replyText = replyTextViewOf(chain.getThisObject());
-        if (replyText == null) {
-            XLog.d("reply: replyText view unavailable");
-            return;
-        }
-        // 复用防护：换绑不同消息时清掉旧关联（需求 §风险 2）。
-        HookBridge.get().bindView(replyText, messageId);
-        XLog.d("reply bound to referenced message " + messageId);
-    }
-
-    /** 后置：内容已渲染，触发被引用消息的翻译（不挂图标）。 */
-    private static void replyPost(@Nullable Object replyPreview) {
-        View replyText = replyTextViewOf(replyPreview);
-        if (replyText == null) {
-            return;
-        }
-        String messageId = HookBridge.get().messageIdOf(replyText);
-        if (messageId == null) {
-            return;
-        }
-        Object structurable = HookBridge.get().lastStructurable(replyText);
-        if (structurable == null) {
-            return;
-        }
-        HookBridge.get().onMessageBound(replyText, messageId, structurable);
     }
 
     // ------------------------------------------------------------------ Hook 1: bind
@@ -186,7 +97,6 @@ public final class MessageHooks {
 
         Method bind = Reflect.findMethod(holder, "bind", BIND_PARAM_COUNT, accessory);
         if (bind == null) {
-            // 退化查找：不限定首参类型，仅按名称与参数个数匹配，增强版本耐受性。
             bind = Reflect.findMethod(holder, "bind", BIND_PARAM_COUNT);
         }
         if (bind == null) {
@@ -214,7 +124,7 @@ public final class MessageHooks {
         XLog.i("hooked MessageContentViewHolder.bind");
     }
 
-    /** bind 前置：建立 正文视图 → 消息 ID 的关联。此时授权数据最新。 */
+    /** bind 前置：建立 正文视图 → 消息 ID 关联，并登记内容身份映射。 */
     private static void bindPre(XposedInterface.Chain chain) {
         Object accessory = chain.getArg(0);
         if (accessory == null) {
@@ -224,19 +134,23 @@ public final class MessageHooks {
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
+        // 顺带登记「内容 → 消息 ID」：授权对象里的 StructurableText 与后续渲染是同一实例。
+        Object content = Reflect.call(Reflect.findMethod(
+                accessory.getClass(), "getContent", 0), accessory);
+        HookBridge.get().rememberContent(messageId, content);
+
         View contentView = asView(Reflect.getField(chain.getThisObject(), "messageContentView"));
         if (contentView == null) {
             XLog.d("bind: messageContentView field unavailable");
             return;
         }
-        // 列表会把同一视图复用到不同消息：覆盖映射并清掉该行的旧图标（需求 §风险 2）。
         HookBridge.get().bindView(contentView, messageId);
         IconRegistry.onRowRecycled(findRowContainer(contentView));
-        XLog.d("bind " + messageId + " view@"
-                + Integer.toHexString(System.identityHashCode(contentView)));
+        XLog.d("bind " + messageId + " -> " + contentView.getClass().getSimpleName()
+                + "@" + Integer.toHexString(System.identityHashCode(contentView)));
     }
 
-    /** bind 后置：内容已渲染完成，此时挂图标并发起翻译。 */
+    /** bind 后置：挂图标。翻译由渲染 Hook 触发（那时才有内容）。 */
     private static void bindPost(@Nullable Object holder) {
         View contentView = asView(Reflect.getField(holder, "messageContentView"));
         if (contentView == null) {
@@ -252,78 +166,255 @@ public final class MessageHooks {
             return;
         }
         IconRegistry.attach(messageId, row);
-
-        Object structurable = HookBridge.get().lastStructurable(contentView);
-        if (structurable == null) {
-            // 尚未经过渲染 Hook（例如 bind 先于首次渲染）：等渲染时再触发。
-            XLog.d("no rendered content yet for " + messageId);
-            return;
-        }
-        HookBridge.get().onMessageBound(contentView, messageId, structurable);
     }
 
-    // ------------------------------------------------------------------ Hook 2: render
+    // ------------------------------------------------- Hook 2: 展开式 setMessageContent
 
-    private static void installRenderHook(XposedModule module, ClassLoader cl,
-                                          List<XposedInterface.HookHandle> out) {
+    /**
+     * Hook 展开式 {@code setMessageContent}（34 参）。它提供「视图 + 内容」，
+     * 是挂图标、登记重渲染与触发翻译的位置。不做替换（替换统一在 toSpannable 完成）。
+     */
+    private static void installExpandedRenderHook(XposedModule module, ClassLoader cl,
+                                                  List<XposedInterface.HookHandle> out) {
         Class<?> contentViewCls = Reflect.loadClass(cl, CLS_MESSAGE_CONTENT_VIEW);
-        if (contentViewCls == null) {
-            XLog.w("MessageContentView not found; translation display disabled");
+        Class<?> marginsCls = Reflect.loadClass(cl, CLS_MESSAGE_MARGINS);
+        Class<?> structurableCls = Reflect.loadClass(cl, CLS_STRUCTURABLE);
+        if (contentViewCls == null || marginsCls == null || structurableCls == null) {
+            XLog.w("cannot resolve classes for expanded setMessageContent hook");
             return;
         }
-        Method setContent = Reflect.findMethod(contentViewCls, "setMessageContent", 6);
-        if (setContent == null) {
-            XLog.w("MessageContentView.setMessageContent/6 not found");
-            return;
-        }
-        final Method target = setContent;
 
-        out.add(module.hook(setContent)
+        Method expanded = findExpandedSetMessageContent(contentViewCls, marginsCls, structurableCls);
+        if (expanded == null) {
+            XLog.w("expanded setMessageContent not found; icon/translation trigger unavailable");
+            return;
+        }
+        final Method target = expanded;
+        XLog.i("resolved expanded setMessageContent: " + target.getName()
+                + " params=" + target.getParameterCount());
+
+        out.add(module.hook(expanded)
                 .setId("dat.setMessageContent")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
-                    View view = asView(chain.getThisObject());
-                    if (view == null) {
-                        return chain.proceed();
-                    }
-                    if (HookBridge.get().isRerendering()) {
-                        // 本次调用是模块自己发起的重渲染，参数已构造好，
-                        // 直接执行，避免再次记录/替换而覆盖已保存的“原文”参数。
-                        return chain.proceed();
-                    }
-                    String messageId = HookBridge.get().messageIdOf(view);
-                    if (messageId == null) {
-                        // 无消息 ID（例如 Embed 内的正文）：不干预。
-                        // 注意回复引用内的正文已由 configureReply Hook 建立映射，会走到下面。
-                        return chain.proceed();
-                    }
                     try {
-                        Object structurable = chain.getArg(1);
-                        Object[] original = chain.getArgs().toArray();
+                        // 重渲染（本模块自行发起）时无需重复登记与触发翻译；
+                        // 文本替换由 toSpannable Hook 完成。
+                        if (!HookBridge.get().isRerendering()) {
+                            View view = asView(chain.getThisObject());
+                            if (view != null) {
+                                Object structurable = chain.getArg(1);
+                                // 记录原始参数供重渲染，并登记内容身份映射。
+                                HookBridge.get().interceptRender(
+                                        view, chain.getArgs().toArray(), structurable, null);
 
-                        StateStore.Entry entry = StateStore.get().peek(messageId);
-                        String translated = (entry != null
-                                && entry.status == StateStore.Status.TRANSLATED
-                                && !entry.showingOriginal) ? entry.translatedText : null;
-
-                        // 记录原始渲染参数（供异步完成后重渲染），有译文时替换正文。
-                        Object[] effective = HookBridge.get().interceptRender(
-                                view, original, structurable, translated);
-
-                        // 登记重渲染目标，供翻译完成后回写。
-                        RerenderRegistry.register(messageId, view, target);
-
-                        if (effective != original) {
-                            return chain.proceed(effective);
+                                String messageId = HookBridge.get().messageIdOf(view);
+                                if (messageId != null) {
+                                    RerenderRegistry.register(messageId, view, target);
+                                    ViewGroup row = findRowContainer(view);
+                                    if (row != null) {
+                                        TranslationIconView icon =
+                                                IconRegistry.attach(messageId, row);
+                                        if (icon != null
+                                                && !messageId.equals(icon.getMessageId())) {
+                                            icon.setMessageId(messageId);
+                                        }
+                                    }
+                                    IconRegistry.refresh(messageId);
+                                    if (structurable != null) {
+                                        HookBridge.get().onMessageBound(
+                                                view, messageId, structurable);
+                                    }
+                                }
+                            }
                         }
-                        return chain.proceed();
                     } catch (Throwable t) {
-                        // 任何异常都退回原始行为，保证原文可见（需求 §5.4 优雅降级）。
-                        XLog.w("setMessageContent hook failed, falling back to original", t);
-                        return chain.proceed();
+                        // 任何异常都不影响原始渲染（需求 §5.4 优雅降级）。
+                        XLog.w("expanded render hook failed", t);
                     }
+                    return chain.proceed();
                 }));
-        XLog.i("hooked MessageContentView.setMessageContent");
+        XLog.i("hooked expanded setMessageContent");
+    }
+
+    /**
+     * 定位展开式 {@code setMessageContent}。
+     *
+     * <p>筛选条件：名字以 {@code setMessageContent} 开头、参数最多、且<b>首参为
+     * {@code MessageMargins}</b>。最后一条用于排除 Kotlin 生成的
+     * {@code setMessageContent$default}（其首参是 {@code MessageContentView}）。
+     * 不按方法名哈希后缀匹配，以耐受 Discord 版本更新。</p>
+     */
+    @Nullable
+    private static Method findExpandedSetMessageContent(Class<?> contentViewCls,
+                                                        Class<?> marginsCls,
+                                                        Class<?> structurableCls) {
+        Method best = null;
+        for (Method m : contentViewCls.getDeclaredMethods()) {
+            if (!m.getName().startsWith("setMessageContent")) {
+                continue;
+            }
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length < EXPANDED_PARAM_COUNT_MIN) {
+                continue;
+            }
+            if (!ps[0].isAssignableFrom(marginsCls) && !marginsCls.isAssignableFrom(ps[0])) {
+                continue;
+            }
+            if (ps.length < 2
+                    || (!ps[1].isAssignableFrom(structurableCls)
+                    && !structurableCls.isAssignableFrom(ps[1]))) {
+                continue;
+            }
+            if (best == null || ps.length > best.getParameterCount()) {
+                best = m;
+            }
+        }
+        if (best != null) {
+            best.setAccessible(true);
+        }
+        return best;
+    }
+
+    // ------------------------------------------------------- Hook 3: toSpannable
+
+    /**
+     * Hook {@code TextUtilsKt.toSpannable}：所有文本渲染的唯一汇聚点，
+     * 翻译替换在此完成（含回复引用与 Embed）。
+     */
+    private static void installToSpannableHook(XposedModule module, ClassLoader cl,
+                                               List<XposedInterface.HookHandle> out) {
+        Class<?> textUtils = Reflect.loadClass(cl, CLS_TEXT_UTILS);
+        if (textUtils == null) {
+            XLog.w("TextUtilsKt not found; translation display disabled");
+            return;
+        }
+        Method toSpannable = null;
+        for (Method m : textUtils.getDeclaredMethods()) {
+            if ("toSpannable".equals(m.getName()) && m.getParameterCount() >= 4) {
+                toSpannable = m;
+                break;
+            }
+        }
+        if (toSpannable == null) {
+            XLog.w("TextUtilsKt.toSpannable not found");
+            return;
+        }
+        toSpannable.setAccessible(true);
+
+        out.add(module.hook(toSpannable)
+                .setId("dat.toSpannable")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        Object structurable = chain.getArg(0);
+                        String messageId = HookBridge.get().resolveMessageId(structurable);
+                        if (messageId != null) {
+                            // 回复引用/Embed 路径不经过 setMessageContent，
+                            // 在此登记内容并触发翻译。
+                            HookBridge.get().rememberContent(messageId, structurable);
+
+                            StateStore.Entry e = StateStore.get().peek(messageId);
+                            if (e == null) {
+                                HookBridge.get().onMessageBound(null, messageId, structurable);
+                                e = StateStore.get().peek(messageId);
+                            }
+                            String translated = (e != null
+                                    && e.status == StateStore.Status.TRANSLATED
+                                    && !e.showingOriginal) ? e.translatedText : null;
+                            if (translated != null) {
+                                Object replacement = StructurableTextFactory
+                                        .forTranslation(structurable, translated);
+                                if (replacement != null) {
+                                    Object[] args = chain.getArgs().toArray();
+                                    args[0] = replacement;
+                                    XLog.d("toSpannable substituted for " + messageId);
+                                    return chain.proceed(args);
+                                }
+                            }
+                        }
+                    } catch (Throwable t) {
+                        XLog.w("toSpannable hook failed, falling back", t);
+                    }
+                    return chain.proceed();
+                }));
+        XLog.i("hooked TextUtilsKt.toSpannable");
+    }
+
+    // ------------------------------------------------------------- Hook 4: 回复引用
+
+    /**
+     * Hook {@code MessageViewReplyPreview.configureReply}：把回复引用内的正文视图
+     * 关联到<b>被引用消息自己的 ID</b>，使引用内的内容也能被翻译。
+     * 图标仍只挂被引用消息自身所在的行（{@link #findRowContainer} 在引用容器处返回 null）。
+     */
+    private static void installReplyHook(XposedModule module, ClassLoader cl,
+                                         List<XposedInterface.HookHandle> out) {
+        Class<?> replyPreview = Reflect.loadClass(cl, CLS_REPLY_PREVIEW);
+        if (replyPreview == null) {
+            XLog.d("MessageViewReplyPreview not found; reply content translation disabled");
+            return;
+        }
+        Method configure = Reflect.findMethod(replyPreview, "configureReply", 3);
+        if (configure == null) {
+            XLog.w("MessageViewReplyPreview.configureReply not found");
+            return;
+        }
+
+        out.add(module.hook(configure)
+                .setId("dat.configureReply")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        replyPre(chain);
+                    } catch (Throwable t) {
+                        XLog.w("configureReply pre failed", t);
+                    }
+                    return chain.proceed();
+                }));
+        XLog.i("hooked MessageViewReplyPreview.configureReply");
+    }
+
+    /** 前置：从被引用消息取 ID，登记到回复引用内的正文视图与内容映射。 */
+    private static void replyPre(XposedInterface.Chain chain) {
+        Object referenced = chain.getArg(0);
+        if (referenced == null) {
+            return;
+        }
+        // 只有 LoadedReferencedMessage 带真实消息；SystemReferencedMessage 是系统文案。
+        if (!Reflect.isInstanceOfName(referenced,
+                "com.discord.chat.bridge.referencedmessage.LoadedReferencedMessage")) {
+            return;
+        }
+        Object message = Reflect.call(Reflect.findMethod(
+                referenced.getClass(), "getMessage", 0), referenced);
+        if (message == null) {
+            return;
+        }
+        String messageId = Reflect.callString(message, "getId");
+        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
+            return;
+        }
+        // 被引用消息的正文结构（用于身份映射，使 toSpannable 能反查到该消息）。
+        Object content = Reflect.call(Reflect.findMethod(
+                message.getClass(), "getContent", 0), message);
+        HookBridge.get().rememberContent(messageId, content);
+
+        View replyText = replyTextViewOf(chain.getThisObject());
+        if (replyText != null) {
+            HookBridge.get().bindView(replyText, messageId);
+        }
+        XLog.d("reply bound to referenced message " + messageId);
+    }
+
+    /** 从回复引用实例取出其内部正文视图。 */
+    @Nullable
+    private static View replyTextViewOf(@Nullable Object replyPreview) {
+        Object binding = Reflect.getField(replyPreview, "binding");
+        if (binding == null) {
+            return null;
+        }
+        return asView(Reflect.getField(binding, "replyText"));
     }
 
     // ------------------------------------------------------------------ 工具
@@ -335,9 +426,7 @@ public final class MessageHooks {
 
     /**
      * 从正文视图向父链上溯到消息行容器（{@code DecoratedMessageView}）。
-     *
-     * <p>遇到回复引用容器时返回 null：回复引用内也含一个 {@code MessageContentView}，
-     * 但它不属于独立消息行，不应挂图标。被回复消息自身的行仍由它自己的 bind 处理。</p>
+     * 遇到回复引用容器时返回 null，避免在引用行内叠加图标。
      */
     @Nullable
     static ViewGroup findRowContainer(@Nullable View contentView) {
