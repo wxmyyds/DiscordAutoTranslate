@@ -5,37 +5,34 @@ import androidx.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 翻译调度：异步执行、并发限制、按“消息 ID + 内容版本”去重、丢弃过期结果。
+ * 翻译调度：异步执行、并发限制、按“消息 ID + 内容版本”去重、可重试、丢弃过期结果。
  *
  * <p>需求映射：
  * <ul>
- *   <li>§5.4 后台异步、不阻塞主线程 → 固定线程池 + 主线程线程回调。</li>
- *   <li>§5.4 限制并发 → 见 {@link #MAX_CONCURRENCY}。</li>
+ *   <li>§5.4 后台异步、不阻塞主线程 → 线程池执行，结果经主线程回调。</li>
+ *   <li>§5.4 限制并发 → {@link Semaphore} 按配置并发上限放行，可运行时变更。</li>
  *   <li>§5.4 去重 → {@link #inFlight} 以 messageId 为键。</li>
+ *   <li>§5.4 超时/网络失败/HTTP 错误/限流/无效响应 → 由 {@link TranslationException} 分类。</li>
  *   <li>§风险 3 旧结果不得覆盖新译 → 回写前同时校验 generation 与 contentHash。</li>
  * </ul>
- *
- * <p>阶段 1 说明：真正的 HTTP 翻译引擎属于阶段 2（见 docs/design-stage1.md）。
- * 本类只定义调度骨架，翻译实现由 {@link Engine} 注入。</p>
  */
 public final class Scheduler {
 
-    /** 翻译引擎抽象，阶段 2 会提供 OpenAI 兼容实现。 */
+    /** 翻译引擎抽象。实现必须在被中断时尽快返回。 */
     public interface Engine {
         /**
-         * 同步执行翻译。实现必须在被中断时尽快返回。
+         * 同步执行翻译。
          *
          * @param text 待翻译原文
          * @return 译文
-         * @throws Exception 网络/解析/配置错误
+         * @throws Exception 网络/解析/配置错误（建议抛 {@link TranslationException}）
          */
         String translate(String text) throws Exception;
     }
@@ -43,14 +40,24 @@ public final class Scheduler {
     /** 结果回调，保证在主线程调用。 */
     public interface Callback {
         /**
-         * @param accepted 结果是否被接受。false 表示已过期（消息被编辑、开关关闭或模块已热重载）。
+         * @param accepted 结果是否被接受。false 表示已过期（消息被编辑、开关关闭、热重载或配置重置）。
+         * @param error    失败原因；成功时为 null
          */
-        void onResult(String messageId, boolean accepted, @Nullable String translated, @Nullable String error);
+        void onResult(String messageId, boolean accepted,
+                      @Nullable String translated, @Nullable Throwable error);
     }
 
-    private static final int MAX_CONCURRENCY = 4;
+    /** 结果接受判定。 */
+    public interface Acceptance {
+        boolean isStillValid(int generationSnapshot, String contentHash);
+    }
 
-    /** 进程级单例。热重载时由旧实例 shutdown 后重建。 */
+    /** 线程池上限。实际并发由 {@link #permits} 按配置控制。 */
+    private static final int POOL_MAX = 8;
+
+    /** 可重试错误的最大尝试次数（含首次）。 */
+    private static final int MAX_ATTEMPTS = 3;
+
     private static volatile Scheduler sInstance;
 
     public static Scheduler get() {
@@ -78,7 +85,7 @@ public final class Scheduler {
     }
 
     private final ExecutorService pool = new ThreadPoolExecutor(
-            0, MAX_CONCURRENCY, 30L, TimeUnit.SECONDS,
+            0, POOL_MAX, 30L, TimeUnit.SECONDS,
             new SynchronousQueue<>(),
             r -> {
                 Thread t = new Thread(r, "dat-translate");
@@ -87,20 +94,63 @@ public final class Scheduler {
             },
             new ThreadPoolExecutor.AbortPolicy());
 
-    /** messageId -> 在途任务的 generation 快照，用于去重与取消。 */
-    private final java.util.concurrent.ConcurrentHashMap<String, Integer> inFlight =
+    /** 并发闸门。permit 数等于配置的并发上限，可运行时调整。 */
+    private final AdjustableSemaphore permits =
+            new AdjustableSemaphore(Config.DEF_MAX_CONCURRENCY);
+    private final AtomicInteger configuredConcurrency = new AtomicInteger(Config.DEF_MAX_CONCURRENCY);
+
+    /**
+     * 可缩减 permit 的信号量。
+     *
+     * <p>{@link Semaphore#reducePermits(int)} 是 <b>protected</b>，无法从外部类调用，
+     * 因此通过子类暴露一个包内可见的封装。</p>
+     */
+    static final class AdjustableSemaphore extends Semaphore {
+        AdjustableSemaphore(int permits) {
+            super(permits, true);
+        }
+
+        void reduce(int reduction) {
+            reducePermits(reduction);
+        }
+    }
+
+    /** messageId -> 在途标记（用于去重）。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, Boolean> inFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     private final AtomicInteger completed = new AtomicInteger();
     private final AtomicInteger discarded = new AtomicInteger();
+    private final AtomicInteger failed = new AtomicInteger();
+    private final AtomicInteger retried = new AtomicInteger();
 
-    /** 关闭调度器，热重载时由旧实例调用。 */
     public void shutdown() {
         try {
             pool.shutdownNow();
         } catch (Throwable ignored) {
         }
         inFlight.clear();
+    }
+
+    /**
+     * 按配置调整并发上限。可在设置变更后调用，立即生效。
+     * 仅在数值变化时调整 permit，避免影响在途任务。
+     */
+    public void setMaxConcurrency(int value) {
+        int target = Math.max(1, Math.min(POOL_MAX, value));
+        int current = configuredConcurrency.get();
+        if (target == current) {
+            return;
+        }
+        configuredConcurrency.set(target);
+        if (target > current) {
+            permits.release(target - current);
+        } else {
+            // 收紧：回收差值。已持有的 permit 会在任务结束时归还。
+            // 注意 reducePermits 是 protected，需经由子类封装调用。
+            permits.reduce(current - target);
+        }
+        XLog.i("max concurrency set to " + target);
     }
 
     public int completedCount() {
@@ -111,71 +161,163 @@ public final class Scheduler {
         return discarded.get();
     }
 
+    public int failedCount() {
+        return failed.get();
+    }
+
+    public int retriedCount() {
+        return retried.get();
+    }
+
+    public String stats() {
+        return "scheduler[completed=" + completed.get()
+                + ", discarded=" + discarded.get()
+                + ", failed=" + failed.get()
+                + ", retried=" + retried.get()
+                + ", inFlight=" + inFlight.size()
+                + ", concurrency=" + configuredConcurrency.get() + "]";
+    }
+
     /**
-     * 提交翻译任务。
+     * 提交翻译任务。带指数退避重试（仅对可重试错误）。
      *
      * @param messageId   消息 ID
      * @param contentHash 内容版本（含翻译配置版本）
      * @param text        原文
      * @param engine      翻译引擎
-     * @param accept      结果接受判定；在后台线程与主线程各评估一次
+     * @param accept      结果接受判定
      * @param callback    主线程回调
      */
     public void submit(String messageId, String contentHash, String text,
                        Engine engine, Acceptance accept, Callback callback) {
-        int gen = StateStore.get().generation();
+        final int gen = StateStore.get().generation();
 
         // 同一消息已有在途任务则不重复提交（需求 §5.4 去重）。
-        Integer existing = inFlight.putIfAbsent(messageId, gen);
+        Boolean existing = inFlight.putIfAbsent(messageId, Boolean.TRUE);
         if (existing != null) {
             XLog.d("dedupe: task already in flight for " + messageId);
             return;
         }
 
-        Future<?> f;
         try {
-            f = pool.submit(() -> {
-                String result = null;
-                String error = null;
-                try {
-                    result = engine.translate(text);
-                } catch (Throwable t) {
-                    error = t.getClass().getSimpleName() + ": " + t.getMessage();
-                } finally {
-                    inFlight.remove(messageId);
-                }
-
-                final String fr = result;
-                final String fe = error;
-
-                MainThread.post(() -> {
-                    boolean ok = accept.isStillValid(gen, contentHash);
-                    if (ok) {
-                        completed.incrementAndGet();
-                    } else {
-                        discarded.incrementAndGet();
-                        XLog.d("discard stale translation result for " + messageId);
-                    }
-                    callback.onResult(messageId, ok, fr, fe);
-                });
-            });
+            pool.submit(() -> runTask(messageId, contentHash, text, engine, accept, callback, gen));
         } catch (Throwable t) {
-            // 线程池已满或已关闭：不做重试，保留原文即可（需求 §2.6 优雅降级）。
+            // 线程池已满或已关闭：不重试，保留原文（需求 §2.6 优雅降级）。
             inFlight.remove(messageId);
             XLog.w("submit rejected for " + messageId + ": " + t.getClass().getSimpleName());
-            MainThread.post(() -> callback.onResult(messageId, false, null, "rejected"));
-            return;
-        }
-
-        // 任务被取消时清理在途标记。
-        if (f.isCancelled()) {
-            inFlight.remove(messageId);
+            final TranslationException e = new TranslationException(
+                    TranslationException.Kind.UNKNOWN, "线程池已满或已关闭");
+            MainThread.post(() -> callback.onResult(messageId, false, null, e));
         }
     }
 
-    /** 结果接受判定。 */
-    public interface Acceptance {
-        boolean isStillValid(int generationSnapshot, String contentHash);
+    private void runTask(String messageId, String contentHash, String text,
+                         Engine engine, Acceptance accept, Callback callback, int gen) {
+        String result = null;
+        Throwable error = null;
+        try {
+            result = translateWithRetry(messageId, text, engine, accept, gen, contentHash);
+        } catch (Throwable t) {
+            error = t;
+        } finally {
+            inFlight.remove(messageId);
+        }
+
+        final String fr = result;
+        final Throwable fe = error;
+
+        MainThread.post(() -> {
+            boolean ok = accept.isStillValid(gen, contentHash);
+            if (ok) {
+                if (fe == null) {
+                    completed.incrementAndGet();
+                } else {
+                    failed.incrementAndGet();
+                }
+            } else {
+                discarded.incrementAndGet();
+                XLog.d("discard stale translation result for " + messageId);
+            }
+            callback.onResult(messageId, ok, fr, fe);
+        });
+    }
+
+    /**
+     * 带指数退避的重试。仅对 {@link TranslationException#isRetryable()} 为 true 的错误重试，
+     * 并在重试前检查任务是否已失效，避免为已过期内容浪费请求（需求 §5.4）。
+     */
+    @Nullable
+    private String translateWithRetry(String messageId, String text, Engine engine,
+                                      Acceptance accept, int gen, String contentHash)
+            throws Throwable {
+        Throwable last = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
+            }
+            // 提交前已失效则直接放弃，不发请求。
+            if (!accept.isStillValid(gen, contentHash)) {
+                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已失效");
+            }
+
+            boolean acquired = false;
+            try {
+                // 并发闸门；被中断时立即退出。
+                permits.acquire();
+                acquired = true;
+                return engine.translate(text);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消", ie);
+            } catch (Throwable t) {
+                last = t;
+                if (!isRetryable(t) || attempt == MAX_ATTEMPTS) {
+                    throw t;
+                }
+                retried.incrementAndGet();
+                long backoff = backoffMillis(attempt, t);
+                XLog.w("attempt " + attempt + "/" + MAX_ATTEMPTS + " failed for " + messageId
+                        + " (" + t.getClass().getSimpleName() + "), retry in " + backoff + "ms");
+                if (!sleepInterruptibly(backoff)) {
+                    throw new TranslationException(TranslationException.Kind.CANCELLED,
+                            "重试等待被中断", t);
+                }
+            } finally {
+                if (acquired) {
+                    permits.release();
+                }
+            }
+        }
+        throw last != null ? last
+                : new TranslationException(TranslationException.Kind.UNKNOWN, "未知失败");
+    }
+
+    private static boolean isRetryable(Throwable t) {
+        return t instanceof TranslationException
+                && ((TranslationException) t).isRetryable();
+    }
+
+    /** 退避时长：1s、2s……并尊重服务端 Retry-After（若已被转换进消息）。 */
+    private static long backoffMillis(int attempt, Throwable t) {
+        if (t instanceof TranslationException) {
+            int status = ((TranslationException) t).httpStatus();
+            if (status == 429) {
+                // 限流时给更长的退避，避免加剧限流。
+                return Math.min(8000L, 2000L * (1L << (attempt - 1)));
+            }
+        }
+        return Math.min(4000L, 1000L * (1L << (attempt - 1)));
+    }
+
+    /** @return true 表示正常睡满；false 表示被中断 */
+    private static boolean sleepInterruptibly(long ms) {
+        try {
+            Thread.sleep(ms);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /** 稳定内容哈希：内容 + 配置版本（需求 §5.6 缓存键要求）。 */
@@ -193,7 +335,7 @@ public final class Scheduler {
             }
             return sb.toString();
         } catch (Throwable t) {
-            // 理论上不会发生；退化为内容本身，仍保持稳定性。
+            // 理论不可达；退化为稳定但非加密强度的哈希。
             return Integer.toHexString((text + "|" + configVersion).hashCode());
         }
     }

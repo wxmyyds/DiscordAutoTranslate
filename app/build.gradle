@@ -40,6 +40,14 @@ android {
     buildFeatures {
         buildConfig true
     }
+
+    testOptions {
+        unitTests {
+            // 纯逻辑单测（模板渲染、路径提取、调度语义、缓存）不依赖 Android 框架，
+            // 只需 org.json（JDK 自带的 JSON 实现来自 Android，单测环境不可用）。
+            returnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
@@ -54,4 +62,8 @@ dependencies {
     // api 与 service 的 AAR 均未传递 androidx.annotation，但其 API 使用 @NonNull 等注解，
     // 因此显式声明注解库。annotation 是纯注解 jar，compileOnly 即可。
     compileOnly "androidx.annotation:annotation:1.9.1"
+
+    // 单元测试：org.json 在 Android 上由系统提供，在 JVM 单测环境需要显式依赖。
+    testImplementation "org.json:json:20260814"
+    testImplementation "junit:junit:4.13.2"
 }

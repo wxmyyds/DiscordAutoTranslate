@@ -2,7 +2,6 @@ package com.wxmyyds.discordautotranslate.core;
 
 import androidx.annotation.Nullable;
 
-import java.lang.reflect.Method;
 import java.util.List;
 
 /**
