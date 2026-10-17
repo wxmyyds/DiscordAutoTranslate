@@ -49,6 +49,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
     private EditText modelInput;
     private EditText targetLangInput;
     private EditText headersInput;
+    private EditText systemPromptInput;
     private EditText bodyTemplateInput;
     private EditText responsePathInput;
     private EditText timeoutInput;
@@ -121,7 +122,12 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
         targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
         headersInput = addField(root, "额外请求头（每行 Name: Value）", "", InputType.TYPE_CLASS_TEXT);
-        bodyTemplateInput = addField(root, "JSON 请求模板（{{text}} / {{target}} / {{model}}）",
+        // 系统提示词独立成项：多行中文直接写，不必手动做 JSON 转义。
+        // 在 JSON 模板里用 {{system}} 引用。
+        systemPromptInput = addField(root, "系统提示词（多行，在模板里用 {{system}} 引用）",
+                Config.DEF_SYSTEM_PROMPT,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        bodyTemplateInput = addField(root, "JSON 请求模板（{{text}} / {{system}} / {{target}} / {{model}}）",
                 Config.DEF_BODY_TEMPLATE, InputType.TYPE_CLASS_TEXT);
         responsePathInput = addField(root, "响应译文提取路径", Config.DEF_RESPONSE_PATH, InputType.TYPE_CLASS_TEXT);
         timeoutInput = addField(root, "超时（毫秒）", String.valueOf(Config.DEF_TIMEOUT_MS),
@@ -220,6 +226,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         targetLangInput.setText(s.targetLang);
         headersInput.setText(s.extraHeaders);
         bodyTemplateInput.setText(s.bodyTemplate);
+        systemPromptInput.setText(s.systemPrompt);
         responsePathInput.setText(s.responsePath);
         timeoutInput.setText(String.valueOf(s.timeoutMs));
         concurrencyInput.setText(String.valueOf(s.maxConcurrency));
