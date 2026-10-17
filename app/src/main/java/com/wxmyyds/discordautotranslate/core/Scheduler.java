@@ -95,9 +95,10 @@ public final class Scheduler {
             new ThreadPoolExecutor.AbortPolicy());
 
     /** 并发闸门。permit 数等于配置的并发上限，可运行时调整。 */
-    private final AdjustableSemaphore permits =
-            new AdjustableSemaphore(Config.DEF_MAX_CONCURRENCY);
+    private final AdjustableSemaphore permits = new AdjustableSemaphore(Config.DEF_MAX_CONCURRENCY);
     private final AtomicInteger configuredConcurrency = new AtomicInteger(Config.DEF_MAX_CONCURRENCY);
+    /** 串行化目标容量调整与 permit 释放，避免快速调高/调低造成许可数漂移。 */
+    private final Object concurrencyLock = new Object();
 
     /**
      * 可缩减 permit 的信号量。
@@ -123,8 +124,11 @@ public final class Scheduler {
     private final AtomicInteger discarded = new AtomicInteger();
     private final AtomicInteger failed = new AtomicInteger();
     private final AtomicInteger retried = new AtomicInteger();
+    /** 是否已关闭；关闭后的实例拒绝新任务。 */
+    private volatile boolean shutdown;
 
     public void shutdown() {
+        shutdown = true;
         try {
             pool.shutdownNow();
         } catch (Throwable ignored) {
@@ -138,17 +142,17 @@ public final class Scheduler {
      */
     public void setMaxConcurrency(int value) {
         int target = Math.max(1, Math.min(POOL_MAX, value));
-        int current = configuredConcurrency.get();
-        if (target == current) {
-            return;
-        }
-        configuredConcurrency.set(target);
-        if (target > current) {
-            permits.release(target - current);
-        } else {
-            // 收紧：回收差值。已持有的 permit 会在任务结束时归还。
-            // 注意 reducePermits 是 protected，需经由子类封装调用。
-            permits.reduce(current - target);
+        synchronized (concurrencyLock) {
+            int current = configuredConcurrency.get();
+            if (target == current) {
+                return;
+            }
+            configuredConcurrency.set(target);
+            if (target > current) {
+                permits.release(target - current);
+            } else {
+                permits.reduce(current - target);
+            }
         }
         XLog.i("max concurrency set to " + target);
     }
@@ -199,16 +203,23 @@ public final class Scheduler {
             return;
         }
 
+        if (shutdown) {
+            rejectSubmission(messageId, callback, "线程池已关闭");
+            return;
+        }
         try {
             pool.submit(() -> runTask(messageId, contentHash, text, engine, accept, callback, gen));
         } catch (Throwable t) {
-            // 线程池已满或已关闭：不重试，保留原文（需求 §2.6 优雅降级）。
-            inFlight.remove(messageId);
             XLog.w("submit rejected for " + messageId + ": " + t.getClass().getSimpleName());
-            final TranslationException e = new TranslationException(
-                    TranslationException.Kind.UNKNOWN, "线程池已满或已关闭");
-            MainThread.post(() -> callback.onResult(messageId, false, null, e));
+            rejectSubmission(messageId, callback, "线程池已满或已关闭");
         }
+    }
+
+    private void rejectSubmission(String messageId, Callback callback, String reason) {
+        inFlight.remove(messageId);
+        TranslationException error = new TranslationException(
+                TranslationException.Kind.UNKNOWN, reason);
+        MainThread.post(() -> callback.onResult(messageId, true, null, error));
     }
 
     private void runTask(String messageId, String contentHash, String text,
@@ -284,7 +295,9 @@ public final class Scheduler {
                 }
             } finally {
                 if (acquired) {
-                    permits.release();
+                    synchronized (concurrencyLock) {
+                        permits.release();
+                    }
                 }
             }
         }

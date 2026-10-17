@@ -1,7 +1,5 @@
 package com.wxmyyds.discordautotranslate.translate;
 
-import androidx.annotation.Nullable;
-
 import com.wxmyyds.discordautotranslate.core.Config;
 import com.wxmyyds.discordautotranslate.core.Http;
 import com.wxmyyds.discordautotranslate.core.JsonPath;
@@ -76,6 +74,15 @@ public final class JsonApiEngine implements Scheduler.Engine {
 
     /** 配置校验：任一必需项缺失都给出具体提示（需求 §5.5、§8）。 */
     private void validate() throws TranslationException {
+        validateConfig(cfg);
+    }
+
+    /**
+     * 校验一份配置是否可用于发起请求。
+     *
+     * <p>抽成静态方法供设置页的离线自检复用，避免两处各写一套校验而产生不一致。</p>
+     */
+    public static void validateConfig(Config.Snapshot cfg) throws TranslationException {
         if (cfg.apiUrl == null || cfg.apiUrl.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.CONFIG, "API URL 未配置");
         }
@@ -90,7 +97,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
         if (cfg.responsePath == null || cfg.responsePath.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.CONFIG, "响应提取路径未配置");
         }
-        JsonPath.validateJson(cfg.bodyTemplate, "请求模板");
+        // 校验渲染后的请求体，而不是含 {{placeholder}} 的模板原文：
+        // 直接校验模板原文会把占位符误判为非法 JSON。
+        JsonTemplate.validate(cfg.bodyTemplate, cfg.targetLang, cfg.model, cfg.systemPrompt);
     }
 
     /** 构造请求头。若用户已自定义 Authorization，则不覆盖。 */
@@ -103,58 +112,24 @@ public final class JsonApiEngine implements Scheduler.Engine {
         return headers;
     }
 
-    /** 把 HTTP 错误映射为可读的 {@link TranslationException}。 */
+    /** 把 HTTP 错误映射为用户可读、且不暴露服务端响应正文的异常。 */
     private TranslationException classifyHttpError(Http.Response resp) {
-        String detail = extractErrorMessage(resp.body);
         int status = resp.status;
-
         if (status == 429) {
             String hint = resp.retryAfterSeconds > 0
                     ? "，建议 " + resp.retryAfterSeconds + "s 后重试" : "";
             return new TranslationException(TranslationException.Kind.RATE_LIMIT,
-                    "限流" + hint + (detail == null ? "" : "：" + detail), status, null);
+                    "限流" + hint, status, null);
         }
         if (status == 401 || status == 403) {
             return new TranslationException(TranslationException.Kind.HTTP,
-                    "认证失败（请检查 API 密钥）" + (detail == null ? "" : "：" + detail),
-                    status, null);
+                    "认证失败（请检查 API 密钥）", status, null);
         }
         if (status >= 500) {
             return new TranslationException(TranslationException.Kind.HTTP,
-                    "服务端错误" + (detail == null ? "" : "：" + detail), status, null);
+                    "服务端错误", status, null);
         }
         return new TranslationException(TranslationException.Kind.HTTP,
-                detail, status, null);
-    }
-
-    /**
-     * 从错误响应中尽量提取可读信息。
-     * 兼容 OpenAI 风格 {@code {"error":{"message":"..."}}} 与通用 {@code message} 字段。
-     */
-    @Nullable
-    private static String extractErrorMessage(@Nullable String body) {
-        if (body == null || body.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            String msg = JsonPath.extractString(body, "error.message");
-            if (msg != null && !msg.isEmpty()) {
-                return truncate(msg);
-            }
-        } catch (Throwable ignored) {
-        }
-        try {
-            String msg = JsonPath.extractString(body, "message");
-            if (msg != null && !msg.isEmpty()) {
-                return truncate(msg);
-            }
-        } catch (Throwable ignored) {
-        }
-        return truncate(body);
-    }
-
-    private static String truncate(String s) {
-        String flat = s.replace('\n', ' ').trim();
-        return flat.length() <= 200 ? flat : flat.substring(0, 200) + "…";
+                "请求失败", status, null);
     }
 }

@@ -1,6 +1,7 @@
 package com.wxmyyds.discordautotranslate.core;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -24,6 +25,7 @@ public class ConfigTest {
     @Test
     public void emptyPrefsUseAllDefaults() {
         Config.Snapshot s = Config.read(new MemoryPrefs());
+        assertFalse(s.verboseLog);
         assertEquals(Config.DEF_ENABLED, s.enabled);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
         assertEquals(Config.DEF_MODEL, s.model);
@@ -35,7 +37,18 @@ public class ConfigTest {
         assertEquals(Config.DEF_MAX_CONCURRENCY, s.maxConcurrency);
     }
 
-    /** 空白字符串（用户清空输入框后保存）应回落默认值。 */
+    @Test
+    public void versionEncodingHasUnambiguousFieldBoundaries() {
+        MemoryPrefs first = new MemoryPrefs()
+                .put(Config.KEY_API_URL, "a|b")
+                .put(Config.KEY_MODEL, "c");
+        MemoryPrefs second = new MemoryPrefs()
+                .put(Config.KEY_API_URL, "a")
+                .put(Config.KEY_MODEL, "b|c");
+        assertNotEquals(Config.read(first).version(), Config.read(second).version());
+    }
+
+    /** 密钥与额外请求头可为空；其他关键字段空白时回落默认。 */
     @Test
     public void blankStringsFallBackToDefaults() {
         MemoryPrefs p = new MemoryPrefs()
@@ -67,6 +80,17 @@ public class ConfigTest {
         assertEquals(Config.DEF_RESPONSE_PATH, s.responsePath);
     }
 
+    @Test
+    public void verboseLoggingStillNeverIncludesMessageBody() {
+        String sensitive = "unique-private-message-body";
+        XLog.setVerbose(true);
+        try {
+            assertFalse(XLog.text(sensitive).contains(sensitive));
+        } finally {
+            XLog.setVerbose(false);
+        }
+    }
+
     /** 用户填了有效值时必须用用户的值，不能被默认值覆盖。 */
     @Test
     public void explicitValuesAreKept() {
@@ -85,6 +109,19 @@ public class ConfigTest {
         assertEquals("data.text", s.responsePath);
         // 默认值不得生效
         assertNotEquals(Config.DEF_MODEL, s.model);
+    }
+
+    @Test
+    public void verboseLoggingStillNeverIncludesMessageBody() {
+        String sensitive = "unique-private-message-body";
+        XLog.setVerbose(false);
+        assertFalse(XLog.text(sensitive).contains(sensitive));
+        XLog.setVerbose(true);
+        try {
+            assertFalse(XLog.text(sensitive).contains(sensitive));
+        } finally {
+            XLog.setVerbose(false);
+        }
     }
 
     /** 超时与并发为 0 或负数时回落默认值（否则请求会直接失败）。 */

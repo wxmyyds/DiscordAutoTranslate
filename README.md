@@ -7,15 +7,16 @@
 
 ## 当前状态
 
-**阶段 1：可行性原型（开发中）**
+**阶段 1–3 已完成并合入 main**
 
-已完成：模块骨架、API 102 入口与热重载生命周期、消息 Hook 点定位、
-正文替换与图标切换链路、独立设置 Activity、GitHub Actions 构建。
+已完成：模块骨架、API 102 入口与热重载生命周期、消息 Hook 点定位（6 个）、
+通用 JSON 翻译引擎（阶段 2）、保留 Markdown 的正文替换与图标交互（阶段 3）、
+独立设置 Activity（含配置检查/测试连接/测试翻译）、GitHub Actions 构建。
 
-未完成：真实翻译引擎（阶段 2）、`AnnotatedStructurableText` 结构替换（阶段 3）、
-测试连接/测试翻译（阶段 4）。
+未完成：阶段 4 设置界面完善、阶段 5 稳定性加固（Embed 翻译等）、
+阶段 6 热重载真机验收。
 
-详见 [docs/design-stage1.md](docs/design-stage1.md)。
+详见 [docs/design-stage3.md](docs/design-stage3.md)。
 
 ## 目标版本
 
@@ -40,7 +41,7 @@ Discord **340.13 Stable**（`versionCode` 340013，`com.discord`）。
 
 启用后消息正文会发送到你在设置中配置的第三方翻译服务。
 API 密钥仅保存在本机（LSPosed remote preferences），不会写入日志。
-日志默认不记录完整消息正文；仅在开启“详细日志”用于排障时才记录。
+消息正文与译文始终不会写入日志；详细日志开关只影响诊断信息的详细程度。
 
 ## 目录结构
 

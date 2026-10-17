@@ -148,8 +148,7 @@ public final class Http {
                     "请求超时（" + timeoutMs + "ms）", e);
         } catch (IOException e) {
             throw new TranslationException(TranslationException.Kind.NETWORK,
-                    "网络错误：" + e.getClass().getSimpleName()
-                            + (e.getMessage() == null ? "" : " " + e.getMessage()), e);
+                    "网络错误：" + e.getClass().getSimpleName(), e);
         } catch (Throwable t) {
             throw new TranslationException(TranslationException.Kind.UNKNOWN,
                     "请求失败：" + t.getClass().getSimpleName(), t);
@@ -177,7 +176,7 @@ public final class Http {
             while ((n = is.read(buf)) > 0) {
                 total += n;
                 if (total > 1024 * 1024) {
-                    break;
+                    throw new IOException("HTTP response exceeds 1 MiB limit");
                 }
                 bos.write(buf, 0, n);
             }

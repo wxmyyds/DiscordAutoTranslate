@@ -4,7 +4,6 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
 import com.wxmyyds.discordautotranslate.core.JsonPath;
-import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.TranslationException;
 
 /**
@@ -55,9 +54,8 @@ public final class ApiTester {
     public static Result testTranslation(Config.Snapshot cfg, String text) {
         long start = System.currentTimeMillis();
         try {
-            // 先做配置校验，让配置类错误以最清晰的信息暴露。
-            // 传入 systemPrompt：默认模板含 {{system}}，不传会被当作未知占位符。
-            JsonTemplate.validate(cfg.bodyTemplate, cfg.targetLang, cfg.model, cfg.systemPrompt);
+            // 与真实请求共用同一套配置校验，避免规则不一致。
+            JsonApiEngine.validateConfig(cfg);
 
             JsonApiEngine engine = new JsonApiEngine(cfg);
             String translated = engine.translate(text);
@@ -84,24 +82,19 @@ public final class ApiTester {
     public static Result selfCheck(Config.Snapshot cfg) {
         long start = System.currentTimeMillis();
         try {
-            JsonTemplate.validate(cfg.bodyTemplate, cfg.targetLang, cfg.model, cfg.systemPrompt);
-            JsonPath.validateJson(cfg.bodyTemplate, "请求模板");
-            if (cfg.apiUrl == null || cfg.apiUrl.trim().isEmpty()) {
-                throw new TranslationException(TranslationException.Kind.CONFIG, "API URL 未配置");
-            }
-            String u = cfg.apiUrl.trim().toLowerCase(java.util.Locale.US);
-            if (!u.startsWith("http://") && !u.startsWith("https://")) {
-                throw new TranslationException(TranslationException.Kind.CONFIG,
-                        "API URL 必须以 http:// 或 https:// 开头");
-            }
-            if (cfg.responsePath == null || cfg.responsePath.trim().isEmpty()) {
-                throw new TranslationException(TranslationException.Kind.CONFIG, "响应提取路径未配置");
-            }
-            // 额外校验：用一份模拟响应确认提取路径可用。
-            JsonPath.extractString(simulatedResponse(cfg), cfg.responsePath);
+            // 与真实请求共用同一套配置校验，避免两处规则不一致。
+            JsonApiEngine.validateConfig(cfg);
+
+            // 内置样例只覆盖默认 OpenAI 提取路径；自定义路径不在此处误判为错误，
+            // 真实结构由在线“测试连接/测试翻译”确认。
+            boolean sampleMatchesPath = Config.DEF_RESPONSE_PATH.equals(cfg.responsePath)
+                    && pathExistsInSample(cfg.responsePath);
 
             long ms = System.currentTimeMillis() - start;
-            return new Result(true, "配置检查通过（" + ms + "ms）", null, ms);
+            return new Result(true, sampleMatchesPath
+                    ? "配置检查通过（" + ms + "ms）"
+                    : "模板/URL/路径格式有效；内置响应样例无法验证此自定义路径（" + ms + "ms）",
+                    null, ms);
         } catch (TranslationException e) {
             return new Result(false, e.userMessage(), null,
                     System.currentTimeMillis() - start);
@@ -111,8 +104,18 @@ public final class ApiTester {
         }
     }
 
-    /** OpenAI 兼容风格的模拟响应，用于离线校验提取路径。 */
-    private static String simulatedResponse(Config.Snapshot cfg) {
+    /** 仅在内置样例确实有该路径时返回 true；否则不将自定义路径误判为错误。 */
+    private static boolean pathExistsInSample(String path) {
+        try {
+            JsonPath.extractString(simulatedResponse(), path);
+            return true;
+        } catch (TranslationException e) {
+            return false;
+        }
+    }
+
+    /** 固定样例只用于默认 OpenAI 提取路径的离线示意。 */
+    private static String simulatedResponse() {
         return "{\"choices\":[{\"message\":{\"role\":\"assistant\","
                 + "\"content\":\"译文\"}}],\"data\":{\"translations\":[{\"text\":\"译文\","
                 + "\"translatedText\":\"译文\"}]}}";

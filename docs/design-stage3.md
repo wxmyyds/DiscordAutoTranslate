@@ -267,7 +267,8 @@ ViewGroup 接管整个手势序列，子视图收不到任何事件**。
 排障期已开启以下机制（见 `XLog` 与 `MessageHooks.install`）：
 
 - 日志**同时**写 `android.util.Log` 与框架日志，`adb logcat` 可见。
-- 启动时输出单行摘要：`hook pipeline armed: N/4`。
+- 启动时输出单行摘要：`hook pipeline armed: N/6`
+  （bind / row / rowTouch / expandedRender / toSpannable / configureReply）。
   期望为 4；每个 Hook 失败时上方均有具体原因日志。
 - 关键流程日志：`bind <id>` → `translate start <id>` → `translate done <id>`；
   以及 `toSpannable substituted for <id>`。

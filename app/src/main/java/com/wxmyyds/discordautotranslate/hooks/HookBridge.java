@@ -23,8 +23,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>职责：
  * <ol>
- *   <li>维护 <b>正文视图 → 消息 ID</b> 映射。必须如此：RecyclerView 会复用
- *       {@code MessageContentView} 实例，译文状态绝不能存在 View 上（需求 §风险 2）。</li>
+ *   <li>维护 <b>正文视图 → 消息 ID</b> 与 <b>内容对象 → 消息 ID</b> 两张映射。
+ *       必须如此：RecyclerView 会复用 {@code MessageContentView} 实例，
+ *       译文状态绝不能存在 View 上（需求 §风险 2）。</li>
  *   <li>保存每条消息最近一次的原始渲染参数，用于翻译完成后重新渲染。</li>
  *   <li>提供“原文/译文”切换与失败重试入口，供图标点击调用。</li>
  * </ol>
@@ -53,7 +54,7 @@ public final class HookBridge {
     /** 消息 ID → 原始 StructurableText（即使视图已回收也能重试） */
     private final Map<String, Object> rawContent = new ConcurrentHashMap<>();
 
-    /** 消息 ID → 最近承载它的视图 */
+    /** 消息 ID → 最近承载它的视图（原始渲染参数仍按 View 保存）。 */
     private final Map<String, View> lastView = new ConcurrentHashMap<>();
 
     /**
@@ -65,9 +66,6 @@ public final class HookBridge {
      */
     private final Map<Object, String> contentIdentityToMessageId = new ConcurrentHashMap<>();
 
-    /** 正文文本哈希 → 消息 ID。作为身份映射失效时的兜底。 */
-    private final Map<String, String> textHashToMessageId = new ConcurrentHashMap<>();
-
     private volatile Config.Snapshot config = Config.read(null);
     private volatile Scheduler.Engine engine = new JsonApiEngine(config);
 
@@ -75,10 +73,6 @@ public final class HookBridge {
     }
 
     // ---------------------------------------------------------------- 配置与引擎
-
-    public Config.Snapshot config() {
-        return config;
-    }
 
     /**
      * 更新配置。会影响翻译结果的配置变化（URL/模型/目标语言/模板/提取路径）发生后，
@@ -104,10 +98,6 @@ public final class HookBridge {
         this.engine = new JsonApiEngine(c);
     }
 
-    public Scheduler.Engine engine() {
-        return engine;
-    }
-
     // ---------------------------------------------------------------- 视图映射
 
     /** 记录正文视图当前绑定的消息 ID。列表复用时会被覆盖，始终反映最新绑定。 */
@@ -117,9 +107,10 @@ public final class HookBridge {
         }
         String prev = viewToMessageId.put(contentView, messageId);
         if (prev != null && !prev.equals(messageId)) {
-            // 视图被复用到另一条消息：丢弃该视图的旧渲染参数，防止译文串位（需求 §风险 2）。
+            // 视图被复用到另一条消息：清除该视图的旧渲染参数，并且只在
+            // lastView 仍指向这个 View 时删除，避免误删同 ID 的更新 View。
             originalRenderArgs.remove(contentView);
-            lastView.remove(prev);
+            lastView.remove(prev, contentView);
         }
         lastView.put(messageId, contentView);
     }
@@ -129,28 +120,6 @@ public final class HookBridge {
         return contentView == null ? null : viewToMessageId.get(contentView);
     }
 
-    /** 取视图最近一次渲染所用的 StructurableText（即原文结构）。 */
-    @Nullable
-    public Object lastStructurable(@Nullable View contentView) {
-        if (contentView == null) {
-            return null;
-        }
-        Object[] args = originalRenderArgs.get(contentView);
-        return (args != null && args.length > 1) ? args[1] : null;
-    }
-
-    public void forgetView(View contentView) {
-        String id = viewToMessageId.remove(contentView);
-        originalRenderArgs.remove(contentView);
-        if (id != null) {
-            lastView.remove(id);
-            // 同时清掉该消息的内容映射，避免长期持有已回收消息的 StructurableText。
-            rawContent.remove(id);
-            contentIdentityToMessageId.values().removeIf(id::equals);
-            textHashToMessageId.values().removeIf(id::equals);
-        }
-    }
-
     /** 清空全部映射。热重载与配置重置时调用。 */
     public void reset() {
         viewToMessageId.clear();
@@ -158,7 +127,6 @@ public final class HookBridge {
         rawContent.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
-        textHashToMessageId.clear();
     }
 
     // ------------------------------------------------------- 内容 → 消息 ID
@@ -172,16 +140,13 @@ public final class HookBridge {
             return;
         }
         contentIdentityToMessageId.put(structurableText, messageId);
-        String text = TextExtractor.textOf(structurableText);
-        if (text != null && !text.isEmpty()) {
-            textHashToMessageId.put(Scheduler.contentHash(text, ""), messageId);
-        }
     }
 
     /**
      * 反查某个 {@code StructurableText} 属于哪条消息。
      *
-     * <p>先按对象身份，再按正文文本哈希兜底（防止 Discord 每次渲染新建实例）。</p>
+     * <p>只按对象身份映射反查。不得按正文哈希兜底：不同消息完全可能有相同正文，
+     * 将哈希映射到单个 ID 会把译文错误地套用到另一条消息。</p>
      */
     @Nullable
     public String resolveMessageId(@Nullable Object structurableText) {
@@ -192,10 +157,7 @@ public final class HookBridge {
         if (id != null) {
             return id;
         }
-        String text = TextExtractor.textOf(structurableText);
-        if (text != null && !text.isEmpty()) {
-            return textHashToMessageId.get(Scheduler.contentHash(text, ""));
-        }
+        // 正文可能相同，按文本哈希反查消息 ID 会产生歧义；只接受对象身份映射。
         return null;
     }
 

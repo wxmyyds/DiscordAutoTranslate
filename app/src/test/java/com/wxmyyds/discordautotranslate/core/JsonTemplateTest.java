@@ -125,8 +125,8 @@ public class JsonTemplateTest {
 
     @Test
     public void validateAcceptsDefaultOpenAiTemplate() throws Exception {
-        JsonTemplate.validate(Config.DEF_BODY_TEMPLATE,
-                Config.DEF_TARGET_LANG, Config.DEF_MODEL);
+        JsonTemplate.validate("{\"x\":\"{{ text }}\",\"s\":\"{{ system }}\"}",
+                "zh", "model", "system prompt");
         // 默认模板渲染后应能被默认提取路径消费（用模拟响应验证提取路径可用）
         assertNotNull(JsonPath.extractString(
                 "{\"choices\":[{\"message\":{\"content\":\"译文\"}}]}",
@@ -143,7 +143,8 @@ public class JsonTemplateTest {
     @Test
     public void defaultTemplateUsesTemperatureZeroForDeterminism() {
         JsonTemplate.RenderResult r = JsonTemplate.render(
-                Config.DEF_BODY_TEMPLATE, "hi", "简体中文", "gpt-4o-mini");
+                Config.DEF_BODY_TEMPLATE, "hi", "简体中文", "gpt-4o-mini",
+                Config.DEF_SYSTEM_PROMPT);
         assertTrue(r.body.contains("\"temperature\":0"));
         assertFalse(r.hasUnknownPlaceholders());
     }
@@ -184,8 +185,19 @@ public class JsonTemplateTest {
         assertEquals(prompt, JsonPath.extractString(r.body, "messages.0.content"));
     }
 
-    /**
-     * 模板缺关键占位符时必须被报出，供设置页弹窗提醒。
+    @Test
+    public void emptyTemplateProducesMissingPlaceholders() {
+        assertEquals(java.util.Arrays.asList("{{text}}", "{{system}}"),
+                JsonTemplate.missingKeyPlaceholders("  "));
+    }
+
+    @Test
+    public void missingKeyPlaceholdersDetectWhitespaceSyntax() {
+        assertTrue(JsonTemplate.missingKeyPlaceholders(
+                "{\"text\":\"{{ text }}\",\"system\":\"{{ system }}\"}").isEmpty());
+    }
+
+    /** 模板缺关键占位符时必须被报出，供设置页弹窗提醒。
      *
      * <p>背景：配置读取是“已存值优先于默认值”，老用户手机里可能存着
      * 不含 {{system}} 的旧模板，导致系统提示词静默失效。</p>

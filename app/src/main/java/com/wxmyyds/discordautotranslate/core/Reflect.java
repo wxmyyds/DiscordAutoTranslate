@@ -85,23 +85,6 @@ public final class Reflect {
         return null;
     }
 
-    /** 查找无参、返回 boolean 的方法（名称前缀匹配）。 */
-    @Nullable
-    public static Method findBooleanGetter(Class<?> c, String namePrefix) {
-        if (c == null) {
-            return null;
-        }
-        for (Method m : c.getDeclaredMethods()) {
-            if (m.getParameterTypes().length == 0
-                    && m.getName().startsWith(namePrefix)
-                    && m.getReturnType() == boolean.class) {
-                m.setAccessible(true);
-                return m;
-            }
-        }
-        return null;
-    }
-
     /** 读取字段（含父类链），失败返回 null。 */
     @Nullable
     public static Object getField(@Nullable Object target, String fieldName) {

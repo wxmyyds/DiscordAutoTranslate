@@ -325,15 +325,59 @@ public class SchedulerTest {
     }
 
     @Test
-    public void rejectionCallbackDoesNotReportAccepted() throws Exception {
+    public void concurrencyLimitCanBeLoweredThenRestored() throws Exception {
         Scheduler s = new Scheduler();
         try {
-            // 通过先关闭线程池模拟提交被拒
+            // 持有初始许可时连续调低再调高，旧实现会遗失可用 permit。
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicInteger concurrent = new AtomicInteger();
+            AtomicInteger peak = new AtomicInteger();
+            Scheduler.Engine slow = text -> {
+                int now = concurrent.incrementAndGet();
+                peak.accumulateAndGet(now, Math::max);
+                release.await(5, TimeUnit.SECONDS);
+                concurrent.decrementAndGet();
+                return "t";
+            };
+            for (int i = 0; i < 4; i++) {
+                s.submit("first" + i, "h" + i, "text", slow, ALWAYS, new Collector());
+            }
+            Thread.sleep(200);
+            s.setMaxConcurrency(1);
+            s.setMaxConcurrency(4);
+            release.countDown();
+            Thread.sleep(400);
+
+            CountDownLatch secondRelease = new CountDownLatch(1);
+            CountDownLatch entered = new CountDownLatch(4);
+            AtomicInteger secondConcurrent = new AtomicInteger();
+            Scheduler.Engine fourWay = text -> {
+                secondConcurrent.incrementAndGet();
+                entered.countDown();
+                secondRelease.await(5, TimeUnit.SECONDS);
+                secondConcurrent.decrementAndGet();
+                return "t";
+            };
+            for (int i = 0; i < 4; i++) {
+                s.submit("second" + i, "s" + i, "text", fourWay, ALWAYS, new Collector());
+            }
+            assertTrue("restored concurrency should admit four tasks",
+                    entered.await(3, TimeUnit.SECONDS));
+            secondRelease.countDown();
+        } finally {
+            s.shutdown();
+        }
+    }
+
+    @Test
+    public void rejectionCallbackReportsSubmissionFailure() throws Exception {
+        Scheduler s = new Scheduler();
+        try {
             s.shutdown();
             Collector c = new Collector();
             s.submit("1", "h1", "hello", new CountingEngine("t"), ALWAYS, c);
             c.await();
-            assertFalse("rejected task must not be accepted", c.accepted);
+            assertTrue(c.accepted);
             assertNotNull(c.error);
         } finally {
             s.shutdown();

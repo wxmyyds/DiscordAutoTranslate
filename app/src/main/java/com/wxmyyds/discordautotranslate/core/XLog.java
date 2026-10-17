@@ -12,9 +12,8 @@ import io.github.libxposed.api.XposedInterface;
  * <p>日志通过 libxposed 框架输出（{@link XposedInterface#log(int, String, String)}），
  * 未附加框架时降级到 {@code android.util.Log}。</p>
  *
- * <p>隐私要求（需求 §风险 5）：日志默认不输出完整消息正文、不输出完整 API 密钥。
- * 因此本类只提供 {@link #redact(String)} 供调用方处理敏感片段，并在
- * {@link #text(String)} 中对正文做截断。</p>
+ * <p>详细日志只增加流程诊断，不改变正文脱敏规则。</p>
+ * <p>密钥需要通过 {@link #redact(String)} 显式脱敏后才能记录。</p>
  */
 public final class XLog {
 
@@ -36,12 +35,9 @@ public final class XLog {
         sXposed = null;
     }
 
+    /** 设置是否输出 DEBUG 级诊断日志。 */
     public static void setVerbose(boolean verbose) {
         sVerbose = verbose;
-    }
-
-    public static boolean isVerbose() {
-        return sVerbose;
     }
 
     public static void d(String msg) {
@@ -112,25 +108,12 @@ public final class XLog {
         return secret.substring(0, 3) + "***(len=" + n + ")";
     }
 
-    /**
-     * 消息正文摘要：只用于诊断，禁止直接记录完整正文。
-     */
+    /** 用更稳妥的固定长度摘要表示敏感正文，详细日志开关不改变脱敏规则。 */
     public static String text(@Nullable String body) {
         if (body == null) {
             return "<null>";
         }
-        int n = body.length();
-        if (sVerbose) {
-            return body;
-        }
-        return String.format(Locale.US, "<len=%d, head=%s>", n, preview(body, 12));
-    }
-
-    private static String preview(String s, int max) {
-        String flat = s.replace('\n', ' ').replace('\r', ' ').trim();
-        if (flat.length() <= max) {
-            return flat;
-        }
-        return flat.substring(0, max) + "…";
+        // 正文无论 verbose 开关状态都不得写入日志；即使短文本也只记录长度。
+        return String.format(Locale.US, "<len=%d>", body.length());
     }
 }

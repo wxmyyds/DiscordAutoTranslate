@@ -118,11 +118,17 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         enabledInput.setText("启用自动翻译");
         root.addView(enabledInput, matchWrap());
 
-        urlInput = addField(root, "API URL", Config.DEF_API_URL, InputType.TYPE_TEXT_VARIATION_URI);
-        keyInput = addField(root, "API 密钥（仅保存在本机）", "", InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
+        // 只传 variation 常量会使输入类型退化为 TYPE_NULL（无法正常输入）。
+        urlInput = addField(root, "API URL", Config.DEF_API_URL,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        keyInput = addField(root, "API 密钥（仅保存在本机）", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
         targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
-        headersInput = addField(root, "额外请求头（每行 Name: Value）", "", InputType.TYPE_CLASS_TEXT);
+        // 标注“每行一条”，因此必须是真的多行输入框。
+        headersInput = addField(root, "额外请求头（每行 Name: Value）", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         // 系统提示词独立成项：多行中文直接写，不必手动做 JSON 转义。
         // 在 JSON 模板里用 {{system}} 引用。
         systemPromptInput = addField(root, "系统提示词（多行，在模板里用 {{system}} 引用）",
@@ -137,7 +143,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
                 InputType.TYPE_CLASS_NUMBER);
 
         verboseInput = new CheckBox(this);
-        verboseInput.setText("详细日志（会记录消息正文，仅排障时开启）");
+        verboseInput.setText("详细诊断日志（消息正文与译文始终脱敏）");
         root.addView(verboseInput, matchWrap());
 
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
