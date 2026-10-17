@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.text.InputType;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -19,6 +18,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
+import com.wxmyyds.discordautotranslate.translate.ApiTester;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -55,6 +56,8 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
     private CheckBox enabledInput;
     private CheckBox verboseInput;
     private TextView statusText;
+    private TextView resultText;
+    private EditText testTextInput;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -130,6 +133,9 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         verboseInput.setText("详细日志（会记录消息正文，仅排障时开启）");
         root.addView(verboseInput, matchWrap());
 
+        testTextInput = addField(root, "测试文本（“测试翻译”使用）",
+                ApiTester.DEFAULT_TEST_TEXT, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+
         TextView privacy = new TextView(this);
         privacy.setTextSize(12f);
         privacy.setText("隐私提示：启用后，消息正文会发送到上面配置的第三方翻译服务。"
@@ -140,6 +146,36 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         save.setText("保存");
         save.setOnClickListener(v -> save());
         root.addView(save, matchWrap());
+
+        // 测试按钮（需求 §3.1、§5.5）：用界面当前填写值而非已保存值进行测试，
+        // 方便在保存前先验证配置是否正确。
+        LinearLayout testRow = new LinearLayout(this);
+        testRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button check = new Button(this);
+        check.setText("配置检查");
+        check.setOnClickListener(v -> runSelfCheck());
+        testRow.addView(check, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button testConn = new Button(this);
+        testConn.setText("测试连接");
+        testConn.setOnClickListener(v -> runTestTranslation(true));
+        testRow.addView(testConn, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button testTranslate = new Button(this);
+        testTranslate.setText("测试翻译");
+        testTranslate.setOnClickListener(v -> runTestTranslation(false));
+        testRow.addView(testTranslate, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        root.addView(testRow, matchWrap());
+
+        resultText = new TextView(this);
+        resultText.setTextSize(12f);
+        resultText.setPadding(0, dp(8), 0, 0);
+        root.addView(resultText, matchWrap());
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root, new ViewGroup.LayoutParams(
@@ -223,6 +259,67 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         } catch (Throwable t) {
             return def;
         }
+    }
+
+    // ------------------------------------------------------------ 测试功能
+
+    /** 用界面当前值构造配置快照（不依赖已保存值，也不发起写入）。 */
+    private Config.Snapshot snapshotFromUi() {
+        MemoryPrefs p = new MemoryPrefs();
+        p.put(Config.KEY_ENABLED, enabledInput.isChecked());
+        p.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
+        p.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
+        p.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
+        p.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
+        p.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
+        p.put(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
+        p.put(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
+        p.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
+        p.put(Config.KEY_MAX_CONCURRENCY, parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
+        p.put(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
+        return Config.read(p);
+    }
+
+    /** 离线配置检查：不发网络请求。 */
+    private void runSelfCheck() {
+        showResult(ApiTester.selfCheck(snapshotFromUi()));
+    }
+
+    /**
+     * 真实请求测试。
+     *
+     * @param connectionTest true=用固定测试文本（等价于连接测试），
+     *                       false=用界面下方“测试文本”输入框的内容
+     */
+    private void runTestTranslation(boolean connectionTest) {
+        Config.Snapshot cfg = snapshotFromUi();
+        final String text = connectionTest
+                ? ApiTester.DEFAULT_TEST_TEXT
+                : testTextInput.getText().toString();
+
+        if (!connectionTest && text.trim().isEmpty()) {
+            resultText.setText("请先输入测试文本。");
+            return;
+        }
+        resultText.setText("请求中…");
+        // 网络请求不得阻塞 UI 线程。
+        new Thread(() -> {
+            final ApiTester.Result r = connectionTest
+                    ? ApiTester.testConnection(cfg)
+                    : ApiTester.testTranslation(cfg, text);
+            runOnUiThread(() -> showResult(r));
+        }, "dat-api-test").start();
+    }
+
+    private void showResult(ApiTester.Result r) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(r.ok ? "✓ " : "✗ ").append(r.message);
+        if (r.translated != null) {
+            sb.append("\n译文：").append(r.translated);
+        }
+        resultText.setText(sb.toString());
+        // 仅提示是否成功，不把密钥或正文写入状态行。
+        updateStatus(r.ok ? "测试通过。" : "测试失败，详见下方结果。");
     }
 
     private void updateStatus(String s) {

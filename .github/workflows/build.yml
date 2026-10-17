@@ -119,6 +119,18 @@ jobs:
       - name: Assemble
         run: gradle --no-daemon assemble${{ steps.cfg.outputs.task }}
 
+      # 阶段 2 起单元测试是必要验证项（模板转义、路径提取、调度去重/过期丢弃/重试）。
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Publish test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report-${{ github.sha }}
+          path: app/build/reports/tests/**
+          if-no-files-found: ignore
+
       - name: Verify APK contents (xposed entry + scope)
         run: |
           set -e

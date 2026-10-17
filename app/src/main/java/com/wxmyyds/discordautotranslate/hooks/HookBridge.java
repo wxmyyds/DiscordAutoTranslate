@@ -9,7 +9,10 @@ import com.wxmyyds.discordautotranslate.core.EnglishDetector;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
+import com.wxmyyds.discordautotranslate.core.TranslationCache;
+import com.wxmyyds.discordautotranslate.core.TranslationException;
 import com.wxmyyds.discordautotranslate.core.XLog;
+import com.wxmyyds.discordautotranslate.translate.JsonApiEngine;
 
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -54,7 +57,7 @@ public final class HookBridge {
     private final Map<String, View> lastView = new ConcurrentHashMap<>();
 
     private volatile Config.Snapshot config = Config.read(null);
-    private volatile Scheduler.Engine engine = new StubEngine();
+    private volatile Scheduler.Engine engine = new JsonApiEngine(config);
 
     private HookBridge() {
     }
@@ -65,6 +68,10 @@ public final class HookBridge {
         return config;
     }
 
+    /**
+     * 更新配置。会影响翻译结果的配置变化（URL/模型/目标语言/模板/提取路径）发生后，
+     * 递增状态代次使旧译文与在途任务失效（需求 §5.6、§5.7）。
+     */
     public void updateConfig(Config.Snapshot c) {
         if (c == null) {
             return;
@@ -72,17 +79,17 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
+
+        // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
+        Scheduler.get().setMaxConcurrency(c.maxConcurrency);
+
         if (old == null || !old.version().equals(c.version())) {
-            // 影响翻译结果的配置已变化：清空缓存状态，避免旧译文被错误复用（需求 §5.6）。
             XLog.i("translation config changed, invalidating cached state");
             StateStore.get().onNewGeneration();
+            TranslationCache.get().clear();
         }
-    }
-
-    public void setEngine(Scheduler.Engine e) {
-        if (e != null) {
-            this.engine = e;
-        }
+        // 引擎随配置重建，保证下一次请求使用最新配置。
+        this.engine = new JsonApiEngine(c);
     }
 
     public Scheduler.Engine engine() {
@@ -146,10 +153,6 @@ public final class HookBridge {
     /**
      * 记录“原始”渲染参数，并在有译文时把 {@code messageContent}（实参下标 1）替换为译文。
      *
-     * @param contentView      目标 MessageContentView
-     * @param args             原始实参
-     * @param structurableText 原始 StructurableText（实参 1）
-     * @param translatedText   可用译文；null 表示不替换
      * @return 实际应传给原方法的实参；无替换时返回传入的同一数组
      */
     public Object[] interceptRender(View contentView, Object[] args,
@@ -172,7 +175,7 @@ public final class HookBridge {
         String clsName = structurableText == null ? null : structurableText.getClass().getName();
         boolean isPlainText = clsName != null && clsName.endsWith("PrimitiveStructurableText");
         if (!isPlainText) {
-            // 阶段 1 仅替换“纯文本”结构。带 Markdown/提及/表情的消息使用
+            // 阶段 1/2 仅替换“纯文本”结构。带 Markdown/提及/表情的消息使用
             // AnnotatedStructurableText(List<ContentNode>)，需要重建节点树，
             // 属于阶段 3 的工作（见 docs/design-stage1.md）。
             XLog.d("skip substitute: content is " + clsName);
@@ -194,7 +197,7 @@ public final class HookBridge {
 
     /**
      * 翻译完成后触发重渲染：用已保存的原文参数重新调用 {@code setMessageContent}。
-     * 不发起新的翻译请求（需求 §2.4）。重渲染期间设置标记，避免覆盖保存的原文。
+     * 不发起新的翻译请求（需求 §2.4）。
      */
     public void requestRerender(@Nullable View contentView, @Nullable Method setMessageContent) {
         if (contentView == null || setMessageContent == null) {
@@ -209,7 +212,6 @@ public final class HookBridge {
         String translated = (e != null && e.status == StateStore.Status.TRANSLATED
                 && !e.showingOriginal) ? e.translatedText : null;
 
-        // 直接构造本次要渲染的实参：有译文且应显示译文时替换正文。
         Object[] effective = original;
         if (translated != null && original.length > 1) {
             String clsName = original[1] == null ? null : original[1].getClass().getName();
@@ -237,11 +239,7 @@ public final class HookBridge {
     // ---------------------------------------------------------------- 翻译流程
 
     /**
-     * 消息绑定后的处理入口：识别英文、登记状态、按需发起翻译。
-     *
-     * @param contentView      对应的 MessageContentView（用于后续重渲染）
-     * @param messageId        消息 ID
-     * @param structurableText 原始 StructurableText
+     * 消息绑定后的处理入口：识别英文、查缓存、按需发起翻译。
      */
     public void onMessageBound(@Nullable View contentView, String messageId,
                                @Nullable Object structurableText) {
@@ -266,13 +264,29 @@ public final class HookBridge {
             XLog.d("auto-translate disabled, skip " + messageId);
             return;
         }
-        if (!cfg.isUsable()) {
-            XLog.d("api not configured, skip " + messageId);
-            return;
-        }
         if (entry.status == StateStore.Status.TRANSLATING
                 || entry.status == StateStore.Status.TRANSLATED) {
             return; // 已有在途任务或已有译文，不重复翻译（需求 §5.4 去重）。
+        }
+
+        // 缓存命中：直接出结果，不发请求（需求 §5.6）。
+        String cached = TranslationCache.get().get(hash);
+        if (cached != null) {
+            entry.translatedText = cached;
+            entry.status = StateStore.Status.TRANSLATED;
+            entry.showingOriginal = false;
+            XLog.d("cache hit for " + messageId);
+            IconRegistry.refresh(messageId);
+            RerenderRegistry.rerender(messageId);
+            return;
+        }
+
+        if (!cfg.isUsable()) {
+            entry.status = StateStore.Status.FAILED;
+            entry.lastError = "API 未配置";
+            XLog.d("api not configured, skip " + messageId);
+            IconRegistry.refresh(messageId);
+            return;
         }
 
         EnglishDetector.Verdict v = EnglishDetector.evaluate(
@@ -296,38 +310,57 @@ public final class HookBridge {
                     }
                     StateStore.Entry cur = StateStore.get().peek(messageId);
                     if (cur == null || !contentHash.equals(cur.contentHash)) {
-                        return false; // 消息已被编辑：丢弃，防止旧结果覆盖新译文（需求 §风险 3）
+                        return false; // 消息已被编辑：丢弃（需求 §风险 3）
                     }
                     return true;
                 },
-                (id, accepted, translated, error) -> {
-                    StateStore.Entry cur = StateStore.get().peek(id);
-                    if (cur == null) {
-                        return;
-                    }
-                    if (!accepted) {
-                        // 被丢弃通常是过期或开关关闭：回到可重试状态，但不显示“失败”。
-                        if (cur.status == StateStore.Status.TRANSLATING) {
-                            cur.status = cur.translatedText != null
-                                    ? StateStore.Status.TRANSLATED
-                                    : StateStore.Status.IDLE;
-                        }
-                        IconRegistry.refresh(id);
-                        return;
-                    }
-                    if (error != null || translated == null || translated.isEmpty()) {
-                        cur.status = StateStore.Status.FAILED;
-                        cur.lastError = error;
-                        XLog.w("translate failed " + id + ": " + error);
-                    } else {
-                        cur.translatedText = translated;
-                        cur.status = StateStore.Status.TRANSLATED;
-                        cur.showingOriginal = false;
-                        XLog.i("translate done " + id + " -> " + XLog.text(translated));
-                    }
-                    IconRegistry.refresh(id);
-                    RerenderRegistry.rerender(id);
-                });
+                (id, accepted, translated, error) ->
+                        onTranslateResult(id, accepted, translated, error));
+    }
+
+    /** 翻译结果回写（主线程）。 */
+    private void onTranslateResult(String id, boolean accepted,
+                                   @Nullable String translated, @Nullable Throwable error) {
+        StateStore.Entry cur = StateStore.get().peek(id);
+        if (cur == null) {
+            return;
+        }
+        if (!accepted) {
+            // 被丢弃通常是过期或开关关闭：回到可重试状态，但不显示“失败”。
+            if (cur.status == StateStore.Status.TRANSLATING) {
+                cur.status = cur.translatedText != null
+                        ? StateStore.Status.TRANSLATED
+                        : StateStore.Status.IDLE;
+            }
+            IconRegistry.refresh(id);
+            return;
+        }
+        if (error != null || translated == null || translated.isEmpty()) {
+            cur.status = StateStore.Status.FAILED;
+            cur.lastError = describe(error);
+            XLog.w("translate failed " + id + ": " + cur.lastError);
+        } else {
+            cur.translatedText = translated;
+            cur.status = StateStore.Status.TRANSLATED;
+            cur.showingOriginal = false;
+            // 写入缓存，供同内容的其它消息复用（需求 §5.6）。
+            TranslationCache.get().put(cur.contentHash, translated);
+            XLog.i("translate done " + id + " -> " + XLog.text(translated));
+        }
+        IconRegistry.refresh(id);
+        RerenderRegistry.rerender(id);
+    }
+
+    /** 把异常转换为可读且不泄露密钥的描述。 */
+    private static String describe(@Nullable Throwable t) {
+        if (t == null) {
+            return "未知错误";
+        }
+        if (t instanceof TranslationException) {
+            return ((TranslationException) t).userMessage();
+        }
+        return t.getClass().getSimpleName()
+                + (t.getMessage() == null ? "" : ": " + t.getMessage());
     }
 
     /** 原文/译文切换：由图标点击触发，不触发新请求（需求 §2.4）。 */
@@ -378,23 +411,5 @@ public final class HookBridge {
             }
         }
         return true;
-    }
-
-    /**
-     * 阶段 1 桩引擎：不做真实翻译，仅用于验证
-     * “拦截 → 状态流转 → 重渲染 → 图标切换”整条链路。
-     * 阶段 2 会替换为 OpenAI 兼容实现（需求 §7 阶段 2）。
-     */
-    static final class StubEngine implements Scheduler.Engine {
-        @Override
-        public String translate(String text) {
-            try {
-                Thread.sleep(600);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("interrupted", e);
-            }
-            return "【原型译文】" + text;
-        }
     }
 }
