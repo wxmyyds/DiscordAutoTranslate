@@ -312,11 +312,36 @@ public class ContentNodesTest {
         assertNotNull(out);
         assertEquals(1, out.size());
         ParagraphContentNode para = (ParagraphContentNode) out.get(0);
+
+        // 结构必须保留：仍然是 3 个子节点，且表情节点原样复用（同一实例）
         assertEquals("段落结构必须保留", 3, para.getContent().size());
-        // 表情节点原样保留（同一个实例）
         assertSame("结构化节点必须原样复用", inner.get(1), para.getContent().get(1));
-        // 文本节点被替换
-        assertEquals("你好", ((TextContentNode) para.getContent().get(0)).getContent());
+        assertTrue(para.getContent().get(1) instanceof EmojiContentNode);
+
+        // 不变量：替换后所有文本节点的拼接应等于译文。
+        // （译文无换行时不会为了凑节点数而把句子硬切碎，因此首节点承载全部、
+        //   其余为空串；这是刻意设计，避免产生读不通的断句。）
+        StringBuilder joined = new StringBuilder();
+        for (Object o : para.getContent()) {
+            if (o instanceof TextContentNode) {
+                joined.append(((TextContentNode) o).getContent());
+            }
+        }
+        assertEquals("译文内容必须完整保留", "你好世界", joined.toString());
+    }
+
+    @Test
+    public void splitsAcrossTextNodesWhenTranslationHasNewlines() {
+        // 译文含换行且行数匹配文本节点数时，各节点分别承载一段，保持段落结构
+        List<Object> nodes = list(
+                new TextContentNode("para one"),
+                new EmojiContentNode("9"),
+                new TextContentNode("para two"));
+        List<Object> out = ContentNodes.replaceText(nodes, "第一段\n第二段");
+        assertNotNull(out);
+        assertEquals("第一段", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("第二段", ((TextContentNode) out.get(2)).getContent());
+        assertSame("表情节点仍原样保留", nodes.get(1), out.get(1));
     }
 
     @Test
