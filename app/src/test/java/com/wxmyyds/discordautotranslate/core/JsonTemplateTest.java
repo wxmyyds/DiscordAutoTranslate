@@ -183,4 +183,48 @@ public class JsonTemplateTest {
         JsonPath.validateJson(r.body, "渲染后的请求体");
         assertEquals(prompt, JsonPath.extractString(r.body, "messages.0.content"));
     }
+
+    /**
+     * 旧默认模板（无 {{system}}）在读取时必须自动迁移为新默认模板。
+     * 否则用户手机里存的旧模板会静默盖掉新增的“系统提示词”配置项。
+     */
+    @Test
+    public void legacyDefaultTemplateIsMigrated() throws Exception {
+        // 用 MemoryPrefs 模拟“老用户”手机里已存的旧默认模板。
+        MemoryPrefs p = new MemoryPrefs();
+        p.put(Config.KEY_BODY_TEMPLATE, Config.LEGACY_DEF_BODY_TEMPLATE);
+        p.put(Config.KEY_SYSTEM_PROMPT, Config.DEF_SYSTEM_PROMPT);
+
+        Config.Snapshot s = Config.read(p);
+        assertEquals(Config.DEF_BODY_TEMPLATE, s.bodyTemplate);
+        // 迁移后模板必须引用 {{system}}，否则提示词不会被发送。
+        assertTrue(s.bodyTemplate.contains("{{system}}"));
+        assertEquals(Config.DEF_SYSTEM_PROMPT, s.systemPrompt);
+        // 迁移后的模板渲染出的请求体必须真正带上提示词。
+        JsonTemplate.RenderResult r = JsonTemplate.render(
+                s.bodyTemplate, "Dumbass", Config.DEF_TARGET_LANG,
+                Config.DEF_MODEL, s.systemPrompt);
+        assertEquals(Config.DEF_SYSTEM_PROMPT,
+                JsonPath.extractString(r.body, "messages.0.content"));
+        assertEquals("Dumbass", JsonPath.extractString(r.body, "messages.1.content"));
+    }
+
+    /** 用户自己手写的模板（即使是旧内容）不被自动改写。 */
+    @Test
+    public void customTemplateIsNotMigrated() {
+        MemoryPrefs p = new MemoryPrefs();
+        String custom = "{\"c\":\"{{text}}\",\"s\":\"{{system}}\"}";
+        p.put(Config.KEY_BODY_TEMPLATE, custom);
+        assertEquals(custom, Config.read(p).bodyTemplate);
+    }
+
+    /** 新版默认提示词必须包含针对侮辱性单词的规则（防回归）。 */
+    @Test
+    public void defaultPromptCoversProfanityRule() {
+        String prompt = Config.DEF_SYSTEM_PROMPT;
+        assertTrue("默认提示词应含‘脏话/侮辱性词汇’规则", prompt.contains("脏话"));
+        assertTrue("默认提示词应明确禁止解释词义", prompt.contains("解释词义"));
+        assertTrue("默认提示词应明确禁止道德说教", prompt.contains("道德"));
+        assertTrue("默认提示词应给出 Dumbass 示例", prompt.contains("Dumbass"));
+    }
 }

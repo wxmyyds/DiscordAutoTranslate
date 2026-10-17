@@ -62,12 +62,33 @@ public final class Config {
             + "4. 保留原文的语气、含义、专有名词、代码和必要的格式。\n"
             + "5. 不要解释、总结、评论或补充原文。\n"
             + "6. 只输出翻译结果，不添加“翻译结果：”等前缀。\n"
-            + "7. 如果原文已经是简体中文，则原样返回。";
+            + "7. 如果原文已经是简体中文，则原样返回。\n"
+            // 下面两条针对实测失败案例补充：单个词、脏话、侮辱性词汇。
+            // 模型对这类输入极容易转成“解释词义 + 道德说教”，而不是翻译。
+            + "8. 原文可能只有一两个词，甚至是脏话、侮辱性或冒犯性词汇；"
+            + "此时也必须只给出对应的中文译文（如 Dumbass → 混蛋），"
+            + "不得解释词义、不得说明它为何冒犯、不得进行道德提醒或说教。\n"
+            + "9. 你只是翻译工具，不对原文内容做任何价值判断、安全提示或建议，"
+            + "也不以“我建议”“我很乐意”等句式与用户对话。";
 
     /** 请求体模板，{@code {{text}}} / {@code {{system}}} / {@code {{target}}} / {@code {{model}}} 为占位符。 */
     public static final String KEY_BODY_TEMPLATE = "body_template";
     public static final String DEF_BODY_TEMPLATE =
             "{\"model\":\"{{model}}\",\"messages\":[{\"role\":\"system\",\"content\":\"{{system}}\"},{\"role\":\"user\",\"content\":\"{{text}}\"}],\"temperature\":0}";
+
+    /**
+     * 旧版默认模板（把英文提示词硬编码在 system 字段，且不含 {@code {{system}}}）。
+     *
+     * <p>仅用于迁移：早期版本的用户配置里已存了这份模板，而读取时
+     * <b>已存值优先于默认值</b>，导致后来新增的“系统提示词”配置项
+     * 永远不会被发送出去（模板根本没引用 {@code {{system}}}），
+     * 用户会误以为提示词约束无效。</p>
+     *
+     * <p>因为这是旧默认值而非用户手写的自定义值，可以在读取时安全地
+     * 自动升级为新默认模板；用户自己改过的模板不会被误改。</p>
+     */
+    public static final String LEGACY_DEF_BODY_TEMPLATE =
+            "{\"model\":\"{{model}}\",\"messages\":[{\"role\":\"system\",\"content\":\"Translate the user's message into {{target}}. Output only the translation, without quotes or explanation.\"},{\"role\":\"user\",\"content\":\"{{text}}\"}],\"temperature\":0}";
 
     /** 响应中译文的提取路径，点号分隔，数组用下标，例如 {@code choices.0.message.content}。 */
     public static final String KEY_RESPONSE_PATH = "response_path";
@@ -111,7 +132,7 @@ public final class Config {
             targetLang = str(p, KEY_TARGET_LANG, DEF_TARGET_LANG);
             extraHeaders = str(p, KEY_EXTRA_HEADERS, DEF_EXTRA_HEADERS);
             systemPrompt = str(p, KEY_SYSTEM_PROMPT, DEF_SYSTEM_PROMPT);
-            bodyTemplate = str(p, KEY_BODY_TEMPLATE, DEF_BODY_TEMPLATE);
+            bodyTemplate = migrateTemplate(str(p, KEY_BODY_TEMPLATE, DEF_BODY_TEMPLATE));
             responsePath = str(p, KEY_RESPONSE_PATH, DEF_RESPONSE_PATH);
             timeoutMs = p.getInt(KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = p.getInt(KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
@@ -121,6 +142,21 @@ public final class Config {
         private static String str(SharedPreferences p, String key, String def) {
             String v = p.getString(key, def);
             return v == null ? def : v;
+        }
+
+        /**
+         * 把旧的默认模板自动升级为新默认模板。
+         *
+         * <p>只精确匹配旧默认值才替换：用户自己改过的模板保持不动，
+         * 避免破坏高级用户的定制。</p>
+         */
+        private static String migrateTemplate(String template) {
+            if (LEGACY_DEF_BODY_TEMPLATE.equals(template)) {
+                XLog.i("body template is the legacy default (no {{system}}); "
+                        + "auto-migrating so the system prompt is actually sent");
+                return DEF_BODY_TEMPLATE;
+            }
+            return template;
         }
 
         /**

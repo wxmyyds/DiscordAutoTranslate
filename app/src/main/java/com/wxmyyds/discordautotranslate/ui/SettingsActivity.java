@@ -254,11 +254,36 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
             ed.putInt(Config.KEY_MAX_CONCURRENCY, parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
             ed.putBoolean(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
             ed.apply();
-            toast("已保存。新消息将按新配置翻译。");
-            updateStatus("配置已保存。");
+            // 关键提醒：模板若未引用 {{system}}，系统提示词根本不会被发送。
+            // 这曾造成“提示词约束无效”的静默失效，因此保存时明确告警。
+            String warn = templateSystemWarning(bodyTemplateInput.getText().toString());
+            if (warn != null) {
+                toast("已保存，但" + warn);
+                updateStatus("配置已保存。⚠ " + warn);
+            } else {
+                toast("已保存。新消息将按新配置翻译。");
+                updateStatus("配置已保存。");
+            }
         } catch (Throwable t) {
             updateStatus("保存失败：" + t.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 检查模板是否真的引用了系统提示词。
+     *
+     * @return 有问题时返回提示文字；正常返回 null
+     */
+    @Nullable
+    private static String templateSystemWarning(@Nullable String template) {
+        if (template == null || template.trim().isEmpty()) {
+            return null; // 空模板由校验环节报错，这里不重复。
+        }
+        if (template.contains("{{system}}")) {
+            return null;
+        }
+        return "JSON 请求模板里没有 {{system}} 占位符，你填写的系统提示词不会被发送。"
+                + "请把模板中 system 消息的 content 改为 \"{{system}}\"。";
     }
 
     private static int parseInt(EditText et, int def) {
