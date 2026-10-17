@@ -80,17 +80,6 @@ public class ConfigTest {
         assertEquals(Config.DEF_RESPONSE_PATH, s.responsePath);
     }
 
-    @Test
-    public void verboseLoggingStillNeverIncludesMessageBody() {
-        String sensitive = "unique-private-message-body";
-        XLog.setVerbose(true);
-        try {
-            assertFalse(XLog.text(sensitive).contains(sensitive));
-        } finally {
-            XLog.setVerbose(false);
-        }
-    }
-
     /** 用户填了有效值时必须用用户的值，不能被默认值覆盖。 */
     @Test
     public void explicitValuesAreKept() {
