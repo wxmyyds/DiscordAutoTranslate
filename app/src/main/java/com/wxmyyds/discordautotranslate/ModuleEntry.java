@@ -3,8 +3,10 @@ package com.wxmyyds.discordautotranslate;
 import android.content.SharedPreferences;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.XLog;
@@ -12,6 +14,7 @@ import com.wxmyyds.discordautotranslate.hooks.HookBridge;
 import com.wxmyyds.discordautotranslate.hooks.IconRegistry;
 import com.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import com.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
+import com.wxmyyds.discordautotranslate.hooks.TranslationIconView;
 import com.wxmyyds.discordautotranslate.hooks.MessageHooks;
 
 import java.util.List;
@@ -57,6 +60,7 @@ public class ModuleEntry extends XposedModule {
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
         XLog.attach(this);
+        ModuleResources.attach(this);
         XLog.i("onModuleLoaded process=" + param.getProcessName()
                 + " systemServer=" + param.isSystemServer()
                 + " api=" + getApiVersion()
@@ -132,6 +136,10 @@ public class ModuleEntry extends XposedModule {
         IconRegistry.clear();
         RerenderRegistry.clear();
         StructurableTextFactory.reset();
+        // 图标 Drawable 缓存在模块资源加载器里，热重载后必须重新解析：
+        // 否则旧代次持有的 Drawable 会被继续使用。
+        ModuleResources.reset();
+        TranslationIconView.clearIconDrawables();
 
         hooks.clear();
         installed = false;
@@ -163,6 +171,8 @@ public class ModuleEntry extends XposedModule {
         StructurableTextFactory.init(cl);
         Scheduler.MainThread.install();
         reloadConfig();
+        // install() 在热重载后也会被调用，因此图标资源在这里统一重新加载。
+        loadIconDrawable();
 
         List<XposedInterface.HookHandle> created = MessageHooks.install(this, cl);
         hooks.addAll(created);
@@ -184,6 +194,7 @@ public class ModuleEntry extends XposedModule {
         HookBridge.get().reset();
         IconRegistry.clear();
         RerenderRegistry.clear();
+        ModuleResources.reset();
         XLog.detach();
         installed = false;
     }
@@ -198,6 +209,40 @@ public class ModuleEntry extends XposedModule {
                     + " key=" + XLog.redact(snapshot.apiKey));
         } catch (Throwable t) {
             XLog.w("getRemotePreferences failed, using defaults", t);
+        }
+    }
+
+    /**
+     * 预加载模块自带的图标资源。
+     *
+     * <p>必须提前做：{@link com.wxmyyds.discordautotranslate.hooks.TranslationIconView}
+     * 在构造时需要立即拿到 Drawable，而那时没必要再做跨包资源解析。</p>
+     */
+    private void loadIconDrawable() {
+        try {
+            android.content.Context ctx = currentApplication();
+            if (ctx == null) {
+                XLog.w("no application context yet; icon drawables will load lazily");
+                return;
+            }
+            TranslationIconView.setIconDrawables(
+                    ModuleResources.translateIcon(ctx),
+                    ModuleResources.progressIcon(ctx),
+                    ModuleResources.errorIcon(ctx));
+        } catch (Throwable t) {
+            XLog.w("load icon drawables failed", t);
+        }
+    }
+
+    /** 取当前进程的 Application（Discord 的）作为资源解析的上下文。 */
+    @Nullable
+    private android.content.Context currentApplication() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            return app instanceof android.content.Context ? (android.content.Context) app : null;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

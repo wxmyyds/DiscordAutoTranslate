@@ -93,6 +93,8 @@ public final class EnglishDetector {
         if (opaqueNodeCount > textNodeCount * 3) {
             return new Verdict(false, "mostly-structure");
         }
+        // 含 Markdown 的消息文本节点多、结构节点也多，不因结构节点多而跳过；
+        // 只要正文确有足够的拉丁字母就应翻译。
         return new Verdict(true, "english(letters=" + letters + ",ratio=" + round(letterRatio) + ")");
     }
 

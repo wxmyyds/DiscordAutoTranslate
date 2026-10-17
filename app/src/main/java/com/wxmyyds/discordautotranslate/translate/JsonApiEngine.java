@@ -45,7 +45,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
 
         // 1) 渲染请求体
         JsonTemplate.RenderResult rendered = JsonTemplate.render(
-                cfg.bodyTemplate, text, cfg.targetLang, cfg.model);
+                cfg.bodyTemplate, text, cfg.targetLang, cfg.model, cfg.systemPrompt);
         if (rendered.hasUnknownPlaceholders()) {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "请求模板含未知占位符：" + String.join(", ", rendered.unknownPlaceholders));

@@ -3,6 +3,8 @@ package com.wxmyyds.discordautotranslate.core;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import androidx.annotation.Nullable;
+
 /**
  * 通用 JSON 请求模板引擎（需求 §5.5）。
  *
@@ -10,6 +12,7 @@ import java.util.Map;
  * 内置变量：
  * <ul>
  *   <li>{@code {{text}}} —— 待翻译原文（自动做 JSON 字符串转义）</li>
+ *   <li>{@code {{system}}} —— 系统提示词（自动做 JSON 字符串转义）</li>
  *   <li>{@code {{target}}} —— 目标语言</li>
  *   <li>{@code {{model}}} —— 模型名</li>
  * </ul>
@@ -56,11 +59,23 @@ public final class JsonTemplate {
      */
     public static RenderResult render(String template, String text,
                                       String targetLang, String model) {
+        return render(template, text, targetLang, model, "");
+    }
+
+    /**
+     * 渲染请求体（含系统提示词）。
+     *
+     * @param systemPrompt 系统提示词（会自动 JSON 转义，可为空）
+     */
+    public static RenderResult render(String template, String text,
+                                      String targetLang, String model,
+                                      @Nullable String systemPrompt) {
         if (template == null) {
             template = "";
         }
         Map<String, String> vars = new LinkedHashMap<>();
         vars.put("text", jsonEscape(text));
+        vars.put("system", jsonEscape(systemPrompt == null ? "" : systemPrompt));
         vars.put("target", jsonEscape(targetLang));
         vars.put("model", jsonEscape(model));
 
@@ -156,11 +171,50 @@ public final class JsonTemplate {
     }
 
     /**
+     * 返回模板中缺失的关键占位符，供设置页保存时提醒。
+     *
+     * <p>为何需要：配置读取是“已存值优先于默认值”。老用户手机里可能
+     * 存着旧模板（把英文提示词硬编码在 system 字段、不含
+     * {@code {{system}}}），导致新增的“系统提示词”配置项静默失效 ——
+     * 界面能填能存，但根本不会被发送。因此保存时主动检查并弹窗。</p>
+     *
+     * <p>空模板不在此处报错：那是 {@link #validate} 的职责，避免重复提示。</p>
+     *
+     * @return 缺失的占位符列表（保持固定顺序）；无缺失时为空列表
+     */
+    public static java.util.List<String> missingKeyPlaceholders(@Nullable String template) {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        if (template == null || template.trim().isEmpty()) {
+            return missing;
+        }
+        // {{text}} 缺失：什么都不会被翻译。
+        if (!template.contains("{{text}}")) {
+            missing.add("{{text}}");
+        }
+        // {{system}} 缺失：系统提示词不会随请求发出。
+        if (!template.contains("{{system}}")) {
+            missing.add("{{system}}");
+        }
+        return missing;
+    }
+
+    /**
      * 校验模板：占位符是否都被识别、渲染后是否为合法 JSON。
      *
      * @throws TranslationException 校验不通过
      */
     public static void validate(String template, String targetLang, String model)
+            throws TranslationException {
+        validate(template, targetLang, model, "");
+    }
+
+    /**
+     * 校验模板：占位符是否都被识别、渲染后是否为合法 JSON。
+     *
+     * @throws TranslationException 校验不通过
+     */
+    public static void validate(String template, String targetLang, String model,
+                                @Nullable String systemPrompt)
             throws TranslationException {
         if (template == null || template.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.CONFIG, "请求模板为空");
@@ -169,7 +223,7 @@ public final class JsonTemplate {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "请求模板缺少 {{text}} 占位符，消息正文不会被发送");
         }
-        RenderResult r = render(template, "test", targetLang, model);
+        RenderResult r = render(template, "test", targetLang, model, systemPrompt);
         if (r.hasUnknownPlaceholders()) {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "请求模板含未知占位符：" + String.join(", ", r.unknownPlaceholders));

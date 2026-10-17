@@ -147,4 +147,76 @@ public class JsonTemplateTest {
         assertTrue(r.body.contains("\"temperature\":0"));
         assertFalse(r.hasUnknownPlaceholders());
     }
+
+    /**
+     * 系统提示词是多行中文，必须能无损地放进 JSON 的 system 字段。
+     * 这是“提示词独立成配置项”方案的核心保证。
+     */
+    @Test
+    public void systemPromptIsEscapedAndRoundTrips() throws Exception {
+        JsonTemplate.RenderResult r = JsonTemplate.render(
+                Config.DEF_BODY_TEMPLATE, "hello", Config.DEF_TARGET_LANG,
+                Config.DEF_MODEL, Config.DEF_SYSTEM_PROMPT);
+        assertFalse(r.hasUnknownPlaceholders());
+        // 渲染结果必须是合法 JSON
+        JsonPath.validateJson(r.body, "渲染后的请求体");
+        // system 字段取回后与原始提示词逐字一致（无损往返）
+        assertEquals(Config.DEF_SYSTEM_PROMPT,
+                JsonPath.extractString(r.body, "messages.0.content"));
+        // user 字段仍是原文
+        assertEquals("hello",
+                JsonPath.extractString(r.body, "messages.1.content"));
+    }
+
+    /** 默认模板必须含 {{system}}，否则系统提示词不会随请求发出。 */
+    @Test
+    public void defaultTemplateReferencesSystemPlaceholder() {
+        assertTrue(Config.DEF_BODY_TEMPLATE.contains("{{system}}"));
+    }
+
+    /** 提示词含双引号时也不得破坏 JSON 结构。 */
+    @Test
+    public void systemPromptWithQuotesStaysValid() throws Exception {
+        String prompt = "规则 1：不得输出 \"翻译结果：\" 前缀";
+        JsonTemplate.RenderResult r = JsonTemplate.render(
+                Config.DEF_BODY_TEMPLATE, "hi", "zh", "m", prompt);
+        JsonPath.validateJson(r.body, "渲染后的请求体");
+        assertEquals(prompt, JsonPath.extractString(r.body, "messages.0.content"));
+    }
+
+    /**
+     * 模板缺关键占位符时必须被报出，供设置页弹窗提醒。
+     *
+     * <p>背景：配置读取是“已存值优先于默认值”，老用户手机里可能存着
+     * 不含 {{system}} 的旧模板，导致系统提示词静默失效。</p>
+     */
+    @Test
+    public void missingKeyPlaceholdersDetectsSystemAndText() {
+        // 旧默认模板：有 {{text}}、无 {{system}}
+        java.util.List<String> a = JsonTemplate.missingKeyPlaceholders(
+                "{\"messages\":[{\"role\":\"system\",\"content\":\"Translate...\"},"
+                        + "{\"role\":\"user\",\"content\":\"{{text}}\"}]}");
+        assertEquals(java.util.Arrays.asList("{{system}}"), a);
+
+        // 两个都缺
+        assertEquals(java.util.Arrays.asList("{{text}}", "{{system}}"),
+                JsonTemplate.missingKeyPlaceholders("{\"a\":1}"));
+
+        // 都齐全 -> 不报
+        assertTrue(JsonTemplate.missingKeyPlaceholders(Config.DEF_BODY_TEMPLATE).isEmpty());
+
+        // 空模板交给 validate 报错，此处不重复提示
+        assertTrue(JsonTemplate.missingKeyPlaceholders("").isEmpty());
+        assertTrue(JsonTemplate.missingKeyPlaceholders(null).isEmpty());
+    }
+
+    /** 新版默认提示词必须包含针对侮辱性单词的规则（防回归）。 */
+    @Test
+    public void defaultPromptCoversProfanityRule() {
+        String prompt = Config.DEF_SYSTEM_PROMPT;
+        assertTrue("默认提示词应含‘脏话/侮辱性词汇’规则", prompt.contains("脏话"));
+        assertTrue("默认提示词应明确禁止解释词义", prompt.contains("解释词义"));
+        assertTrue("默认提示词应明确禁止道德说教", prompt.contains("道德"));
+        assertTrue("默认提示词应给出 Dumbass 示例", prompt.contains("Dumbass"));
+    }
 }

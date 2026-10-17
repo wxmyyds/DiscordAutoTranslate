@@ -143,6 +143,17 @@ jobs:
           unzip -p "$APK" META-INF/xposed/java_init.list
           echo "--- module.prop ---"
           unzip -p "$APK" META-INF/xposed/module.prop
+          # 图标是模块自带资源，必须打包进 APK；缺失会导致运行期图标为空白。
+          # 用 aapt2 dump resources 按名字确认编译后的资源表里确实存在这三项。
+          echo "--- module drawables ---"
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1)
+          test -n "$AAPT" || { echo "aapt2 not found"; exit 1; }
+          RES=$($AAPT dump resources "$APK")
+          for name in translate_24 progress_activity_24 error_24; do
+            echo "$RES" | grep -q "drawable/$name" \
+              || { echo "drawable/$name missing from APK resources"; exit 1; }
+            echo "ok: drawable/$name"
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

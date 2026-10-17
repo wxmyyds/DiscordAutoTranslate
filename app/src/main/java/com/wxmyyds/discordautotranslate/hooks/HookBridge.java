@@ -56,6 +56,18 @@ public final class HookBridge {
     /** 消息 ID → 最近承载它的视图 */
     private final Map<String, View> lastView = new ConcurrentHashMap<>();
 
+    /**
+     * 内容对象（按引用身份）→ 消息 ID。
+     *
+     * <p>用途：渲染漏斗 {@code TextUtilsKt.toSpannable} 是<b>静态</b>方法，
+     * 没有 {@code this} 视图可供反查消息 ID。但它接收的 {@code StructurableText}
+     * 与 {@code bind} 阶段拿到的实例是同一个，因此用身份映射即可反查。</p>
+     */
+    private final Map<Object, String> contentIdentityToMessageId = new ConcurrentHashMap<>();
+
+    /** 正文文本哈希 → 消息 ID。作为身份映射失效时的兜底。 */
+    private final Map<String, String> textHashToMessageId = new ConcurrentHashMap<>();
+
     private volatile Config.Snapshot config = Config.read(null);
     private volatile Scheduler.Engine engine = new JsonApiEngine(config);
 
@@ -132,6 +144,10 @@ public final class HookBridge {
         originalRenderArgs.remove(contentView);
         if (id != null) {
             lastView.remove(id);
+            // 同时清掉该消息的内容映射，避免长期持有已回收消息的 StructurableText。
+            rawContent.remove(id);
+            contentIdentityToMessageId.values().removeIf(id::equals);
+            textHashToMessageId.values().removeIf(id::equals);
         }
     }
 
@@ -141,6 +157,46 @@ public final class HookBridge {
         originalRenderArgs.clear();
         rawContent.clear();
         lastView.clear();
+        contentIdentityToMessageId.clear();
+        textHashToMessageId.clear();
+    }
+
+    // ------------------------------------------------------- 内容 → 消息 ID
+
+    /**
+     * 记录“内容对象 → 消息 ID”。只能在能拿到权威消息 ID 的地方调用
+     * （目前是 {@code MessageContentViewHolder.bind} 与 {@code configureReply}）。
+     */
+    public void rememberContent(String messageId, @Nullable Object structurableText) {
+        if (messageId == null || structurableText == null) {
+            return;
+        }
+        contentIdentityToMessageId.put(structurableText, messageId);
+        String text = TextExtractor.textOf(structurableText);
+        if (text != null && !text.isEmpty()) {
+            textHashToMessageId.put(Scheduler.contentHash(text, ""), messageId);
+        }
+    }
+
+    /**
+     * 反查某个 {@code StructurableText} 属于哪条消息。
+     *
+     * <p>先按对象身份，再按正文文本哈希兜底（防止 Discord 每次渲染新建实例）。</p>
+     */
+    @Nullable
+    public String resolveMessageId(@Nullable Object structurableText) {
+        if (structurableText == null) {
+            return null;
+        }
+        String id = contentIdentityToMessageId.get(structurableText);
+        if (id != null) {
+            return id;
+        }
+        String text = TextExtractor.textOf(structurableText);
+        if (text != null && !text.isEmpty()) {
+            return textHashToMessageId.get(Scheduler.contentHash(text, ""));
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------- 渲染拦截
@@ -151,53 +207,34 @@ public final class HookBridge {
     }
 
     /**
-     * 记录“原始”渲染参数，并在有译文时把 {@code messageContent}（实参下标 1）替换为译文。
+     * 记录“原始”渲染参数。
      *
-     * @return 实际应传给原方法的实参；无替换时返回传入的同一数组
+     * <p>阶段 3 修正：正文替换统一在渲染漏斗 {@code TextUtilsKt.toSpannable} 完成，
+     * 本方法<b>不再替换</b>实参，只负责记录原文参数与内容身份映射。
+     * 这样重渲染只需用原参数再跑一遗，toSpannable 会按当前状态自行决定是否替换。</p>
+     *
+     * @return 始终返回传入的同一数组
      */
     public Object[] interceptRender(View contentView, Object[] args,
                                     @Nullable Object structurableText,
-                                    @Nullable String translatedText) {
+                                    @Nullable String ignoredTranslatedText) {
         if (contentView != null && args != null) {
-            // 只记录“原文”参数；重渲染不应覆盖它，否则译文会取代原文被保存下来。
             originalRenderArgs.put(contentView, args.clone());
             if (structurableText != null) {
                 String id = viewToMessageId.get(contentView);
                 if (id != null) {
-                    rawContent.put(id, structurableText);
+                    rememberContent(id, structurableText);
                 }
             }
         }
-        if (translatedText == null || args == null || args.length < 2) {
-            return args;
-        }
-
-        String clsName = structurableText == null ? null : structurableText.getClass().getName();
-        boolean isPlainText = clsName != null && clsName.endsWith("PrimitiveStructurableText");
-        if (!isPlainText) {
-            // 阶段 1/2 仅替换“纯文本”结构。带 Markdown/提及/表情的消息使用
-            // AnnotatedStructurableText(List<ContentNode>)，需要重建节点树，
-            // 属于阶段 3 的工作（见 docs/design-stage1.md）。
-            XLog.d("skip substitute: content is " + clsName);
-            return args;
-        }
-
-        Object replacement = StructurableTextFactory.primitive(translatedText);
-        if (replacement == null) {
-            if (!StructurableTextFactory.isInitTried()) {
-                XLog.w("StructurableTextFactory not initialized; translation display disabled");
-            }
-            return args;
-        }
-
-        Object[] copy = args.clone();
-        copy[1] = replacement;
-        return copy;
+        return args;
     }
 
     /**
-     * 翻译完成后触发重渲染：用已保存的原文参数重新调用 {@code setMessageContent}。
-     * 不发起新的翻译请求（需求 §2.4）。
+     * 翻译完成/切换原文译文时触发重渲染。
+     *
+     * <p>用保存的<b>原始</b>参数重新调用渲染入口；真正的文本替换发生在
+     * {@code TextUtilsKt.toSpannable}（它会按当前状态自行决定替换与否）。</p>
      */
     public void requestRerender(@Nullable View contentView, @Nullable Method setMessageContent) {
         if (contentView == null || setMessageContent == null) {
@@ -207,28 +244,9 @@ public final class HookBridge {
         if (original == null) {
             return;
         }
-        String messageId = messageIdOf(contentView);
-        StateStore.Entry e = messageId == null ? null : StateStore.get().peek(messageId);
-        String translated = (e != null && e.status == StateStore.Status.TRANSLATED
-                && !e.showingOriginal) ? e.translatedText : null;
-
-        Object[] effective = original;
-        if (translated != null && original.length > 1) {
-            String clsName = original[1] == null ? null : original[1].getClass().getName();
-            if (clsName != null && clsName.endsWith("PrimitiveStructurableText")) {
-                Object replacement = StructurableTextFactory.primitive(translated);
-                if (replacement != null) {
-                    effective = original.clone();
-                    effective[1] = replacement;
-                }
-            } else {
-                XLog.d("rerender: content is not primitive, keeping original");
-            }
-        }
-
         RERENDERING.set(Boolean.TRUE);
         try {
-            setMessageContent.invoke(contentView, effective);
+            setMessageContent.invoke(contentView, original);
         } catch (Throwable t) {
             XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
         } finally {
@@ -268,6 +286,11 @@ public final class HookBridge {
                 || entry.status == StateStore.Status.TRANSLATED) {
             return; // 已有在途任务或已有译文，不重复翻译（需求 §5.4 去重）。
         }
+        if (entry.status == StateStore.Status.FAILED) {
+            // 失败后不自动重试：渲染漏斗会被频繁调用（每次重绘都会经过），
+            // 若无条件重试会造成请求风暴。失败后统一由用户点图标重试（需求 §2.6）。
+            return;
+        }
 
         // 缓存命中：直接出结果，不发请求（需求 §5.6）。
         String cached = TranslationCache.get().get(hash);
@@ -299,6 +322,9 @@ public final class HookBridge {
         entry.status = StateStore.Status.TRANSLATING;
         XLog.i("translate start " + messageId + " " + v.reason
                 + " text=" + XLog.text(ex.text));
+        // 立即刷新，让「翻译中」旋转图标显示出来；同时也便于排障时
+        // 直接看出图标是否已成功挂载。
+        IconRegistry.refresh(messageId);
 
         Scheduler.get().submit(messageId, hash, ex.text, engine,
                 (generationSnapshot, contentHash) -> {

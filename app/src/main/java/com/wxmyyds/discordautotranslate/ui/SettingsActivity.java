@@ -18,6 +18,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
 
@@ -49,6 +50,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
     private EditText modelInput;
     private EditText targetLangInput;
     private EditText headersInput;
+    private EditText systemPromptInput;
     private EditText bodyTemplateInput;
     private EditText responsePathInput;
     private EditText timeoutInput;
@@ -121,7 +123,12 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
         targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
         headersInput = addField(root, "额外请求头（每行 Name: Value）", "", InputType.TYPE_CLASS_TEXT);
-        bodyTemplateInput = addField(root, "JSON 请求模板（{{text}} / {{target}} / {{model}}）",
+        // 系统提示词独立成项：多行中文直接写，不必手动做 JSON 转义。
+        // 在 JSON 模板里用 {{system}} 引用。
+        systemPromptInput = addField(root, "系统提示词（多行，在模板里用 {{system}} 引用）",
+                Config.DEF_SYSTEM_PROMPT,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        bodyTemplateInput = addField(root, "JSON 请求模板（{{text}} / {{system}} / {{target}} / {{model}}）",
                 Config.DEF_BODY_TEMPLATE, InputType.TYPE_CLASS_TEXT);
         responsePathInput = addField(root, "响应译文提取路径", Config.DEF_RESPONSE_PATH, InputType.TYPE_CLASS_TEXT);
         timeoutInput = addField(root, "超时（毫秒）", String.valueOf(Config.DEF_TIMEOUT_MS),
@@ -220,6 +227,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         targetLangInput.setText(s.targetLang);
         headersInput.setText(s.extraHeaders);
         bodyTemplateInput.setText(s.bodyTemplate);
+        systemPromptInput.setText(s.systemPrompt);
         responsePathInput.setText(s.responsePath);
         timeoutInput.setText(String.valueOf(s.timeoutMs));
         concurrencyInput.setText(String.valueOf(s.maxConcurrency));
@@ -240,6 +248,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
             ed.putString(Config.KEY_MODEL, modelInput.getText().toString().trim());
             ed.putString(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
             ed.putString(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
+            ed.putString(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
             ed.putString(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
             ed.putString(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
             ed.putInt(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
@@ -248,9 +257,42 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
             ed.apply();
             toast("已保存。新消息将按新配置翻译。");
             updateStatus("配置已保存。");
+            // 关键检查：模板缺关键占位符时，对应配置项会静默失效
+            // （界面能填能存，但根本不会被发送）。因此用弹窗明确提醒。
+            warnMissingPlaceholders();
         } catch (Throwable t) {
             updateStatus("保存失败：" + t.getClass().getSimpleName());
         }
+    }
+
+    /** 模板缺关键占位符时弹窗提醒（每次保存后检查）。 */
+    private void warnMissingPlaceholders() {
+        java.util.List<String> missing = JsonTemplate.missingKeyPlaceholders(
+                bodyTemplateInput.getText().toString());
+        if (missing.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("JSON 请求模板缺少以下占位符：\n\n");
+        for (String p : missing) {
+            sb.append("  •  ").append(p);
+            if ("{{text}}".equals(p)) {
+                sb.append("　—— 消息正文不会被发送，翻译无法工作\n");
+            } else {
+                sb.append("　—— 系统提示词不会被发送，提示词约束不起作用\n");
+            }
+        }
+        sb.append("\n请把模板中对应内容改为上述占位符。默认模板：\n\n")
+                .append(Config.DEF_BODY_TEMPLATE);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("请求模板配置有问题")
+                .setMessage(sb.toString())
+                .setPositiveButton("用默认模板", (d, w) -> {
+                    bodyTemplateInput.setText(Config.DEF_BODY_TEMPLATE);
+                    toast("已填入默认模板，请再点一次“保存”。");
+                })
+                .setNegativeButton("知道了", null)
+                .show();
     }
 
     private static int parseInt(EditText et, int def) {
@@ -272,6 +314,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         p.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
         p.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
         p.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
+        p.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
         p.put(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
         p.put(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
         p.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
