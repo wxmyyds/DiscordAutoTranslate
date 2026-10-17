@@ -186,12 +186,6 @@ public class JsonTemplateTest {
     }
 
     @Test
-    public void emptyTemplateProducesMissingPlaceholders() {
-        assertEquals(java.util.Arrays.asList("{{text}}", "{{system}}"),
-                JsonTemplate.missingKeyPlaceholders("  "));
-    }
-
-    @Test
     public void missingKeyPlaceholdersDetectWhitespaceSyntax() {
         assertTrue(JsonTemplate.missingKeyPlaceholders(
                 "{\"text\":\"{{ text }}\",\"system\":\"{{ system }}\"}").isEmpty());
@@ -217,9 +211,12 @@ public class JsonTemplateTest {
         // 都齐全 -> 不报
         assertTrue(JsonTemplate.missingKeyPlaceholders(Config.DEF_BODY_TEMPLATE).isEmpty());
 
-        // 空模板交给 validate 报错，此处不重复提示
-        assertTrue(JsonTemplate.missingKeyPlaceholders("").isEmpty());
-        assertTrue(JsonTemplate.missingKeyPlaceholders(null).isEmpty());
+        // 空模板：保存后的请求必然无法工作，因此两个占位符都报缺失
+        // （便于设置页在保存时直接提醒，而不是等到发请求才报错）。
+        assertEquals(java.util.Arrays.asList("{{text}}", "{{system}}"),
+                JsonTemplate.missingKeyPlaceholders(""));
+        assertEquals(java.util.Arrays.asList("{{text}}", "{{system}}"),
+                JsonTemplate.missingKeyPlaceholders(null));
     }
 
     /** 新版默认提示词必须包含针对侮辱性单词的规则（防回归）。 */
