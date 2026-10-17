@@ -38,7 +38,10 @@ permissions:
 jobs:
   build:
     name: Assemble APK
-    runs-on: ubuntu-latest
+    # 固定到 ubuntu-24.04：该镜像预装 Android SDK 与 cmdline-tools。
+    # 不跟随 ubuntu-latest，因为官方已通告该标签将于 2026-10 迁移到 Ubuntu 26，
+    # 届时预装 SDK 路径与 build-tools 版本都可能变化，会直接影响本工作流。
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -62,15 +65,31 @@ jobs:
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
           set -e
+
+          # 若镜像未预装 cmdline-tools，则先下载官方 cmdline-tools 作为兜底。
+          if [ ! -d "$ANDROID_HOME/cmdline-tools" ]; then
+            echo "cmdline-tools not present, downloading"
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            curl -fsSL -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+            (cd /tmp && rm -rf cmdline-tools && mkdir cmdline-tools \
+              && cd cmdline-tools && python3 -c "import zipfile;zipfile.ZipFile('/tmp/cmdline-tools.zip').extractall('.')")
+            mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
+          fi
+
           SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMGR" ]; then
             SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort | tail -n 1)
           fi
           echo "sdkmanager: $SDKMGR"
+
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
           "$SDKMGR" "platforms;android-37.0" "build-tools;36.0.0"
+
           echo "--- installed platforms ---"
           ls "$ANDROID_HOME/platforms"
+          echo "--- installed build-tools ---"
+          ls "$ANDROID_HOME/build-tools"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
