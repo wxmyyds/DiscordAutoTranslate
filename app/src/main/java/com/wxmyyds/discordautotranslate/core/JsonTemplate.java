@@ -75,14 +75,25 @@ public final class JsonTemplate {
                 out.append(template, i, n);
                 break;
             }
-            out.append(template, i, open);
             int close = template.indexOf("}}", open + 2);
             if (close < 0) {
-                // 没有闭合，按普通文本处理，避免吞掉内容。
-                out.append(template, open, n);
+                // 没有闭合：剩余部分全部按普通文本处理，避免吞掉内容。
+                out.append(template, i, n);
                 break;
             }
-            String name = template.substring(open + 2, close).trim();
+
+            String inner = template.substring(open + 2, close);
+            if (inner.contains("{{")) {
+                // 当前 "{{" 实际上没有闭合，它找到的 "}}" 属于后面另一个占位符。
+                // 此时把当前 "{{" 当作普通文本输出，并从其后重新扫描，
+                // 否则会把后面的占位符整段吞掉，导致正文不被替换。
+                out.append(template, i, open + 2);
+                i = open + 2;
+                continue;
+            }
+
+            out.append(template, i, open);
+            String name = inner.trim();
             String value = vars.get(name);
             if (value != null) {
                 out.append(value);

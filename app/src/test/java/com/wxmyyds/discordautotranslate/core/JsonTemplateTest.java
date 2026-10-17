@@ -69,10 +69,17 @@ public class JsonTemplateTest {
 
     @Test
     public void unclosedBracesAreTreatedAsText() {
-        String tpl = "{\"a\":\"{{text\",\"b\":\"{{text}}\"}";
+        // 回归用例：未闭合的 "{{" 不得吞掉后面出现的合法占位符。
+        // 早期实现用 indexOf("}}") 直接配对，会把 "{{text" 与后面
+        // "{{text}}" 的 "}}" 配成一对，导致正文完全不被替换。
+        String tpl = "{\"a\":\"{{ text\",\"b\":\"{{text}}\"}";
         JsonTemplate.RenderResult r = JsonTemplate.render(tpl, "x", "zh", "m");
-        assertTrue(r.body.contains("{{text\""));
-        assertTrue(r.body.contains("\"x\""));
+
+        // 未闭合部分原样保留
+        assertTrue("unclosed '{{' must be kept verbatim", r.body.contains("{{ text"));
+        // 后面那个合法占位符必须被替换
+        assertTrue("later valid placeholder must still be substituted",
+                r.body.contains("\"b\":\"x\""));
     }
 
     @Test
