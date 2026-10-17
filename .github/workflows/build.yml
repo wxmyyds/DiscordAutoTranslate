@@ -53,6 +53,9 @@ jobs:
       # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools，
       # 这里直接复用，避免 android-actions/setup-android 在较新镜像上
       # 执行已移除的 `sdkmanager tools` 而失败。
+      #
+      # 注意：API 37 起平台包名带次版本号，实际包为 `platforms;android-37.0`，
+      # 不存在 `platforms;android-37`。
       - name: Install required SDK packages
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
@@ -65,7 +68,9 @@ jobs:
           fi
           echo "sdkmanager: $SDKMGR"
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-          "$SDKMGR" "platforms;android-37" "build-tools;36.0.0"
+          "$SDKMGR" "platforms;android-37.0" "build-tools;36.0.0"
+          echo "--- installed platforms ---"
+          ls "$ANDROID_HOME/platforms"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
