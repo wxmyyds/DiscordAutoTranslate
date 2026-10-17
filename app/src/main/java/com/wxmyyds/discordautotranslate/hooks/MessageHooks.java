@@ -95,18 +95,19 @@ public final class MessageHooks {
 
     /** 安装全部 Hook，返回句柄供热重载清理。 */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
-        List<XposedInterface.HookHandle> handles = new ArrayList<>(5);
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(6);
         installBindHook(module, cl, handles);
         installRowHook(module, cl, handles);
+        installRowTouchHook(module, cl, handles);
         installExpandedRenderHook(module, cl, handles);
         installToSpannableHook(module, cl, handles);
         installReplyHook(module, cl, handles);
 
-        // 单行启动摘要：排障时一眼看出五个关键 Hook 是否都就位。
-        // 期望看到 5；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
-        XLog.i("hook pipeline armed: " + handles.size() + "/5 "
-                + "(bind, row, expandedRender, toSpannable, configureReply)");
-        if (handles.size() < 3) {
+        // 单行启动摘要：排障时一眼看出六个关键 Hook 是否都就位。
+        // 期望看到 6；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
+        XLog.i("hook pipeline armed: " + handles.size() + "/6 "
+                + "(bind, row, rowTouch, expandedRender, toSpannable, configureReply)");
+        if (handles.size() < 4) {
             XLog.w("too few hooks installed; module will not function on this Discord version");
         }
         return handles;
@@ -507,6 +508,60 @@ public final class MessageHooks {
                     return result;
                 }));
         XLog.i("hooked MessageView.setMessage (" + SET_MESSAGE_PARAM_COUNT + " params)");
+    }
+
+    /**
+     * Hook {@code MessageView.onInterceptTouchEvent}，让触摸落在翻译图标上时不拦截。
+     *
+     * <p><b>为何必须 Hook 这里（已核对 smali，非推测）</b>：
+     * {@code MessageView.onInterceptTouchEvent} 的实现为
+     * {@code return !allowChildGestures}。当其为 true（即
+     * {@code allowChildGestures == false}）时，行控件在
+     * {@code ViewGroup} 派发阶段就<b>直接接管整个手势</b>，
+     * 子视图（包括我们的图标）根本收不到任何触摸事件。</p>
+     *
+     * <p>因此在图标自己的 {@code onTouchEvent} 里调
+     * {@code requestDisallowInterceptTouchEvent} 是<b>无效的</b> ——
+     * 那一刻图标还没拿到事件。唯一的可行点是这个拦截器：
+     * 当触点落在图标范围内时返回 false，让事件继续下发给图标。</p>
+     */
+    private static void installRowTouchHook(XposedModule module, ClassLoader cl,
+                                            List<XposedInterface.HookHandle> out) {
+        Class<?> messageViewCls = Reflect.loadClass(cl, CLS_MESSAGE_VIEW);
+        if (messageViewCls == null) {
+            return;
+        }
+        Class<?> motionEventCls;
+        try {
+            motionEventCls = Class.forName("android.view.MotionEvent", false, cl);
+        } catch (Throwable t) {
+            motionEventCls = null;
+        }
+        Method intercept = Reflect.findMethod(
+                messageViewCls, "onInterceptTouchEvent", 1, motionEventCls);
+        if (intercept == null) {
+            XLog.w("MessageView.onInterceptTouchEvent not found; icon may be unclickable");
+            return;
+        }
+        out.add(module.hook(intercept)
+                .setId("dat.onInterceptTouchEvent")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        Object ev = chain.getArg(0);
+                        if (ev instanceof android.view.MotionEvent
+                                && TranslationIconView.hitTestIcon(
+                                asView(chain.getThisObject()),
+                                (android.view.MotionEvent) ev)) {
+                            // 让图标自己处理这次手势。
+                            return false;
+                        }
+                    } catch (Throwable t) {
+                        XLog.w("onInterceptTouchEvent hook failed", t);
+                    }
+                    return chain.proceed();
+                }));
+        XLog.i("hooked MessageView.onInterceptTouchEvent");
     }
 
     /**

@@ -144,12 +144,13 @@ public final class TranslationIconView extends ImageView {
     }
 
     /**
-     * 拦截触摸，保证图标可点击。
+     * 处理触摸。
      *
-     * <p>必要性：消息行 {@code MessageView} 覆盖了 {@code onInterceptTouchEvent}，
-     * 返回 {@code !allowChildGestures}。当 {@code allowChildGestures} 为 false 时
-     * 它会直接接管整个手势（已核对 smali），子视图将收不到点击。
-     * 在 ACTION_DOWN 时请求父级不要拦截即可。</p>
+     * <p><b>注意</b>：这里调 {@code requestDisallowInterceptTouchEvent} 只能阻止
+     * <b>后续</b>（MOVE/UP）被父级拦截，无法阻止 <b>ACTION_DOWN</b> 被父级
+     * 抢走。真正的“让图标拿到 DOWN”由 {@code MessageView.onInterceptTouchEvent}
+     * 的 Hook 完成（见 {@code MessageHooks#installRowTouchHook}）：
+     * 那里在触点落在图标上时返回 false，事件才会下发到本视图。</p>
      */
     @Override
     public boolean onTouchEvent(android.view.MotionEvent event) {
@@ -157,6 +158,7 @@ public final class TranslationIconView extends ImageView {
             case android.view.MotionEvent.ACTION_DOWN:
                 android.view.ViewParent parent = getParent();
                 if (parent != null) {
+                    // 阻止父级在 MOVE/UP 阶段再次拦截（如滑动回复）。
                     parent.requestDisallowInterceptTouchEvent(true);
                 }
                 setAlpha(1f);
@@ -313,6 +315,32 @@ public final class TranslationIconView extends ImageView {
             return llp;
         }
         return new ViewGroup.LayoutParams(size, size);
+    }
+
+    /**
+     * 判断触摸点是否落在本行的翻译图标上（含少量容差，便于点击）。
+     *
+     * <p>坐标说明：{@code onInterceptTouchEvent} 收到的事件坐标已经是相对
+     * <b>行控件本身</b>的，与图标的 {@code getLeft/getTop} 同一坐标系，
+     * 可直接比较。</p>
+     *
+     * @param row 行控件（{@code MessageView}）
+     * @param event 行控件收到的触摸事件
+     */
+    public static boolean hitTestIcon(@Nullable View row, @Nullable android.view.MotionEvent event) {
+        if (!(row instanceof ViewGroup) || event == null) {
+            return false;
+        }
+        TranslationIconView icon = findByTag((ViewGroup) row);
+        if (icon == null || icon.getVisibility() != VISIBLE || icon.getWidth() == 0) {
+            return false;
+        }
+        // 图标仅 16dp，加一点容差让点击不那么难。
+        float slop = 8f * row.getResources().getDisplayMetrics().density;
+        float x = event.getX();
+        float y = event.getY();
+        return x >= icon.getLeft() - slop && x <= icon.getRight() + slop
+                && y >= icon.getTop() - slop && y <= icon.getBottom() + slop;
     }
 
     private static final String TAG_KEY = "dat_translate_icon";

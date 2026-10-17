@@ -232,6 +232,36 @@ MessageView.setMessage(Message, MessageContext, ChatEventHandler,
   实际颜色由代码 `setColorFilter` 控制。
 - **待翻译不显示图标**（用户确认）。
 
+### 7.2.1 图标点击（重要：不能靠图标自身的 onTouchEvent）
+
+实测发现：译文已正常显示，但图标点不动，因此无法切换回原文。
+
+**根因（已核对 smali）**：
+
+```smali
+.method public onInterceptTouchEvent(Landroid/view/MotionEvent;)Z
+    iget-boolean p1, p0, MessageView;->allowChildGestures:Z
+    xor-int/lit8 p1, p1, 0x1     # 返回 !allowChildGestures
+```
+
+`ViewGroup` 的派发顺序是：**先调 `onInterceptTouchEvent`，返回 true 就由该
+ViewGroup 接管整个手势序列，子视图收不到任何事件**。
+因此当 `allowChildGestures == false` 时，行控件在 `ACTION_DOWN`
+就抢走了手势。
+
+这意味着在图标自己的 `onTouchEvent` 里调
+`requestDisallowInterceptTouchEvent(true)` 是**无效的** ——
+那一刻图标还没拿到任何事件。
+
+**修法**：Hook `MessageView.onInterceptTouchEvent`，当触点落在
+图标范围内时直接返回 `false`（不拦截），事件才会下发给图标。
+命中判定用 `TranslationIconView.hitTestIcon`：拿到行内的图标，
+用事件坐标（已经是相对行控件的坐标，与图标 `getLeft/getTop` 同系）
+做范围比较，并加 8dp 容差方便点按。
+
+> 教训：涉及 ViewGroup 手势时，先确认哪一层在 `onInterceptTouchEvent`
+> 里拦截，而不是在叶子视图上想办法。
+
 ### 7.3 诊断日志
 
 排障期已开启以下机制（见 `XLog` 与 `MessageHooks.install`）：
