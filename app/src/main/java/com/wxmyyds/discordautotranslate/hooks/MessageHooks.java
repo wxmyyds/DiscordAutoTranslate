@@ -63,21 +63,26 @@ public final class MessageHooks {
      * <p>已核对：{@code RegularMessageDelegate.createView()} 返回的是
      * {@code MessageView}（{@code extends ChatListRelativeLayout extends RelativeLayout}），
      * <b>不是</b> {@code DecoratedMessageView}。后者只用于 React Native 组件
-     * {@code DCDMessageView}（另一个使用场景）。
-     * 阶段 1 误以为行容器是 {@code DecoratedMessageView}，导致图标永远挂不上。</p>
+     * {@code DCDMessageView}（另一个使用场景）。</p>
+     *
+     * <p>阶段 3 修正：图标不再靠从正文视图沿父链上溯挂载（时机不可靠，
+     * 会导致图标时有时无），改为 Hook {@code MessageView.setMessage} 直接
+     * 在行控件上挂载 —— 该方法的 {@code this} 就是行控件。</p>
      */
     private static final String CLS_MESSAGE_VIEW =
             "com.discord.chat.presentation.message.MessageView";
-    private static final String CLS_DECORATED_MESSAGE_VIEW =
-            "com.discord.chat.presentation.message.DecoratedMessageView";
-    private static final String CLS_CHAT_LIST_RELATIVE_LAYOUT =
-            "com.discord.chat.presentation.list.ChatListRelativeLayout";
+    /** 消息数据对象，用于从 {@code setMessage} 首参取消息 ID。 */
+    private static final String CLS_MESSAGE_BRIDGE =
+            "com.discord.chat.bridge.Message";
     private static final String CLS_REPLY_PREVIEW =
             "com.discord.chat.presentation.message.MessageViewReplyPreview";
     private static final String CLS_TEXT_UTILS =
             "com.discord.chat.presentation.textutils.TextUtilsKt";
     private static final String CLS_STRUCTURABLE =
             "com.discord.chat.bridge.structurabletext.StructurableText";
+
+    /** {@code MessageView.setMessage} 的参数个数（340.13 已确认：7 个）。 */
+    private static final int SET_MESSAGE_PARAM_COUNT = 7;
 
     /** bind 的参数个数（340.13 已确认）。 */
     private static final int BIND_PARAM_COUNT = 17;
@@ -90,17 +95,18 @@ public final class MessageHooks {
 
     /** 安装全部 Hook，返回句柄供热重载清理。 */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
-        List<XposedInterface.HookHandle> handles = new ArrayList<>(4);
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(5);
         installBindHook(module, cl, handles);
+        installRowHook(module, cl, handles);
         installExpandedRenderHook(module, cl, handles);
         installToSpannableHook(module, cl, handles);
         installReplyHook(module, cl, handles);
 
-        // 单行启动摘要：排障时一眼看出四个关键 Hook 是否都就位。
-        // 期望看到 4；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
-        XLog.i("hook pipeline armed: " + handles.size() + "/4 "
-                + "(bind, expandedRender, toSpannable, configureReply)");
-        if (handles.size() < 2) {
+        // 单行启动摘要：排障时一眼看出五个关键 Hook 是否都就位。
+        // 期望看到 5；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
+        XLog.i("hook pipeline armed: " + handles.size() + "/5 "
+                + "(bind, row, expandedRender, toSpannable, configureReply)");
+        if (handles.size() < 3) {
             XLog.w("too few hooks installed; module will not function on this Discord version");
         }
         return handles;
@@ -167,12 +173,18 @@ public final class MessageHooks {
             return;
         }
         HookBridge.get().bindView(contentView, messageId);
-        IconRegistry.onRowRecycled(findRowContainer(contentView));
+        // 注意：不在此处调用 onRowRecycled。bind 阶段可能早于槽位确定，
+        // 行与消息的对应关系统一由 setMessage Hook 管理（见 installRowHook）。
         XLog.d("bind " + messageId + " -> " + contentView.getClass().getSimpleName()
                 + "@" + Integer.toHexString(System.identityHashCode(contentView)));
     }
 
-    /** bind 后置：挂图标。翻译由渲染 Hook 触发（那时才有内容）。 */
+    /**
+     * bind 后置：仅记录行与消息 ID 的对应关系。
+     *
+     * <p>图标改由 {@code MessageView.setMessage} Hook 挂载（它能直接拿到行控件），
+     * 此处不再依赖父链遍历。</p>
+     */
     private static void bindPost(@Nullable Object holder) {
         View contentView = asView(Reflect.getField(holder, "messageContentView"));
         if (contentView == null) {
@@ -182,8 +194,14 @@ public final class MessageHooks {
         if (messageId == null) {
             return;
         }
-        // 延迟到布局后：bind 时视图尚未 addView，getParent() 为 null。
-        attachIconDeferred(contentView, messageId);
+        // 兼容路径：若 setMessage Hook 未生效（版本差异），仍尝试从父链找行控件。
+        // 正常情况下图标已由 setMessage Hook 挂上，findByTag 能直接命中。
+        ViewGroup row = findRowContainer(contentView);
+        if (row != null && TranslationIconView.findByTag(row) == null) {
+            IconRegistry.attach(messageId, row);
+            IconRegistry.refresh(messageId);
+            XLog.d("icon via fallback parent-chain " + messageId);
+        }
     }
 
     // ------------------------------------------------- Hook 2: 展开式 setMessageContent
@@ -229,10 +247,11 @@ public final class MessageHooks {
                                 String messageId = HookBridge.get().messageIdOf(view);
                                 if (messageId != null) {
                                     RerenderRegistry.register(messageId, view, target);
-                                    // 此处也可能早于 addView（RecyclerView 绑定阶段），
-                                    // 故统一走延迟挂载。
-                                    attachIconDeferred(view, messageId);
-                                    IconRegistry.refresh(messageId);
+                                    // 图标主挂载点是 setMessage Hook（能直接拿到行控件）；
+                                    // 这里只刷新状态，使“翻译中”旋转图标及时可见。
+                                    if (IconRegistry.has(messageId)) {
+                                        IconRegistry.refresh(messageId);
+                                    }
                                     if (structurable != null) {
                                         HookBridge.get().onMessageBound(
                                                 view, messageId, structurable);
@@ -446,6 +465,87 @@ public final class MessageHooks {
         return asView(Reflect.getField(binding, "replyText"));
     }
 
+    /**
+     * 把消息行控件与消息 ID 绑定，并在该行直接挂载图标。
+     *
+     * <p><b>为何改 Hook 这一处</b>：之前靠从正文视图沿 {@code getParent()}
+     * 向上遍历找行控件，时机不可靠 —— 正文视图是
+     * {@code MessageAccessoriesView}（RecyclerView）的 itemView，
+     * 绑定阶段尚未 {@code addView}，且列表回收/重建时序多变，
+     * 造成「图标时有时无、且翻译完成后才出现」。
+     * {@code MessageView.setMessage} 的 {@code this} <b>就是行控件本身</b>，
+     * 首参又是带 ID 的消息对象，一次调用同时拿到两者，无需任何父链遍历。</p>
+     *
+     * <p>同时这里也负责行复用时清理旧图标，保证不会出现图标串位。</p>
+     */
+    private static void installRowHook(XposedModule module, ClassLoader cl,
+                                       List<XposedInterface.HookHandle> out) {
+        Class<?> messageViewCls = Reflect.loadClass(cl, CLS_MESSAGE_VIEW);
+        Class<?> messageCls = Reflect.loadClass(cl, CLS_MESSAGE_BRIDGE);
+        if (messageViewCls == null || messageCls == null) {
+            XLog.w("MessageView/Message not found; icon row hook unavailable");
+            return;
+        }
+        Method setMessage = Reflect.findMethod(
+                messageViewCls, "setMessage", SET_MESSAGE_PARAM_COUNT, messageCls);
+        if (setMessage == null) {
+            XLog.w("MessageView.setMessage not found (paramCount="
+                    + SET_MESSAGE_PARAM_COUNT + "); icon will rely on fallback");
+            return;
+        }
+
+        out.add(module.hook(setMessage)
+                .setId("dat.setMessage")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    Object result = chain.proceed();
+                    try {
+                        onRowBound(chain.getThisObject(), chain.getArg(0));
+                    } catch (Throwable t) {
+                        XLog.w("setMessage hook failed", t);
+                    }
+                    return result;
+                }));
+        XLog.i("hooked MessageView.setMessage (" + SET_MESSAGE_PARAM_COUNT + " params)");
+    }
+
+    /**
+     * 行控件绑定消息后：登记行 → 消息 ID，并挂载/刷新图标。
+     *
+     * <p>在 {@code proceed()} 之后调用，此时行内子视图已完成重建
+     * （{@code setMessage} 内部会清空并重建 accessories）。</p>
+     */
+    private static void onRowBound(@Nullable Object rowObj, @Nullable Object messageObj) {
+        View rowView = asView(rowObj);
+        if (!(rowView instanceof ViewGroup) || messageObj == null) {
+            return;
+        }
+        String messageId = Reflect.callString(messageObj, "getId");
+        if (!HookBridge.looksLikeSnowflake(messageId)) {
+            return;
+        }
+        ViewGroup row = (ViewGroup) rowView;
+
+        // 行被复用到新消息：先解绑旧图标，避免图标与状态串位（需求 §风险 2）。
+        TranslationIconView existing = TranslationIconView.findByTag(row);
+        if (existing != null) {
+            String prev = existing.getMessageId();
+            if (prev != null && !prev.equals(messageId)) {
+                IconRegistry.detach(prev, existing);
+            }
+        }
+
+        TranslationIconView icon = IconRegistry.attach(messageId, row);
+        if (icon == null) {
+            XLog.d("row hook: attach failed for " + messageId);
+            return;
+        }
+        // 关账后行已确定可见：立即按当前状态显示（翻译中就能看到旋转图标）。
+        IconRegistry.refresh(messageId);
+        XLog.d("icon on row " + messageId + " vis=" + icon.getVisibility()
+                + " children=" + row.getChildCount());
+    }
+
     // ------------------------------------------------------------------ 工具
 
     @Nullable
@@ -454,119 +554,27 @@ public final class MessageHooks {
     }
 
     /**
-     * 延迟挂图标：等视图真正被加入视图树后再沿父链找行容器。
-     *
-     * <p><b>为何必须延迟</b>：正文视图 {@code MessageContentView} 是
-     * {@code MessageAccessoriesView}（一个 RecyclerView）的 itemView。
-     * RecyclerView 的顺序是<b>先 {@code onBindViewHolder}（即 bind 与首次
-     * setMessageContent）后 {@code addView}</b>。因此在 Hook 触发的那一刻，
-     * {@code contentView.getParent()} 仍为 null，沿 {@code getParent()} 上溯
-     * 必然失败。</p>
-     *
-     * <p>而译文走的是「内容对象身份映射」，与视图层级无关，所以会出现
-     * “译文正常但图标全无”的现象。把挂载 post 到下一次布局即可解决。</p>
-     *
-     * <p>不依赖 {@code View.post} 的具体时机猜测定论：若 post 时仍未挂上，
-     * 则用 {@code OnAttachStateChangeListener} 兜底，确保最终一定会尝试挂载。</p>
-     */
-    private static void attachIconDeferred(@Nullable View contentView, @Nullable String messageId) {
-        if (contentView == null || messageId == null) {
-            return;
-        }
-        final View view = contentView;
-        final String id = messageId;
-        view.post(() -> {
-            if (!id.equals(HookBridge.get().messageIdOf(view))) {
-                // 视图已被复用到别的消息（需求 §风险 2）。
-                return;
-            }
-            if (tryAttachIcon(view, id)) {
-                return;
-            }
-            // post 时仍未挂上：注册一次性 attach 监听兜底。
-            view.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
-                @Override
-                public void onViewAttachedToWindow(View v) {
-                    v.removeOnAttachStateChangeListener(this);
-                    if (!id.equals(HookBridge.get().messageIdOf(view))) {
-                        return;
-                    }
-                    tryAttachIcon(view, id);
-                }
-
-                @Override
-                public void onViewDetachedFromWindow(View v) {
-                    v.removeOnAttachStateChangeListener(this);
-                }
-            });
-        });
-    }
-
-    /** 尝试挂载图标；成功返回 true。失败时输出父链诊断日志。 */
-    private static boolean tryAttachIcon(View contentView, String messageId) {
-        ViewGroup row = findRowContainer(contentView);
-        if (row == null) {
-            // 关键诊断：把实际父链打出来，便于确定行控件的真实类名与层级。
-            XLog.d("row container not found for " + messageId
-                    + "; parent chain=" + describeParentChain(contentView));
-            return false;
-        }
-        TranslationIconView icon = IconRegistry.attach(messageId, row);
-        if (icon == null) {
-            XLog.d("icon attach returned null for " + messageId
-                    + "; row=" + row.getClass().getSimpleName()
-                    + " children=" + row.getChildCount());
-            return false;
-        }
-        XLog.d("icon attached " + messageId + " via " + row.getClass().getSimpleName()
-                + " size=" + icon.getWidth() + "x" + icon.getHeight()
-                + " vis=" + icon.getVisibility());
-        return true;
-    }
-
-    /** 把视图的父链描述为 "A <- B <- C"，用于排障。 */
-    private static String describeParentChain(@Nullable View view) {
-        StringBuilder sb = new StringBuilder();
-        View current = view;
-        int depth = 0;
-        while (current != null && depth < 12) {
-            if (depth > 0) {
-                sb.append(" <- ");
-            }
-            sb.append(current.getClass().getSimpleName());
-            android.view.ViewParent vp = current.getParent();
-            current = vp instanceof View ? (View) vp : null;
-            depth++;
-        }
-        if (current != null) {
-            sb.append(" <- ...");
-        }
-        return sb.toString();
-    }
-
-    /**
      * 从正文视图向父链上溯找到消息行容器。
      *
-     * <p>可行容器的类名（按优先级）：{@code MessageView}（聊天列表真实行控件）、
-     * {@code DecoratedMessageView}（RN 组件场景）。两者都是可叠加子视图的容器。</p>
-     *
-     * <p>遇到回复引用容器时返回 null：回复引用内也含一个 {@code MessageContentView}，
-     * 但它不是独立消息行，不应挂图标。</p>
-     *
-     * <p>注意正文视图实际位于 {@code MessageAccessoriesView}（RecyclerView）内部，
-     * 与行控件之间隔着 RecyclerView 层级，因此需要足够的深度上限。</p>
+     * <p>保留作为兼容位：主挂载路径已改为 {@code MessageView.setMessage}
+     * （见 {@link #installRowHook}），那里能直接拿到行控件，不依赖父链。
+     * 此处仅用于在无法拿到行控件时的兼容场景。</p>
      */
     @Nullable
     static ViewGroup findRowContainer(@Nullable View contentView) {
+        return findRowContainer(contentView, true);
+    }
+
+    @Nullable
+    static ViewGroup findRowContainer(@Nullable View contentView, boolean allowReplySkip) {
         View current = contentView;
         int depth = 0;
         while (current != null && depth < 24) {
             String name = current.getClass().getName();
-            if (CLS_MESSAGE_VIEW.equals(name)
-                    || CLS_DECORATED_MESSAGE_VIEW.equals(name)) {
+            if (CLS_MESSAGE_VIEW.equals(name)) {
                 return current instanceof ViewGroup ? (ViewGroup) current : null;
             }
-            if (CLS_REPLY_PREVIEW.equals(name)) {
+            if (allowReplySkip && CLS_REPLY_PREVIEW.equals(name)) {
                 return null;
             }
             android.view.ViewParent vp = current.getParent();

@@ -5,7 +5,6 @@ import android.view.ViewGroup;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.ref.WeakReference;
 import java.util.Map;
@@ -84,6 +83,39 @@ public final class IconRegistry {
         }
     }
 
+    /** 该消息当前是否已登记图标。 */
+    public static boolean has(String messageId) {
+        if (messageId == null) {
+            return false;
+        }
+        WeakReference<TranslationIconView> ref = ICONS.get(messageId);
+        if (ref == null) {
+            return false;
+        }
+        TranslationIconView icon = ref.get();
+        if (icon == null) {
+            ICONS.remove(messageId);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 把某个图标从指定消息的登记中解除（行被复用到其它消息时使用）。
+     *
+     * <p>只在登记项确实指向该图标时才移除，避免误删别的视图的登记。</p>
+     */
+    public static void detach(String messageId, TranslationIconView icon) {
+        if (messageId == null || icon == null) {
+            return;
+        }
+        WeakReference<TranslationIconView> ref = ICONS.get(messageId);
+        if (ref != null && ref.get() == icon) {
+            ICONS.remove(messageId);
+        }
+        icon.setMessageId(null);
+    }
+
     /** 刷新某条消息的图标状态。 */
     public static void refresh(String messageId) {
         if (messageId == null) {
@@ -104,24 +136,6 @@ public final class IconRegistry {
             return;
         }
         icon.applyState(StateStore.get().peek(messageId));
-    }
-
-    /** 行被回收/复用时调用：解除图标与消息的关联并隐藏。 */
-    public static void onRowRecycled(@Nullable ViewGroup rowContainer) {
-        TranslationIconView icon = TranslationIconView.findByTag(rowContainer);
-        if (icon == null) {
-            return;
-        }
-        String id = icon.getMessageId();
-        if (id != null) {
-            WeakReference<TranslationIconView> ref = ICONS.get(id);
-            if (ref != null && ref.get() == icon) {
-                ICONS.remove(id);
-            }
-        }
-        icon.setMessageId(null);
-        icon.applyState(null);
-        XLog.d("icon recycled" + (id == null ? "" : " (was " + id + ")"));
     }
 
     public static void clear() {

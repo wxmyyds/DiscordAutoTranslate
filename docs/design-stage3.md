@@ -150,8 +150,9 @@ copy(...)                   -> 重建节点
 
 ### 7.0 真机失败与核验修正记录
 
-用户实测反馈「无图标、无翻译」。逐个 Hook 点与 smali 对照核验后，
-发现并修复了 5 个真实错误。根因与修正汇总：
+用户实测反馈「无图标、无翻译」，继而「可翻译但无图标」，
+继而「图标不稳定」。逐个 Hook 点与 smali 对照核验后，
+发现并修复了以下真实错误。根因与修正汇总：
 
 | # | 位置 | 错误 | 后果 |
 |---|---|---|---|
@@ -161,19 +162,77 @@ copy(...)                   -> 重建节点
 | 4 | 图标点击 | `MessageView.onInterceptTouchEvent` 返回 `!allowChildGestures`，会接管手势 | 图标点不动 |
 | 5 | `toSpannable` 重载选择 | 同名重载两个（29 参 / 4 参），取第一个匹配则顺序不确定 | 可能挂错方法 |
 | 6 | `XLog` | 有框架时只写框架日志，**不写 logcat** | `adb logcat` 什么都看不到，无法排障 |
+| 7 | 图标挂载时机（**不稳定根因**） | 靠从正文视图沿 `getParent()` 上溯找行控件；正文是 RecyclerView 的 itemView，绑定阶段尚未 `addView`，且回收/重建时序多变 | 图标时有时无；且往往等翻译完成后才出现、看不到旋转动画 |
+| 8 | `bindPre` 中的 `onRowRecycled` | 在 bind 阶段就把刚刚可能挂上的图标隐藏 | 图标被自己清掉 |
+| 9 | 图标外观 | 原为纯自绘 `View` | 用户要求改用 `ImageView` + `@drawable/translate_24` |
+
+#### 7.0.1 不稳定根因与最终修法
+
+问题 7 是“不稳定”的根因：**沿父链上溯本身就不是可靠的挂载时机**。
+即使延迟到 `post`，仍会受列表回收、频道切换、配置变更（暗色/字号变化触发重测）
+等因素影响。
+
+最终改为 Hook **另一个同时提供“行控件 + 消息 ID”的方法**：
+
+```
+MessageView.setMessage(Message, MessageContext, ChatEventHandler,
+                       ComponentProvider, Function0, Z, Z)   // 340.13：7 参
+```
+
+- 它的 `this` **就是行控件本身**（`MessageView extends ChatListRelativeLayout
+  extends RelativeLayout`），无需任何父链遍历。
+- 首参 `Message` 提供 `getId-3Eiw7ao()`，即权威消息 ID。
+- 调用时机在 `RegularMessageDelegate.bindView` 中，紧随行被确定之后，
+  且先于字幕/正文渲染，因此翻译一开始就能看到旋转图标。
+
+在 `chain.proceed()` **之后**执行挂载：此时 `setMessage` 内部已清空并重建
+`accessoriesView`，子视图状态稳定。同时在此处处理**行复用到新消息**的清理，
+从根本上避免图标串位。
+
+原来的 `findRowContainer` 保留为兼容回退（若 `setMessage` Hook 未匹配），
+但不再作为主路径。
 
 ### 7.1 已核验正确的 Hook 点（逐项对照 smali）
 
 | Hook | 核验内容 | 结果 |
 |---|---|---|
 | `MessageContentViewHolder.bind` | 17 参、首参 `MessageContentAccessory`；字段 `messageContentView`；`getMessageId-3Eiw7ao()` | ✅ |
+| `MessageView.setMessage` | 7 参、首参 `Message`（`getId-3Eiw7ao` 存在）；`this` 为行控件 | ✅ |
 | 展开式 `setMessageContent` | 34 参、首参 `MessageMargins`、`getArg(1)` 为 `StructurableText`；`$default` 因首参不是 `MessageMargins` 被正确排除 | ✅ |
 | `configureReply` | 3 参、首参 `ReferencedMessage`；`LoadedReferencedMessage.getMessage()` 存在 | ✅ |
 | 回复引用渲染路径 | 确实**直接**调 `toSpannable`（全文件 3 处，不经 `setMessageContent`） | ✅ `toSpannable` Hook 可覆盖 |
 | 消息正文本路径 | `-hYrISQc`（1835 行起）内含 `toSpannable` 调用（2213 行） | ✅ 修复方向正确 |
 | 聊天列表实现 | `RegularMessageDelegate.createView()` 返回 `MessageView`；由 `ChatListAdapterConfiguratorKt` 装配，原生 RecyclerView（非 RN） | ✅ 原生 Hook 路线成立 |
+| `MessageView` 不覆盖布局 | `MessageView` 无 `onLayout`/`onMeasure`/`addView` 重写；`ChatListRelativeLayout.onMeasure` 仅做冻结优化，不忽略子视图 | ✅ 添加子视图安全 |
+| `MessageView` 不清空子视图 | 全文件无 `removeAllViews`/`removeView` | ✅ 图标不会被内部清除 |
 
-### 7.2 诊断日志
+### 7.2 图标（阶段 3 补充）
+
+- 图标实现为 **`ImageView`**（`TranslationIconView extends ImageView`），
+  图片资源为模块自带的矢量图。三种状态各一张（用户指定）：
+
+  | 状态 | 资源 | 着色 |
+  |---|---|---|
+  | 翻译中 | `drawable/progress_activity_24`（旋转） | 灰 `#B9BBBE` |
+  | 翻译成功 | `drawable/translate_24` | 主题蓝 `#5865F2` |
+  | 显示原文 | `drawable/translate_24` | 灰 `#72767D` |
+  | 失败 | `drawable/error_24` | 红 `#ED4245` |
+
+- 旋转动画：翻译中时对 ImageView 本体做 `animate().rotation(360f)`
+  无限循环（`LinearInterpolator`，900ms）；其他状态 `cancel()` 并重置为 0°。
+- 这些资源 **不是 Discord 的**（已 grep 全部 `R$drawable` 确认）。
+  因此必须在模块 APK 内自带，并在 Discord 进程内加载。
+- 加载方式：`ModuleEntry` 在 `onModuleLoaded` 调用
+  `ModuleResources.attach(this)`，安装时用 `getModuleApplicationInfo()` +
+  `PackageManager.getResourcesForApplication()` 一次解析出模块资源表，
+  再分别取三张图交给 `TranslationIconView.setIconDrawables()`。
+  若预加载失败，图标构造时会自行再取一次（已缓存，不会重复解析）。
+- 三张矢量图均已移除 `android:tint="?attr/colorControlNormal"`
+  （避免跨包解析主题属性失败），`fillColor` 为纯白占位色，
+  实际颜色由代码 `setColorFilter` 控制。
+- **待翻译不显示图标**（用户确认）。
+
+### 7.3 诊断日志
 
 排障期已开启以下机制（见 `XLog` 与 `MessageHooks.install`）：
 
