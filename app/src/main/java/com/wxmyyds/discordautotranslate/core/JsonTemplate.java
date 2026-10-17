@@ -3,6 +3,8 @@ package com.wxmyyds.discordautotranslate.core;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import androidx.annotation.Nullable;
+
 /**
  * 通用 JSON 请求模板引擎（需求 §5.5）。
  *
@@ -10,6 +12,7 @@ import java.util.Map;
  * 内置变量：
  * <ul>
  *   <li>{@code {{text}}} —— 待翻译原文（自动做 JSON 字符串转义）</li>
+ *   <li>{@code {{system}}} —— 系统提示词（自动做 JSON 字符串转义）</li>
  *   <li>{@code {{target}}} —— 目标语言</li>
  *   <li>{@code {{model}}} —— 模型名</li>
  * </ul>
@@ -56,11 +59,23 @@ public final class JsonTemplate {
      */
     public static RenderResult render(String template, String text,
                                       String targetLang, String model) {
+        return render(template, text, targetLang, model, "");
+    }
+
+    /**
+     * 渲染请求体（含系统提示词）。
+     *
+     * @param systemPrompt 系统提示词（会自动 JSON 转义，可为空）
+     */
+    public static RenderResult render(String template, String text,
+                                      String targetLang, String model,
+                                      @Nullable String systemPrompt) {
         if (template == null) {
             template = "";
         }
         Map<String, String> vars = new LinkedHashMap<>();
         vars.put("text", jsonEscape(text));
+        vars.put("system", jsonEscape(systemPrompt == null ? "" : systemPrompt));
         vars.put("target", jsonEscape(targetLang));
         vars.put("model", jsonEscape(model));
 
@@ -162,6 +177,17 @@ public final class JsonTemplate {
      */
     public static void validate(String template, String targetLang, String model)
             throws TranslationException {
+        validate(template, targetLang, model, "");
+    }
+
+    /**
+     * 校验模板：占位符是否都被识别、渲染后是否为合法 JSON。
+     *
+     * @throws TranslationException 校验不通过
+     */
+    public static void validate(String template, String targetLang, String model,
+                                @Nullable String systemPrompt)
+            throws TranslationException {
         if (template == null || template.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.CONFIG, "请求模板为空");
         }
@@ -169,7 +195,7 @@ public final class JsonTemplate {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "请求模板缺少 {{text}} 占位符，消息正文不会被发送");
         }
-        RenderResult r = render(template, "test", targetLang, model);
+        RenderResult r = render(template, "test", targetLang, model, systemPrompt);
         if (r.hasUnknownPlaceholders()) {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "请求模板含未知占位符：" + String.join(", ", r.unknownPlaceholders));

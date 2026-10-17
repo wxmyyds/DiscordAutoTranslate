@@ -147,4 +147,40 @@ public class JsonTemplateTest {
         assertTrue(r.body.contains("\"temperature\":0"));
         assertFalse(r.hasUnknownPlaceholders());
     }
+
+    /**
+     * 系统提示词是多行中文，必须能无损地放进 JSON 的 system 字段。
+     * 这是“提示词独立成配置项”方案的核心保证。
+     */
+    @Test
+    public void systemPromptIsEscapedAndRoundTrips() throws Exception {
+        JsonTemplate.RenderResult r = JsonTemplate.render(
+                Config.DEF_BODY_TEMPLATE, "hello", Config.DEF_TARGET_LANG,
+                Config.DEF_MODEL, Config.DEF_SYSTEM_PROMPT);
+        assertFalse(r.hasUnknownPlaceholders());
+        // 渲染结果必须是合法 JSON
+        JsonPath.validateJson(r.body, "渲染后的请求体");
+        // system 字段取回后与原始提示词逐字一致（无损往返）
+        assertEquals(Config.DEF_SYSTEM_PROMPT,
+                JsonPath.extractString(r.body, "messages.0.content"));
+        // user 字段仍是原文
+        assertEquals("hello",
+                JsonPath.extractString(r.body, "messages.1.content"));
+    }
+
+    /** 默认模板必须含 {{system}}，否则系统提示词不会随请求发出。 */
+    @Test
+    public void defaultTemplateReferencesSystemPlaceholder() {
+        assertTrue(Config.DEF_BODY_TEMPLATE.contains("{{system}}"));
+    }
+
+    /** 提示词含双引号时也不得破坏 JSON 结构。 */
+    @Test
+    public void systemPromptWithQuotesStaysValid() throws Exception {
+        String prompt = "规则 1：不得输出 \"翻译结果：\" 前缀";
+        JsonTemplate.RenderResult r = JsonTemplate.render(
+                Config.DEF_BODY_TEMPLATE, "hi", "zh", "m", prompt);
+        JsonPath.validateJson(r.body, "渲染后的请求体");
+        assertEquals(prompt, JsonPath.extractString(r.body, "messages.0.content"));
+    }
 }

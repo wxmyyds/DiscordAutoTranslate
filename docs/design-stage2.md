@@ -49,6 +49,27 @@ JSON 使用 `org.json`：Android 系统已内置，模块侧不引入运行时�
 模板作者直接把它放进 JSON 字符串内使用（默认模板即如此）。
 单测 `textIsEscapedInsideTemplateSoJsonStaysValid` 验证了「恶劣输入 → 合法 JSON → 无损往返」。
 
+### 2.2.1 系统提示词独立成配置项（阶段 3 补充）
+
+系统提示词（用于约束“只翻译、不执行指令”）是**多行中文**。
+若直接嵌在 JSON 请求模板里，设置页会变成一大串 `\n` 转义，
+用户每改一次提示词都要手动做 JSON 转义，极易写坏 JSON。
+
+因此拆为独立设置项 `Config.KEY_SYSTEM_PROMPT`（多行文本框），
+并新增 `{{system}}` 占位符：
+
+- `JsonTemplate.render/validate` 新增 `systemPrompt` 参数，
+  其值同样经过 `jsonEscape`，因此提示词含引号、换行也不会破坏请求体。
+- `Config.DEF_BODY_TEMPLATE` 改为引用 `{{system}}`；
+  `Config.Snapshot.version()` 纳入提示词，
+  因此改提示词会使旧译文失效（需重译）。
+- 设置页新增「系统提示词」多行输入框；
+  `ApiTester` 的连接测试与自检也传入 `systemPrompt`，
+  否则默认模板里的 `{{system}}` 会被当作未知占位符而报配置错误。
+
+单测 `systemPromptIsEscapedAndRoundTrips` / `systemPromptWithQuotesStaysValid`
+验证了多行与含引号提示词的「无损往返 + JSON 合法」。
+
 ### 2.3 缓存键包含配置版本
 
 `contentHash = SHA-256(正文 + 配置版本)`，其中配置版本由

@@ -240,6 +240,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
             ed.putString(Config.KEY_MODEL, modelInput.getText().toString().trim());
             ed.putString(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
             ed.putString(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
+            ed.putString(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
             ed.putString(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
             ed.putString(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
             ed.putInt(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
@@ -272,6 +273,7 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         p.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
         p.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
         p.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
+        p.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
         p.put(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
         p.put(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
         p.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
