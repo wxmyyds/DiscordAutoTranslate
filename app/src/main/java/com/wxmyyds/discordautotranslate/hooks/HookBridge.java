@@ -172,17 +172,16 @@ public final class HookBridge {
             return args;
         }
 
-        String clsName = structurableText == null ? null : structurableText.getClass().getName();
-        boolean isPlainText = clsName != null && clsName.endsWith("PrimitiveStructurableText");
-        if (!isPlainText) {
-            // 阶段 1/2 仅替换“纯文本”结构。带 Markdown/提及/表情的消息使用
-            // AnnotatedStructurableText(List<ContentNode>)，需要重建节点树，
-            // 属于阶段 3 的工作（见 docs/design-stage1.md）。
-            XLog.d("skip substitute: content is " + clsName);
+        if (!StructurableTextFactory.isRenderableType(structurableText)) {
+            // 渲染器只接受 Primitive/Annotated 两种类型，其他类型会被抛异常。
+            XLog.d("skip substitute: unsupported content type "
+                    + (structurableText == null ? "null" : structurableText.getClass().getName()));
             return args;
         }
 
-        Object replacement = StructurableTextFactory.primitive(translatedText);
+        // 保留 Markdown：对 Annotated 结构只替换自然语言文本节点，
+        // 结构化节点（提及/表情/链接/代码块）原样保留。
+        Object replacement = StructurableTextFactory.forTranslation(structurableText, translatedText);
         if (replacement == null) {
             if (!StructurableTextFactory.isInitTried()) {
                 XLog.w("StructurableTextFactory not initialized; translation display disabled");
@@ -214,15 +213,12 @@ public final class HookBridge {
 
         Object[] effective = original;
         if (translated != null && original.length > 1) {
-            String clsName = original[1] == null ? null : original[1].getClass().getName();
-            if (clsName != null && clsName.endsWith("PrimitiveStructurableText")) {
-                Object replacement = StructurableTextFactory.primitive(translated);
-                if (replacement != null) {
-                    effective = original.clone();
-                    effective[1] = replacement;
-                }
+            Object replacement = StructurableTextFactory.forTranslation(original[1], translated);
+            if (replacement != null) {
+                effective = original.clone();
+                effective[1] = replacement;
             } else {
-                XLog.d("rerender: content is not primitive, keeping original");
+                XLog.d("rerender: cannot substitute, keeping original");
             }
         }
 

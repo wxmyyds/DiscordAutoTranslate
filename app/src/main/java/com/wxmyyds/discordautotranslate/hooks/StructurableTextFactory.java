@@ -6,19 +6,28 @@ import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Constructor;
+import java.util.List;
 
 /**
- * 构造 Discord 的 {@code StructurableText} 实例。
+ * 构造 Discord 的 {@code StructurableText} 实例（需求 §7 阶段 3）。
  *
- * <p>Discord 340.13 的模型中，只有 {@code PrimitiveStructurableText(String)} 可以由
- * 单纯的译文构造。带 Markdown/提及/表情的消息使用 {@code AnnotatedStructurableText(List)}，
- * 需要重建整个 {@code ContentNode} 树才能保留原有富文本；这属于阶段 3 的工作
- * （见 docs/design-stage1.md）。</p>
+ * <p>依据 {@code TextUtilsKt.toSpannable} 的分支（已核对 smali）：
+ * <ul>
+ *   <li>{@code AnnotatedStructurableText} → 渲染内容节点列表；</li>
+ *   <li>{@code PrimitiveStructurableText} → 整体当纯文本；</li>
+ *   <li>其他类型 → 抛 {@code RuntimeException}。</li>
+ * </ul>
+ *
+ * <p>因此替换时必须产出上述两种类型之一。为保留 Markdown，优先产出
+ * {@code AnnotatedStructurableText}（见 {@link ContentNodes}）；
+ * 仅在无法重建节点树时退化为 {@code PrimitiveStructurableText}。</p>
  */
 public final class StructurableTextFactory {
 
     private static volatile Class<?> sPrimitiveClass;
+    private static volatile Class<?> sAnnotatedClass;
     private static volatile Constructor<?> sPrimitiveCtor;
+    private static volatile Constructor<?> sAnnotatedCtor;
     private static volatile boolean sInitTried;
 
     private StructurableTextFactory() {
@@ -27,34 +36,54 @@ public final class StructurableTextFactory {
     /** 由模块入口在拿到目标 ClassLoader 后初始化。 */
     public static void init(@Nullable ClassLoader cl) {
         sInitTried = true;
+
         sPrimitiveClass = Reflect.loadClass(cl,
                 "com.discord.chat.bridge.structurabletext.PrimitiveStructurableText");
-        if (sPrimitiveClass != null) {
-            try {
-                sPrimitiveCtor = sPrimitiveClass.getDeclaredConstructor(String.class);
-                sPrimitiveCtor.setAccessible(true);
-                XLog.i("StructurableTextFactory ready");
-            } catch (Throwable t) {
-                sPrimitiveCtor = null;
-                XLog.w("PrimitiveStructurableText(String) not found", t);
-            }
-        } else {
-            XLog.w("PrimitiveStructurableText not found in target classloader");
+        sAnnotatedClass = Reflect.loadClass(cl,
+                "com.discord.chat.bridge.structurabletext.AnnotatedStructurableText");
+
+        sPrimitiveCtor = ctorOf(sPrimitiveClass, String.class);
+        sAnnotatedCtor = ctorOf(sAnnotatedClass, List.class);
+
+        XLog.i("StructurableTextFactory ready: primitive=" + (sPrimitiveCtor != null)
+                + " annotated=" + (sAnnotatedCtor != null));
+    }
+
+    @Nullable
+    private static Constructor<?> ctorOf(@Nullable Class<?> cls, Class<?>... params) {
+        if (cls == null) {
+            return null;
+        }
+        try {
+            Constructor<?> c = cls.getDeclaredConstructor(params);
+            c.setAccessible(true);
+            return c;
+        } catch (Throwable t) {
+            XLog.w("constructor " + cls.getSimpleName()
+                    + "(" + java.util.Arrays.toString(params) + ") not found", t);
+            return null;
         }
     }
 
     public static void reset() {
         sPrimitiveClass = null;
+        sAnnotatedClass = null;
         sPrimitiveCtor = null;
+        sAnnotatedCtor = null;
         sInitTried = false;
     }
 
     public static boolean isReady() {
-        return sPrimitiveCtor != null;
+        return sPrimitiveCtor != null || sAnnotatedCtor != null;
     }
 
     public static boolean isInitTried() {
         return sInitTried;
+    }
+
+    /** 能否保留 Markdown（即能否构造 AnnotatedStructurableText）。 */
+    public static boolean canPreserveMarkdown() {
+        return sAnnotatedCtor != null;
     }
 
     /** 构造 {@code PrimitiveStructurableText(text)}；不可用时返回 null。 */
@@ -72,8 +101,66 @@ public final class StructurableTextFactory {
         }
     }
 
-    /** 判断给定对象是否为 PrimitiveStructurableText。 */
-    public static boolean isPrimitive(@Nullable Object o) {
-        return o != null && sPrimitiveClass != null && sPrimitiveClass.isInstance(o);
+    /** 构造 {@code AnnotatedStructurableText(List<ContentNode>)}；不可用时返回 null。 */
+    @Nullable
+    public static Object annotated(@Nullable List<?> nodes) {
+        Constructor<?> ctor = sAnnotatedCtor;
+        if (ctor == null || nodes == null) {
+            return null;
+        }
+        try {
+            return ctor.newInstance(nodes);
+        } catch (Throwable t) {
+            XLog.w("construct AnnotatedStructurableText failed", t);
+            return null;
+        }
+    }
+
+    /**
+     * 为译文构造替换用的 StructurableText。
+     *
+     * <p>策略：优先保留原类型与 Markdown 结构。</p>
+     *
+     * @param original      原始 StructurableText（用于判断类型与取节点树）
+     * @param translated    译文
+     * @return 替换对象；无法构造时返回 null（调用方应保持原文）
+     */
+    @Nullable
+    public static Object forTranslation(@Nullable Object original, String translated) {
+        if (original == null || translated == null) {
+            return null;
+        }
+
+        // 1) 原始是 Annotated：尝试保留 Markdown 结构。
+        if (ContentNodes.isAnnotated(original)) {
+            List<?> nodes = ContentNodes.listOf(original);
+            List<Object> replaced = ContentNodes.replaceText(nodes, translated);
+            if (replaced != null) {
+                Object out = annotated(replaced);
+                if (out != null) {
+                    XLog.d("markdown preserved for translation");
+                    return out;
+                }
+            }
+            // 节点重建失败或无可翻译文本节点：退化为纯文本，避免显示原文。
+            XLog.d("markdown preserve unavailable, falling back to primitive");
+            return primitive(translated);
+        }
+
+        // 2) 原始是 Primitive：直接给纯文本。
+        if (ContentNodes.isPrimitive(original)) {
+            return primitive(translated);
+        }
+
+        // 3) 未知类型：交给渲染器会抛异常，因此坚持不替换。
+        XLog.w("unknown StructurableText type, refusing to substitute: "
+                + original.getClass().getName());
+        return null;
+    }
+
+    /** 判断给定对象是否为可安全替换的类型（渲染器只接受这两种）。 */
+    public static boolean isRenderableType(@Nullable Object structurableText) {
+        return ContentNodes.isPrimitive(structurableText)
+                || ContentNodes.isAnnotated(structurableText);
     }
 }

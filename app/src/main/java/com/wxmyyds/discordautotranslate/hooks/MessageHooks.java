@@ -62,10 +62,115 @@ public final class MessageHooks {
 
     /** 安装全部 Hook，返回句柄供热重载清理。 */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
-        List<XposedInterface.HookHandle> handles = new ArrayList<>(2);
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
         installBindHook(module, cl, handles);
         installRenderHook(module, cl, handles);
+        installReplyHook(module, cl, handles);
         return handles;
+    }
+
+    // ------------------------------------------------------------- Hook 3: 回复引用
+
+    /**
+     * Hook {@code MessageViewReplyPreview.configureReply}，把回复引用中的正文视图
+     * 映射到<b>被引用消息自己的 ID</b>。
+     *
+     * <p>为何需要单独处理：回复引用内也含一个 {@code MessageContentView}，
+     * 但它不在 {@code MessageContentViewHolder} 的绑定流程里，因此没有 messageId 映射，
+     * 渲染 Hook 会直接跳过。经此 Hook 后，回复引用内的正文也能翻译，
+     * 且状态按被引用消息的 ID 关联（滚动、复用与编辑都跟随真实消息）。</p>
+     *
+     * <p>图标不会挂到回复引用里：{@link #findRowContainer} 遇到
+     * {@code MessageViewReplyPreview} 会返回 null，避免在引用行内叠加图标。</p>
+     */
+    private static void installReplyHook(XposedModule module, ClassLoader cl,
+                                         List<XposedInterface.HookHandle> out) {
+        Class<?> replyPreview = Reflect.loadClass(cl, CLS_REPLY_PREVIEW);
+        if (replyPreview == null) {
+            XLog.d("MessageViewReplyPreview not found; reply content translation disabled");
+            return;
+        }
+        Method configure = Reflect.findMethod(replyPreview, "configureReply", 3);
+        if (configure == null) {
+            XLog.w("MessageViewReplyPreview.configureReply(int,boolean,Function0) not found");
+            return;
+        }
+
+        out.add(module.hook(configure)
+                .setId("dat.configureReply")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        replyPre(chain);
+                    } catch (Throwable t) {
+                        XLog.w("configureReply pre failed", t);
+                    }
+                    Object result = chain.proceed();
+                    try {
+                        replyPost(chain.getThisObject());
+                    } catch (Throwable t) {
+                        XLog.w("configureReply post failed", t);
+                    }
+                    return result;
+                }));
+        XLog.i("hooked MessageViewReplyPreview.configureReply");
+    }
+
+    /** 从回复引用实例取出其内部正文视图。 */
+    @Nullable
+    private static View replyTextViewOf(@Nullable Object replyPreview) {
+        Object binding = Reflect.getField(replyPreview, "binding");
+        if (binding == null) {
+            return null;
+        }
+        return asView(Reflect.getField(binding, "replyText"));
+    }
+
+    /** 前置：参数是被引用的消息对象，取出其 ID 并登记到回复正文视图。 */
+    private static void replyPre(XposedInterface.Chain chain) {
+        Object referenced = chain.getArg(0);
+        if (referenced == null) {
+            return;
+        }
+        // 只有 LoadedReferencedMessage 带真实消息；SystemReferencedMessage 是系统文案。
+        if (!Reflect.isInstanceOfName(referenced,
+                "com.discord.chat.bridge.referencedmessage.LoadedReferencedMessage")) {
+            return;
+        }
+        Object message = Reflect.call(Reflect.findMethod(
+                referenced.getClass(), "getMessage", 0), referenced);
+        if (message == null) {
+            return;
+        }
+        String messageId = Reflect.callString(message, "getId");
+        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
+            return;
+        }
+        View replyText = replyTextViewOf(chain.getThisObject());
+        if (replyText == null) {
+            XLog.d("reply: replyText view unavailable");
+            return;
+        }
+        // 复用防护：换绑不同消息时清掉旧关联（需求 §风险 2）。
+        HookBridge.get().bindView(replyText, messageId);
+        XLog.d("reply bound to referenced message " + messageId);
+    }
+
+    /** 后置：内容已渲染，触发被引用消息的翻译（不挂图标）。 */
+    private static void replyPost(@Nullable Object replyPreview) {
+        View replyText = replyTextViewOf(replyPreview);
+        if (replyText == null) {
+            return;
+        }
+        String messageId = HookBridge.get().messageIdOf(replyText);
+        if (messageId == null) {
+            return;
+        }
+        Object structurable = HookBridge.get().lastStructurable(replyText);
+        if (structurable == null) {
+            return;
+        }
+        HookBridge.get().onMessageBound(replyText, messageId, structurable);
     }
 
     // ------------------------------------------------------------------ Hook 1: bind
@@ -188,7 +293,8 @@ public final class MessageHooks {
                     }
                     String messageId = HookBridge.get().messageIdOf(view);
                     if (messageId == null) {
-                        // 非消息正文（例如 Embed 或回复引用内的正文），不干预。
+                        // 无消息 ID（例如 Embed 内的正文）：不干预。
+                        // 注意回复引用内的正文已由 configureReply Hook 建立映射，会走到下面。
                         return chain.proceed();
                     }
                     try {
