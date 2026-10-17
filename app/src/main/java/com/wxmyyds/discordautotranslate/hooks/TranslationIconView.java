@@ -1,5 +1,6 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
+import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.view.View;
@@ -55,10 +56,13 @@ public final class TranslationIconView extends ImageView {
     private StateStore.Status status = StateStore.Status.IDLE;
     private boolean showingOriginal;
     private boolean isSpinning;
+    /** 翻译中的旋转动画；仅用于在状态变化时取消。 */
+    @Nullable
+    private ObjectAnimator spinner;
 
     /** 供 {@link ModuleEntry} 预加载模块矢量图；也可不预加载，构造时会自取。 */
-    static void setIconDrawables(@Nullable Drawable translate, @Nullable Drawable progress,
-                                 @Nullable Drawable error) {
+    public static void setIconDrawables(@Nullable Drawable translate, @Nullable Drawable progress,
+                                        @Nullable Drawable error) {
         if (translate != null) {
             sTranslateDrawable = translate;
         }
@@ -71,7 +75,7 @@ public final class TranslationIconView extends ImageView {
     }
 
     /** 清空缓存的图标（热重载时调用，避免旧代次持有旧 Drawable）。 */
-    static void clearIconDrawables() {
+    public static void clearIconDrawables() {
         sTranslateDrawable = null;
         sProgressDrawable = null;
         sErrorDrawable = null;
@@ -217,14 +221,14 @@ public final class TranslationIconView extends ImageView {
             return;
         }
         isSpinning = true;
-        animate().cancel();
-        setRotation(0f);
-        animate()
-                .rotation(360f)
-                .setDuration(900L)
-                .setInterpolator(new LinearInterpolator())
-                .setRepeatCount(android.view.animation.Animation.INFINITE)
-                .start();
+        // 旋转必须是无限循环，而 ViewPropertyAnimator 不支持 setRepeatCount，
+        // 因此改用 ObjectAnimator（对 View.ROTATION 属性做 0→360 无限插值）。
+        ObjectAnimator a = ObjectAnimator.ofFloat(this, View.ROTATION, 0f, 360f);
+        a.setDuration(900L);
+        a.setInterpolator(new LinearInterpolator());
+        a.setRepeatCount(ObjectAnimator.INFINITE);
+        a.start();
+        spinner = a;
     }
 
     private void stopSpin() {
@@ -232,7 +236,11 @@ public final class TranslationIconView extends ImageView {
             return;
         }
         isSpinning = false;
-        animate().cancel();
+        ObjectAnimator a = spinner;
+        spinner = null;
+        if (a != null) {
+            a.cancel();
+        }
         setRotation(0f);
     }
 
