@@ -120,14 +120,39 @@ public final class Config {
             systemPrompt = str(p, KEY_SYSTEM_PROMPT, DEF_SYSTEM_PROMPT);
             bodyTemplate = str(p, KEY_BODY_TEMPLATE, DEF_BODY_TEMPLATE);
             responsePath = str(p, KEY_RESPONSE_PATH, DEF_RESPONSE_PATH);
-            timeoutMs = p.getInt(KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
-            maxConcurrency = p.getInt(KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
+            timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
+            maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
             verboseLog = p.getBoolean(KEY_VERBOSE_LOG, DEF_VERBOSE_LOG);
         }
 
+        /**
+         * 读取字符串配置。<b>未配置</b>（不存在 / null / 空白）时一律回落默认值。
+         *
+         * <p>为何把空白也算作“未配置”：设置页每个输入框在保存时都会写入，
+         * 用户清空某格后保存就会存下空字符串。若把空字符串当有效值，
+         * 会出现“模型名/目标语言/响应路径为空”之类难查的静默失效。</p>
+         *
+         * <p>注意：{@link #DEF_API_KEY} 与 {@link #DEF_EXTRA_HEADERS}
+         * 默认值本身即为空串，因此“空白回落默认值”对它们是等价的，
+         * 不会影响“无需认证 / 无额外请求头”的正常用法。</p>
+         */
         private static String str(SharedPreferences p, String key, String def) {
             String v = p.getString(key, def);
-            return v == null ? def : v;
+            if (v == null || v.trim().isEmpty()) {
+                return def;
+            }
+            return v;
+        }
+
+        /**
+         * 读取正整数配置。未配置、小于等于 0、或无法解析时回落默认值。
+         *
+         * <p>超时与并发为 0 或负数会导致请求立即失败或无法调度，
+         * 不应当被当作有效配置。</p>
+         */
+        private static int positiveInt(SharedPreferences p, String key, int def) {
+            int v = p.getInt(key, def);
+            return v > 0 ? v : def;
         }
 
         /**
