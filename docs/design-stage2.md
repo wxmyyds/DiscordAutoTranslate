@@ -70,12 +70,12 @@ JSON 使用 `org.json`：Android 系统已内置，模块侧不引入运行时�
 单测 `systemPromptIsEscapedAndRoundTrips` / `systemPromptWithQuotesStaysValid`
 验证了多行与含引号提示词的「无损往返 + JSON 合法」。
 
-#### 静默失效与自动迁移（重要教训）
+#### 静默失效与保存时检查（重要教训）
 
 上线后发现：用户填入新提示词，但 `Dumbass` 仍被译成
 “这个词是英文中的粗俗用语…我建议我们使用更礼貌…”（即模型在解释+说教）。
 
-**根因**：配置读取是 `已存值优先于默认值`。老用户手机里存的是
+**根因**：配置读取是 `已存值优先于默认值`。用户手机里存的是
 **旧版默认模板**，它把英文提示词硬编码在 `system` 字段里，
 且**不包含 `{{system}}`**。所以：
 
@@ -84,13 +84,14 @@ JSON 使用 `org.json`：Android 系统已内置，模块侧不引入运行时�
 
 这是典型的**静默失效**：界面能填、能存，但不起作用。
 
-**修法（两道防线）**：
+**修法**：不做自动迁移（当前阶段只有单一使用者，迁移逻辑属多余复杂度），
+而是在**保存时主动检查并弹窗**：
 
-1. **自动迁移**：新增 `Config.LEGACY_DEF_BODY_TEMPLATE`，
-   读取时若模板与旧默认值**完全相等**，自动升级为新默认模板。
-   只精确匹配旧默认值，用户手写的模板不受影响。
-2. **保存时告警**：设置页保存时检查模板是否含 `{{system}}`，
-   缺则明确提示“你填写的系统提示词不会被发送”。
+- 检查逻辑放在可单测的 `JsonTemplate.missingKeyPlaceholders`：
+  返回模板中缺失的关键占位符（`{{text}}` / `{{system}}`）。
+- 设置页保存后调 `warnMissingPlaceholders()`，缺则弹 `AlertDialog`，
+  逐条说明后果（`{{text}}` 缺→翻译无法工作；`{{system}}` 缺→提示词不生效），
+  并提供“用默认模板”一键填入。
 
 同时默认提示词新增第 8、9 条，直接针对该失败案例：
 
@@ -100,8 +101,8 @@ JSON 使用 `org.json`：Android 系统已内置，模块侧不引入运行时�
 - 第 9 条：不对原文做价值判断/安全提示，不用
   “我建议”“我很乐意”等句式与用户对话。
 
-单测 `legacyDefaultTemplateIsMigrated` / `customTemplateIsNotMigrated` /
-`defaultPromptCoversProfanityRule` 分别锁定迁移行为与提示词规则。
+单测 `missingKeyPlaceholdersDetectsSystemAndText` /
+`defaultPromptCoversProfanityRule` 分别锁定检查逻辑与提示词规则。
 
 ### 2.3 缓存键包含配置版本
 

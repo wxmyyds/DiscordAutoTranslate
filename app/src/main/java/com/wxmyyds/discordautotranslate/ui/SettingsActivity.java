@@ -18,6 +18,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
 
@@ -254,36 +255,44 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
             ed.putInt(Config.KEY_MAX_CONCURRENCY, parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
             ed.putBoolean(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
             ed.apply();
-            // 关键提醒：模板若未引用 {{system}}，系统提示词根本不会被发送。
-            // 这曾造成“提示词约束无效”的静默失效，因此保存时明确告警。
-            String warn = templateSystemWarning(bodyTemplateInput.getText().toString());
-            if (warn != null) {
-                toast("已保存，但" + warn);
-                updateStatus("配置已保存。⚠ " + warn);
-            } else {
-                toast("已保存。新消息将按新配置翻译。");
-                updateStatus("配置已保存。");
-            }
+            toast("已保存。新消息将按新配置翻译。");
+            updateStatus("配置已保存。");
+            // 关键检查：模板缺关键占位符时，对应配置项会静默失效
+            // （界面能填能存，但根本不会被发送）。因此用弹窗明确提醒。
+            warnMissingPlaceholders();
         } catch (Throwable t) {
             updateStatus("保存失败：" + t.getClass().getSimpleName());
         }
     }
 
-    /**
-     * 检查模板是否真的引用了系统提示词。
-     *
-     * @return 有问题时返回提示文字；正常返回 null
-     */
-    @Nullable
-    private static String templateSystemWarning(@Nullable String template) {
-        if (template == null || template.trim().isEmpty()) {
-            return null; // 空模板由校验环节报错，这里不重复。
+    /** 模板缺关键占位符时弹窗提醒（每次保存后检查）。 */
+    private void warnMissingPlaceholders() {
+        java.util.List<String> missing = JsonTemplate.missingKeyPlaceholders(
+                bodyTemplateInput.getText().toString());
+        if (missing.isEmpty()) {
+            return;
         }
-        if (template.contains("{{system}}")) {
-            return null;
+        StringBuilder sb = new StringBuilder();
+        sb.append("JSON 请求模板缺少以下占位符：\n\n");
+        for (String p : missing) {
+            sb.append("  •  ").append(p);
+            if ("{{text}}".equals(p)) {
+                sb.append("　—— 消息正文不会被发送，翻译无法工作\n");
+            } else {
+                sb.append("　—— 系统提示词不会被发送，提示词约束不起作用\n");
+            }
         }
-        return "JSON 请求模板里没有 {{system}} 占位符，你填写的系统提示词不会被发送。"
-                + "请把模板中 system 消息的 content 改为 \"{{system}}\"。";
+        sb.append("\n请把模板中对应内容改为上述占位符。默认模板：\n\n")
+                .append(Config.DEF_BODY_TEMPLATE);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("请求模板配置有问题")
+                .setMessage(sb.toString())
+                .setPositiveButton("用默认模板", (d, w) -> {
+                    bodyTemplateInput.setText(Config.DEF_BODY_TEMPLATE);
+                    toast("已填入默认模板，请再点一次“保存”。");
+                })
+                .setNegativeButton("知道了", null)
+                .show();
     }
 
     private static int parseInt(EditText et, int def) {

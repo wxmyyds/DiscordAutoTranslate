@@ -171,6 +171,34 @@ public final class JsonTemplate {
     }
 
     /**
+     * 返回模板中缺失的关键占位符，供设置页保存时提醒。
+     *
+     * <p>为何需要：配置读取是“已存值优先于默认值”。老用户手机里可能
+     * 存着旧模板（把英文提示词硬编码在 system 字段、不含
+     * {@code {{system}}}），导致新增的“系统提示词”配置项静默失效 ——
+     * 界面能填能存，但根本不会被发送。因此保存时主动检查并弹窗。</p>
+     *
+     * <p>空模板不在此处报错：那是 {@link #validate} 的职责，避免重复提示。</p>
+     *
+     * @return 缺失的占位符列表（保持固定顺序）；无缺失时为空列表
+     */
+    public static java.util.List<String> missingKeyPlaceholders(@Nullable String template) {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        if (template == null || template.trim().isEmpty()) {
+            return missing;
+        }
+        // {{text}} 缺失：什么都不会被翻译。
+        if (!template.contains("{{text}}")) {
+            missing.add("{{text}}");
+        }
+        // {{system}} 缺失：系统提示词不会随请求发出。
+        if (!template.contains("{{system}}")) {
+            missing.add("{{system}}");
+        }
+        return missing;
+    }
+
+    /**
      * 校验模板：占位符是否都被识别、渲染后是否为合法 JSON。
      *
      * @throws TranslationException 校验不通过
