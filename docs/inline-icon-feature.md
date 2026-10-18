@@ -1,7 +1,7 @@
 # 行内翻译图标（正式功能）实现说明
 
 **分支**：`feat/inline-translate-icon`（从 `main` 新建）
-**前置验证**：`docs/exp-inline-icon-draw-test.md`（真机确认绘制 / 点击 / 原生交互三项全部通过）
+**前置验证**：`docs/inline-icon-device-verification.md`（真机确认绘制 / 点击 / 原生交互三项全部通过）
 
 本轮把已验证的原型集成为正式功能，**未扩大需求范围**。
 
