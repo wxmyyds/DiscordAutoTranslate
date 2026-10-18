@@ -15,8 +15,9 @@ import com.wxmyyds.discordautotranslate.core.XLog;
 import com.wxmyyds.discordautotranslate.translate.JsonApiEngine;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 渲染层与翻译状态之间的桥。
@@ -45,26 +46,17 @@ public final class HookBridge {
         return INSTANCE;
     }
 
-    /** 正文视图 → 消息 ID */
-    private final Map<View, String> viewToMessageId = new ConcurrentHashMap<>();
+    /** 正文视图 → 消息 ID（有界，避免列表回收后无限增长）。 */
+    private final Map<View, String> viewToMessageId = boundedMap(512);
 
-    /** 正文视图 → 最近一次“原始”渲染实参（用于重新渲染） */
-    private final Map<View, Object[]> originalRenderArgs = new ConcurrentHashMap<>();
+    /** 消息 ID → 原始 StructurableText（有界，供失败重试使用）。 */
+    private final Map<String, Object> rawContent = boundedMap(512);
 
-    /** 消息 ID → 原始 StructurableText（即使视图已回收也能重试） */
-    private final Map<String, Object> rawContent = new ConcurrentHashMap<>();
+    /** 消息 ID → 最近承载它的视图（弱引用，避免消息状态反向固定 View）。 */
+    private final Map<String, java.lang.ref.WeakReference<View>> lastView = boundedMap(512);
 
-    /** 消息 ID → 最近承载它的视图（原始渲染参数仍按 View 保存）。 */
-    private final Map<String, View> lastView = new ConcurrentHashMap<>();
-
-    /**
-     * 内容对象（按引用身份）→ 消息 ID。
-     *
-     * <p>用途：渲染漏斗 {@code TextUtilsKt.toSpannable} 是<b>静态</b>方法，
-     * 没有 {@code this} 视图可供反查消息 ID。但它接收的 {@code StructurableText}
-     * 与 {@code bind} 阶段拿到的实例是同一个，因此用身份映射即可反查。</p>
-     */
-    private final Map<Object, String> contentIdentityToMessageId = new ConcurrentHashMap<>();
+    /** 按引用身份反查消息 ID；Discord StructurableText 的 equals() 是按内容比较。 */
+    private final IdentityMessageMap contentIdentityToMessageId = new IdentityMessageMap();
 
     private volatile Config.Snapshot config = Config.read(null);
     private volatile Scheduler.Engine engine = new JsonApiEngine(config);
@@ -75,8 +67,8 @@ public final class HookBridge {
     // ---------------------------------------------------------------- 配置与引擎
 
     /**
-     * 更新配置。会影响翻译结果的配置变化（URL/模型/目标语言/模板/提取路径）发生后，
-     * 递增状态代次使旧译文与在途任务失效（需求 §5.6、§5.7）。
+     * 更新配置。会影响翻译结果的配置变化（URL/模型/目标语言/模板/提取路径/凭据）
+     * 发生后，递增状态代次使旧译文与在途任务失效（需求 §5.6、§5.7）。
      */
     public void updateConfig(Config.Snapshot c) {
         if (c == null) {
@@ -89,6 +81,7 @@ public final class HookBridge {
         // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
         Scheduler.get().setMaxConcurrency(c.maxConcurrency);
 
+        // version() 已包含密钥/额外请求头指纹：凭据变更同样会使缓存与在途结果失效。
         if (old == null || !old.version().equals(c.version())) {
             XLog.i("translation config changed, invalidating cached state");
             StateStore.get().onNewGeneration();
@@ -107,12 +100,12 @@ public final class HookBridge {
         }
         String prev = viewToMessageId.put(contentView, messageId);
         if (prev != null && !prev.equals(messageId)) {
-            // 视图被复用到另一条消息：清除该视图的旧渲染参数，并且只在
-            // lastView 仍指向这个 View 时删除，避免误删同 ID 的更新 View。
-            originalRenderArgs.remove(contentView);
-            lastView.remove(prev, contentView);
+            java.lang.ref.WeakReference<View> last = lastView.get(prev);
+            if (last != null && last.get() == contentView) {
+                lastView.remove(prev);
+            }
         }
-        lastView.put(messageId, contentView);
+        lastView.put(messageId, new java.lang.ref.WeakReference<>(contentView));
     }
 
     @Nullable
@@ -123,10 +116,18 @@ public final class HookBridge {
     /** 清空全部映射。热重载与配置重置时调用。 */
     public void reset() {
         viewToMessageId.clear();
-        originalRenderArgs.clear();
         rawContent.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
+    }
+
+    private static <K, V> Map<K, V> boundedMap(int maxEntries) {
+        return Collections.synchronizedMap(new LinkedHashMap<K, V>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxEntries;
+            }
+        });
     }
 
     // ------------------------------------------------------- 内容 → 消息 ID
@@ -153,12 +154,7 @@ public final class HookBridge {
         if (structurableText == null) {
             return null;
         }
-        String id = contentIdentityToMessageId.get(structurableText);
-        if (id != null) {
-            return id;
-        }
-        // 正文可能相同，按文本哈希反查消息 ID 会产生歧义；只接受对象身份映射。
-        return null;
+        return contentIdentityToMessageId.get(structurableText);
     }
 
     // ---------------------------------------------------------------- 渲染拦截
@@ -169,46 +165,38 @@ public final class HookBridge {
     }
 
     /**
-     * 记录“原始”渲染参数。
+     * 记录“内容对象 → 消息 ID”身份映射。
      *
-     * <p>阶段 3 修正：正文替换统一在渲染漏斗 {@code TextUtilsKt.toSpannable} 完成，
-     * 本方法<b>不再替换</b>实参，只负责记录原文参数与内容身份映射。
-     * 这样重渲染只需用原参数再跑一遗，toSpannable 会按当前状态自行决定是否替换。</p>
+     * <p>阶段 3 修正：正文替换统一在渲染漏斗 {@code TextUtilsKt.toSpannable} 完成。
+     * 重渲染使用 {@link #requestRerender} 的实参，不再在此保存。
      *
      * @return 始终返回传入的同一数组
      */
     public Object[] interceptRender(View contentView, Object[] args,
-                                    @Nullable Object structurableText,
-                                    @Nullable String ignoredTranslatedText) {
-        if (contentView != null && args != null) {
-            originalRenderArgs.put(contentView, args.clone());
-            if (structurableText != null) {
-                String id = viewToMessageId.get(contentView);
-                if (id != null) {
-                    rememberContent(id, structurableText);
-                }
+                                    @Nullable Object structurableText) {
+        if (contentView != null && args != null && structurableText != null) {
+            String id = viewToMessageId.get(contentView);
+            if (id != null) {
+                rememberContent(id, structurableText);
             }
         }
         return args;
     }
 
     /**
-     * 翻译完成/切换原文译文时触发重渲染。
+     * 用保存的原始参数重新调用渲染入口；真正的文本替换发生在
+     * {@code TextUtilsKt.toSpannable}（它会按当前状态自行决定替换与否）。
      *
-     * <p>用保存的<b>原始</b>参数重新调用渲染入口；真正的文本替换发生在
-     * {@code TextUtilsKt.toSpannable}（它会按当前状态自行决定替换与否）。</p>
+     * @param invocationTarget 调用 {@code method} 的接收者（正文视图或回复预览容器）
      */
-    public void requestRerender(@Nullable View contentView, @Nullable Method setMessageContent) {
-        if (contentView == null || setMessageContent == null) {
-            return;
-        }
-        Object[] original = originalRenderArgs.get(contentView);
-        if (original == null) {
+    public void requestRerender(@Nullable Object invocationTarget, @Nullable Method method,
+                                @Nullable Object[] args) {
+        if (invocationTarget == null || method == null || args == null) {
             return;
         }
         RERENDERING.set(Boolean.TRUE);
         try {
-            setMessageContent.invoke(contentView, original);
+            method.invoke(invocationTarget, args);
         } catch (Throwable t) {
             XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
         } finally {
@@ -236,7 +224,7 @@ public final class HookBridge {
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
         rawContent.put(messageId, structurableText);
         if (contentView != null) {
-            lastView.put(messageId, contentView);
+            lastView.put(messageId, new java.lang.ref.WeakReference<>(contentView));
         }
 
         if (!cfg.enabled) {
@@ -374,11 +362,13 @@ public final class HookBridge {
         IconRegistry.refresh(messageId);
 
         Object structurable = rawContent.get(messageId);
+        java.lang.ref.WeakReference<View> viewRef = lastView.get(messageId);
+        View last = viewRef == null ? null : viewRef.get();
         if (structurable == null) {
             XLog.d("retry skipped: no raw content for " + messageId);
             return;
         }
-        onMessageBound(lastView.get(messageId), messageId, structurable);
+        onMessageBound(last, messageId, structurable);
     }
 
     // ---------------------------------------------------------------- 工具

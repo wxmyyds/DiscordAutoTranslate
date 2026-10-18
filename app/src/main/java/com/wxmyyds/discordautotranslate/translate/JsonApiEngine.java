@@ -56,7 +56,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
         if (Thread.currentThread().isInterrupted()) {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
-        XLog.d("POST " + cfg.apiUrl + " text=" + XLog.text(text));
+        XLog.d("POST " + XLog.safeUrl(cfg.apiUrl) + " text=" + XLog.text(text));
         Http.Response resp = http.postJson(cfg.apiUrl, rendered.body, headers);
 
         // 4) 状态码归类
@@ -70,6 +70,15 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }
         return translated.trim();
+    }
+
+    /**
+     * 取消正在进行中的请求：关闭该线程上的连接，让阻塞读立即返回，
+     * 否则热重载/关闭后旧代次的请求会继续跑到超时。
+     */
+    @Override
+    public void cancel(Thread worker) {
+        Http.cancelRequestOn(worker);
     }
 
     /** 配置校验：任一必需项缺失都给出具体提示（需求 §5.5、§8）。 */

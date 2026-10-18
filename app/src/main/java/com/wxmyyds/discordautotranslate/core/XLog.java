@@ -94,26 +94,35 @@ public final class XLog {
         }
     }
 
-    /**
-     * 对疑似密钥做脱敏：只保留首尾少量字符。
-     */
-    public static String redact(@Nullable String secret) {
-        if (secret == null || secret.isEmpty()) {
-            return "<empty>";
-        }
-        int n = secret.length();
-        if (n <= 8) {
-            return "***(len=" + n + ")";
-        }
-        return secret.substring(0, 3) + "***(len=" + n + ")";
-    }
-
-    /** 用更稳妥的固定长度摘要表示敏感正文，详细日志开关不改变脱敏规则。 */
+    /** 正文长度摘要：正文无论 verbose 开关状态都不得写入日志。 */
     public static String text(@Nullable String body) {
         if (body == null) {
             return "<null>";
         }
-        // 正文无论 verbose 开关状态都不得写入日志；即使短文本也只记录长度。
         return String.format(Locale.US, "<len=%d>", body.length());
+    }
+
+    /** 密钥只报告是否已配置，绝不输出任何前缀或长度特征。 */
+    public static String redact(@Nullable String secret) {
+        return secret == null || secret.isEmpty() ? "<empty>" : "<configured>";
+    }
+
+    /** URL 可能带查询参数或内嵌凭证，日志只保留 scheme + host（含端口）。 */
+    public static String safeUrl(@Nullable String rawUrl) {
+        if (rawUrl == null || rawUrl.isEmpty()) {
+            return "<empty>";
+        }
+        try {
+            java.net.URI uri = new java.net.URI(rawUrl);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (scheme == null || host == null) {
+                return "<unparseable>";
+            }
+            int port = uri.getPort();
+            return port > 0 ? scheme + "://" + host + ":" + port : scheme + "://" + host;
+        } catch (Throwable t) {
+            return "<unparseable>";
+        }
     }
 }

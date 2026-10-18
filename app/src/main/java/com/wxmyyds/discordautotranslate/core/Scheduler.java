@@ -4,7 +4,6 @@ import androidx.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -18,7 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>§5.4 后台异步、不阻塞主线程 → 线程池执行，结果经主线程回调。</li>
  *   <li>§5.4 限制并发 → {@link Semaphore} 按配置并发上限放行，可运行时变更。</li>
- *   <li>§5.4 去重 → {@link #inFlight} 以 messageId 为键。</li>
+ *   <li>§5.4 去重 → {@link #inFlight} 以消息 ID、内容哈希与 generation 为键。</li>
  *   <li>§5.4 超时/网络失败/HTTP 错误/限流/无效响应 → 由 {@link TranslationException} 分类。</li>
  *   <li>§风险 3 旧结果不得覆盖新译 → 回写前同时校验 generation 与 contentHash。</li>
  * </ul>
@@ -35,6 +34,11 @@ public final class Scheduler {
          * @throws Exception 网络/解析/配置错误（建议抛 {@link TranslationException}）
          */
         String translate(String text) throws Exception;
+
+        /** 取消由此引擎执行、且当前绑定到 worker 的请求。 */
+        default void cancel(Thread worker) {
+            worker.interrupt();
+        }
     }
 
     /** 结果回调，保证在主线程调用。 */
@@ -84,7 +88,27 @@ public final class Scheduler {
         }
     }
 
-    private final ExecutorService pool = new ThreadPoolExecutor(
+    /**
+     * 热重载专用：关闭当前实例并等待线程结束。
+     *
+     * <p>LSPosed 要求 {@code onHotReloading} 返回 true 前停止本模块拥有的线程；
+     * 仅调用 {@link #reset()} 只是请求停止，无法确认旧线程已退出。</p>
+     *
+     * @return true 表示线程已在超时内终止
+     */
+    public static boolean resetAndAwait(long timeoutMs) {
+        Scheduler instance;
+        synchronized (Scheduler.class) {
+            instance = sInstance;
+            sInstance = null;
+        }
+        if (instance == null) {
+            return true;
+        }
+        return instance.shutdownAndAwait(timeoutMs);
+    }
+
+    private final ThreadPoolExecutor pool = new ThreadPoolExecutor(
             0, POOL_MAX, 30L, TimeUnit.SECONDS,
             new SynchronousQueue<>(),
             r -> {
@@ -116,24 +140,100 @@ public final class Scheduler {
         }
     }
 
-    /** messageId -> 在途标记（用于去重）。 */
-    private final java.util.concurrent.ConcurrentHashMap<String, Boolean> inFlight =
+    /** 任务身份包含消息、内容版本与模块代次。 */
+    private static final class TaskKey {
+        final String messageId;
+        final String contentHash;
+        final int generation;
+
+        TaskKey(String messageId, String contentHash, int generation) {
+            this.messageId = messageId;
+            this.contentHash = contentHash;
+            this.generation = generation;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof TaskKey)) return false;
+            TaskKey that = (TaskKey) other;
+            return generation == that.generation
+                    && messageId.equals(that.messageId)
+                    && contentHash.equals(that.contentHash);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = messageId.hashCode();
+            result = 31 * result + contentHash.hashCode();
+            result = 31 * result + generation;
+            return result;
+        }
+    }
+
+    /** 保存任务执行时所需的数据，并记录当前执行线程以便引擎取消请求。 */
+    private static final class Task {
+        final TaskKey key;
+        final String text;
+        final Engine engine;
+        final Acceptance acceptance;
+        final Callback callback;
+        volatile Thread worker;
+
+        Task(TaskKey key, String text, Engine engine, Acceptance acceptance, Callback callback) {
+            this.key = key;
+            this.text = text;
+            this.engine = engine;
+            this.acceptance = acceptance;
+            this.callback = callback;
+        }
+    }
+
+    /** task key -> 在途任务；按 key-value 移除，避免旧任务删除同 key 的新标记。 */
+    private final java.util.concurrent.ConcurrentHashMap<TaskKey, Task> inFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     private final AtomicInteger completed = new AtomicInteger();
     private final AtomicInteger discarded = new AtomicInteger();
     private final AtomicInteger failed = new AtomicInteger();
     private final AtomicInteger retried = new AtomicInteger();
-    /** 是否已关闭；关闭后的实例拒绝新任务。 */
+    /** 是否已关闭；关闭后的实例拒绝新任务并抑制未交付回调。 */
     private volatile boolean shutdown;
+    private final Object lifecycleLock = new Object();
 
     public void shutdown() {
-        shutdown = true;
+        synchronized (lifecycleLock) {
+            if (shutdown) return;
+            shutdown = true;
+        }
+
+        java.util.List<Task> active = new java.util.ArrayList<>(inFlight.values());
         try {
             pool.shutdownNow();
         } catch (Throwable ignored) {
         }
+        for (Task task : active) {
+            Thread worker = task.worker;
+            if (worker != null) {
+                try {
+                    task.engine.cancel(worker);
+                } catch (Throwable t) {
+                    XLog.w("engine cancellation failed for " + task.key.messageId, t);
+                }
+            }
+        }
         inFlight.clear();
+    }
+
+    /** 关闭并等待线程池终止；超时或当前线程被中断时返回 false。 */
+    public boolean shutdownAndAwait(long timeoutMs) {
+        shutdown();
+        try {
+            return pool.awaitTermination(Math.max(0L, timeoutMs), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /**
@@ -195,62 +295,86 @@ public final class Scheduler {
     public void submit(String messageId, String contentHash, String text,
                        Engine engine, Acceptance accept, Callback callback) {
         final int gen = StateStore.get().generation();
+        final Task task = new Task(new TaskKey(messageId, contentHash, gen),
+                text, engine, accept, callback);
 
-        // 同一消息已有在途任务则不重复提交（需求 §5.4 去重）。
-        Boolean existing = inFlight.putIfAbsent(messageId, Boolean.TRUE);
+        if (shutdown) return;
+        Task existing = inFlight.putIfAbsent(task.key, task);
         if (existing != null) {
-            XLog.d("dedupe: task already in flight for " + messageId);
+            XLog.d("dedupe: task already in flight for " + messageId + " / " + contentHash);
             return;
         }
-
         if (shutdown) {
-            rejectSubmission(messageId, callback, "线程池已关闭");
+            inFlight.remove(task.key, task);
             return;
         }
         try {
-            pool.submit(() -> runTask(messageId, contentHash, text, engine, accept, callback, gen));
+            pool.execute(() -> runTask(task));
         } catch (Throwable t) {
+            inFlight.remove(task.key, task);
+            if (shutdown) return;
             XLog.w("submit rejected for " + messageId + ": " + t.getClass().getSimpleName());
-            rejectSubmission(messageId, callback, "线程池已满或已关闭");
+            TranslationException error = new TranslationException(
+                    TranslationException.Kind.UNKNOWN, "线程池已满或已关闭");
+            postResult(task, null, error, false);
         }
     }
 
-    private void rejectSubmission(String messageId, Callback callback, String reason) {
-        inFlight.remove(messageId);
-        TranslationException error = new TranslationException(
-                TranslationException.Kind.UNKNOWN, reason);
-        MainThread.post(() -> callback.onResult(messageId, true, null, error));
-    }
-
-    private void runTask(String messageId, String contentHash, String text,
-                         Engine engine, Acceptance accept, Callback callback, int gen) {
+    private void runTask(Task task) {
+        task.worker = Thread.currentThread();
         String result = null;
         Throwable error = null;
         try {
-            result = translateWithRetry(messageId, text, engine, accept, gen, contentHash);
+            if (shutdown) {
+                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
+            }
+            result = translateWithRetry(task);
         } catch (Throwable t) {
             error = t;
         } finally {
-            inFlight.remove(messageId);
+            task.worker = null;
+            inFlight.remove(task.key, task);
         }
 
-        final String fr = result;
-        final Throwable fe = error;
+        if (!shutdown) {
+            postResult(task, result, error, true);
+        }
+    }
 
+    /** 主线程交付时再次检查 shutdown 与内容接受状态。 */
+    private void postResult(Task task, @Nullable String translated,
+                            @Nullable Throwable error, boolean countCompletion) {
         MainThread.post(() -> {
-            boolean ok = accept.isStillValid(gen, contentHash);
-            if (ok) {
-                if (fe == null) {
-                    completed.incrementAndGet();
-                } else {
-                    failed.incrementAndGet();
+            synchronized (lifecycleLock) {
+                if (shutdown) return;
+                boolean accepted = isStillValid(task);
+                if (shutdown) return;
+                if (countCompletion) {
+                    if (accepted) {
+                        if (error == null) {
+                            completed.incrementAndGet();
+                        } else {
+                            failed.incrementAndGet();
+                        }
+                    } else {
+                        discarded.incrementAndGet();
+                        XLog.d("discard stale translation result for " + task.key.messageId);
+                    }
+                } else if (!accepted) {
+                    discarded.incrementAndGet();
                 }
-            } else {
-                discarded.incrementAndGet();
-                XLog.d("discard stale translation result for " + messageId);
+                task.callback.onResult(task.key.messageId, accepted, translated, error);
             }
-            callback.onResult(messageId, ok, fr, fe);
         });
+    }
+
+    private boolean isStillValid(Task task) {
+        try {
+            return task.acceptance.isStillValid(task.key.generation, task.key.contentHash);
+        } catch (Throwable t) {
+            XLog.w("acceptance check failed for " + task.key.messageId, t);
+            return false;
+        }
     }
 
     /**
@@ -258,47 +382,58 @@ public final class Scheduler {
      * 并在重试前检查任务是否已失效，避免为已过期内容浪费请求（需求 §5.4）。
      */
     @Nullable
-    private String translateWithRetry(String messageId, String text, Engine engine,
-                                      Acceptance accept, int gen, String contentHash)
-            throws Throwable {
+    private String translateWithRetry(Task task) throws Throwable {
         Throwable last = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            if (Thread.currentThread().isInterrupted()) {
+            if (shutdown || Thread.currentThread().isInterrupted()) {
                 throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
-            }
-            // 提交前已失效则直接放弃，不发请求。
-            if (!accept.isStillValid(gen, contentHash)) {
-                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已失效");
             }
 
             boolean acquired = false;
+            Throwable attemptFailure = null;
             try {
-                // 并发闸门；被中断时立即退出。
+                // 并发闸门；仅在获取许可后确认任务仍有效，避免等待许可期间发出过期请求。
                 permits.acquire();
                 acquired = true;
-                return engine.translate(text);
+                // 检查必须发生在获得许可之后；等待许可期间失效的任务不会发请求。
+                if (shutdown || Thread.currentThread().isInterrupted()) {
+                    throw new TranslationException(
+                            TranslationException.Kind.CANCELLED, "任务已取消");
+                }
+                if (!isStillValid(task)) {
+                    throw new TranslationException(
+                            TranslationException.Kind.CANCELLED, "任务已失效");
+                }
+                if (shutdown || Thread.currentThread().isInterrupted()) {
+                    throw new TranslationException(
+                            TranslationException.Kind.CANCELLED, "任务已取消");
+                }
+                return task.engine.translate(task.text);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消", ie);
             } catch (Throwable t) {
-                last = t;
-                if (!isRetryable(t) || attempt == MAX_ATTEMPTS) {
-                    throw t;
-                }
-                retried.incrementAndGet();
-                long backoff = backoffMillis(attempt, t);
-                XLog.w("attempt " + attempt + "/" + MAX_ATTEMPTS + " failed for " + messageId
-                        + " (" + t.getClass().getSimpleName() + "), retry in " + backoff + "ms");
-                if (!sleepInterruptibly(backoff)) {
-                    throw new TranslationException(TranslationException.Kind.CANCELLED,
-                            "重试等待被中断", t);
-                }
+                attemptFailure = t;
             } finally {
                 if (acquired) {
                     synchronized (concurrencyLock) {
                         permits.release();
                     }
                 }
+            }
+
+            last = attemptFailure;
+            if (!isRetryable(attemptFailure) || attempt == MAX_ATTEMPTS) {
+                throw attemptFailure;
+            }
+            retried.incrementAndGet();
+            long backoff = backoffMillis(attempt, attemptFailure);
+            XLog.w("attempt " + attempt + "/" + MAX_ATTEMPTS + " failed for "
+                    + task.key.messageId + " (" + attemptFailure.getClass().getSimpleName()
+                    + "), retry in " + backoff + "ms");
+            if (shutdown || !sleepInterruptibly(backoff)) {
+                throw new TranslationException(TranslationException.Kind.CANCELLED,
+                        "重试等待被中断", attemptFailure);
             }
         }
         throw last != null ? last
@@ -355,32 +490,88 @@ public final class Scheduler {
 
     /** 主线程投递工具。Discord 消息渲染全部发生在主线程。 */
     public static final class MainThread {
+        interface Dispatcher {
+            boolean post(Runnable runnable);
+        }
+
+        private static final Object LOCK = new Object();
         private static volatile android.os.Handler sHandler;
+        private static volatile Dispatcher sTestDispatcher;
+        private static long sEpoch;
 
         private MainThread() {
         }
 
         public static void install() {
-            if (sHandler == null) {
-                sHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            synchronized (LOCK) {
+                if (sHandler == null) {
+                    sHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+                }
+                sTestDispatcher = null;
+                sEpoch++;
             }
         }
 
         public static void clear() {
-            sHandler = null;
+            android.os.Handler old;
+            synchronized (LOCK) {
+                old = sHandler;
+                sHandler = null;
+                sTestDispatcher = null;
+                sEpoch++;
+            }
+            if (old != null) {
+                old.removeCallbacksAndMessages(null);
+            }
         }
 
-        public static void post(Runnable r) {
-            android.os.Handler h = sHandler;
-            if (h == null) {
-                // 未安装时（理论上不应发生）直接执行，避免任务丢失。
-                r.run();
-                return;
+        /** 仅供同包 JVM 单测显式启用；生产环境没有 direct-dispatch fallback。 */
+        static void setDirectDispatcherForTests() {
+            setDispatcherForTests(runnable -> {
+                runnable.run();
+                return true;
+            });
+        }
+
+        static void setDispatcherForTests(Dispatcher dispatcher) {
+            android.os.Handler old;
+            synchronized (LOCK) {
+                old = sHandler;
+                sHandler = null;
+                sTestDispatcher = dispatcher;
+                sEpoch++;
             }
-            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-                r.run();
+            if (old != null) {
+                old.removeCallbacksAndMessages(null);
+            }
+        }
+
+        public static void post(Runnable runnable) {
+            final android.os.Handler handler;
+            final Dispatcher dispatcher;
+            final long epoch;
+            synchronized (LOCK) {
+                handler = sHandler;
+                dispatcher = sTestDispatcher;
+                epoch = sEpoch;
+            }
+            if (handler == null && dispatcher == null) return;
+
+            Runnable guarded = () -> {
+                synchronized (LOCK) {
+                    if (epoch != sEpoch || (handler != null && handler != sHandler)
+                            || (dispatcher != null && dispatcher != sTestDispatcher)) {
+                        return;
+                    }
+                }
+                runnable.run();
+            };
+            if (dispatcher != null) {
+                dispatcher.post(guarded);
+            } else if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                guarded.run();
             } else {
-                h.post(r);
+                handler.post(guarded);
             }
         }
     }

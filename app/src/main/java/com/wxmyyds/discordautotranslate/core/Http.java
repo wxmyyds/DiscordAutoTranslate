@@ -67,14 +67,17 @@ public final class Http {
             if (multiLine == null) {
                 return h;
             }
+            int lineNo = 0;
             for (String raw : multiLine.split("\r?\n")) {
+                lineNo++;
                 String line = raw.trim();
                 if (line.isEmpty() || line.startsWith("#")) {
                     continue;
                 }
                 int idx = line.indexOf(':');
                 if (idx <= 0) {
-                    XLog.d("ignore malformed header line: " + line);
+                    // 只记录行号与原因：该行可能包含未正确分隔的 Authorization 值。
+                    XLog.d("ignore malformed header line (line=" + lineNo + ")");
                     continue;
                 }
                 h.add(line.substring(0, idx).trim(), line.substring(idx + 1).trim());
@@ -100,9 +103,44 @@ public final class Http {
 
     private final int timeoutMs;
 
+    /**
+     * 正在执行中的请求连接，按执行线程索引。
+     *
+     * <p>{@link HttpURLConnection} 在读取阻塞期间并不会因为线程中断而立即返回，
+     * 因此取消时必须由另一个线程关闭连接。热重载/关闭需要尽快停止在途请求，
+     * 否则旧代次会继续占用线程与网络。</p>
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Thread, HttpURLConnection> ACTIVE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     public Http(int timeoutMs) {
         // 下限 1s，避免误配置成 0 导致立即超时。
         this.timeoutMs = Math.max(1000, timeoutMs);
+    }
+
+    /**
+     * 中断某个执行线程上正在进行的请求：先关闭连接使阻塞读立即返回，再请求中断。
+     *
+     * <p>连接关闭只影响该线程自己的请求；已结束或不存在时无副作用。</p>
+     *
+     * @return true 表示存在并已关闭一个在途连接
+     */
+    public static boolean cancelRequestOn(Thread worker) {
+        if (worker == null) {
+            return false;
+        }
+        HttpURLConnection conn = ACTIVE.remove(worker);
+        boolean closed = false;
+        if (conn != null) {
+            try {
+                conn.disconnect();
+                closed = true;
+            } catch (Throwable ignored) {
+                // 连接可能已被对端关闭。
+            }
+        }
+        worker.interrupt();
+        return closed;
     }
 
     /**
@@ -113,8 +151,10 @@ public final class Http {
     public Response postJson(String url, String jsonBody, Headers headers)
             throws TranslationException {
         HttpURLConnection conn = null;
+        final Thread worker = Thread.currentThread();
         try {
             conn = (HttpURLConnection) new URL(url).openConnection();
+            ACTIVE.put(worker, conn);
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(timeoutMs);
             conn.setReadTimeout(timeoutMs);
@@ -154,6 +194,7 @@ public final class Http {
                     "请求失败：" + t.getClass().getSimpleName(), t);
         } finally {
             if (conn != null) {
+                ACTIVE.remove(worker, conn);
                 try {
                     conn.disconnect();
                 } catch (Throwable ignored) {

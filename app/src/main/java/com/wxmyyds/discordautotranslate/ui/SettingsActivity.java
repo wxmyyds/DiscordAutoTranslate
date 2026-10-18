@@ -3,6 +3,8 @@ package com.wxmyyds.discordautotranslate.ui;
 import android.app.Activity;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
@@ -22,28 +24,34 @@ import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
 
-import io.github.libxposed.service.XposedService;
-import io.github.libxposed.service.XposedServiceHelper;
+import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 
-/**
- * 设置界面（需求 §5.7）。
- *
- * <p>为什么是独立 Activity 而不是 Discord 内设置项：Discord 340.13 的设置界面由
- * React Native/Hermes 渲染（{@code MainActivity extends ReactActivity}，APK 内没有任何
- * 原生 Settings Activity）。在不注入或改写 JS bundle 的前提下无法稳定插入设置项，
- * 因此按需求 §5.7 的备用方案采用独立设置 Activity。</p>
- *
- * <p>配置存储走 libxposed 的 remote preferences：本 Activity 通过
- * {@link XposedService#getRemotePreferences(String)} 读写，目标进程内的模块通过
- * {@code XposedInterface.getRemotePreferences(String)} 读取同一份数据。两侧使用相同的
- * {@link Config#GROUP}。</p>
- */
-public class SettingsActivity extends Activity implements XposedServiceHelper.OnServiceListener {
+import io.github.libxposed.service.XposedService;
+
+/** 设置界面（需求 §5.7）。 */
+public class SettingsActivity extends Activity implements XposedServiceConnectionHolder.Listener {
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService testExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor();
 
     @Nullable
     private XposedService service;
     @Nullable
     private SharedPreferences prefs;
+    @Nullable
+    private Future<?> testFuture;
+
+    private long testGeneration;
+    private long serviceGeneration;
+    private boolean saveInProgress;
+    private boolean destroyed;
 
     private EditText urlInput;
     private EditText keyInput;
@@ -60,46 +68,64 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
     private TextView statusText;
     private TextView resultText;
     private EditText testTextInput;
+    private Button saveButton;
+    private Button configCheckButton;
+    private Button testConnectionButton;
+    private Button testTranslationButton;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setTitle("Discord 自动翻译");
         setContentView(buildContentView());
-
-        // 注册 libxposed 服务监听；服务绑定前界面只读且提示未连接。
-        XposedServiceHelper.registerListener(this);
         updateStatus("正在连接 LSPosed 服务…");
+        XposedServiceConnectionHolder.bind(this);
     }
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
+        XposedServiceConnectionHolder.unbind(this);
+        cancelPendingTest();
+        testExecutor.shutdownNow();
+        saveExecutor.shutdownNow();
         super.onDestroy();
     }
 
-    // ------------------------------------------------------------ 服务回调
+    // ------------------------------------------------------------ 服务连接
 
     @Override
-    public void onServiceBind(@NonNull XposedService s) {
-        this.service = s;
-        try {
-            this.prefs = s.getRemotePreferences(Config.GROUP);
-        } catch (Throwable t) {
-            this.prefs = null;
-            updateStatus("读取配置失败：" + t.getClass().getSimpleName());
+    public void onServiceConnected(@NonNull XposedService connectedService) {
+        if (destroyed) {
             return;
         }
-        runOnUiThread(() -> {
+        service = connectedService;
+        serviceGeneration++;
+        saveInProgress = false;
+        try {
+            prefs = connectedService.getRemotePreferences(Config.GROUP);
             loadIntoUi();
-            updateStatus("已连接 LSPosed " + s.getFrameworkVersion()
-                    + "（API " + s.getApiVersion() + "）");
-        });
+            updateSaveButtonState();
+            updateStatus("已连接 LSPosed " + connectedService.getFrameworkVersion()
+                    + "（API " + connectedService.getApiVersion() + "）");
+        } catch (Throwable t) {
+            prefs = null;
+            updateSaveButtonState();
+            updateStatus("读取配置失败：" + t.getClass().getSimpleName());
+        }
     }
 
     @Override
-    public void onServiceDied(@NonNull XposedService s) {
-        this.service = null;
-        runOnUiThread(() -> updateStatus("LSPosed 服务已断开，配置无法保存。"));
+    public void onServiceDied(@NonNull XposedService deadService) {
+        if (destroyed || service != deadService) {
+            return;
+        }
+        service = null;
+        prefs = null;
+        serviceGeneration++;
+        saveInProgress = false;
+        updateSaveButtonState();
+        updateStatus("LSPosed 服务已断开，配置无法保存。");
     }
 
     // ------------------------------------------------------------ UI 构建
@@ -119,18 +145,14 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         root.addView(enabledInput, matchWrap());
 
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
-        // 只传 variation 常量会使输入类型退化为 TYPE_NULL（无法正常输入）。
         urlInput = addField(root, "API URL", Config.DEF_API_URL,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         keyInput = addField(root, "API 密钥（仅保存在本机）", "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
         targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
-        // 标注“每行一条”，因此必须是真的多行输入框。
         headersInput = addField(root, "额外请求头（每行 Name: Value）", "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        // 系统提示词独立成项：多行中文直接写，不必手动做 JSON 转义。
-        // 在 JSON 模板里用 {{system}} 引用。
         systemPromptInput = addField(root, "系统提示词（多行，在模板里用 {{system}} 引用）",
                 Config.DEF_SYSTEM_PROMPT,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
@@ -147,7 +169,8 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
         root.addView(verboseInput, matchWrap());
 
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
-                ApiTester.DEFAULT_TEST_TEXT, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                ApiTester.DEFAULT_TEST_TEXT,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
         TextView privacy = new TextView(this);
         privacy.setTextSize(12f);
@@ -155,32 +178,31 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
                 + "密钥仅保存在本机，不会写入日志。");
         root.addView(privacy, matchWrap());
 
-        Button save = new Button(this);
-        save.setText("保存");
-        save.setOnClickListener(v -> save());
-        root.addView(save, matchWrap());
+        saveButton = new Button(this);
+        saveButton.setText("保存");
+        saveButton.setEnabled(false);
+        saveButton.setOnClickListener(v -> save());
+        root.addView(saveButton, matchWrap());
 
-        // 测试按钮（需求 §3.1、§5.5）：用界面当前填写值而非已保存值进行测试，
-        // 方便在保存前先验证配置是否正确。
         LinearLayout testRow = new LinearLayout(this);
         testRow.setOrientation(LinearLayout.HORIZONTAL);
 
-        Button check = new Button(this);
-        check.setText("配置检查");
-        check.setOnClickListener(v -> runSelfCheck());
-        testRow.addView(check, new LinearLayout.LayoutParams(0,
+        configCheckButton = new Button(this);
+        configCheckButton.setText("配置检查");
+        configCheckButton.setOnClickListener(v -> runSelfCheck());
+        testRow.addView(configCheckButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button testConn = new Button(this);
-        testConn.setText("测试连接");
-        testConn.setOnClickListener(v -> runTestTranslation(true));
-        testRow.addView(testConn, new LinearLayout.LayoutParams(0,
+        testConnectionButton = new Button(this);
+        testConnectionButton.setText("测试连接");
+        testConnectionButton.setOnClickListener(v -> runTestTranslation(true));
+        testRow.addView(testConnectionButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button testTranslate = new Button(this);
-        testTranslate.setText("测试翻译");
-        testTranslate.setOnClickListener(v -> runTestTranslation(false));
-        testRow.addView(testTranslate, new LinearLayout.LayoutParams(0,
+        testTranslationButton = new Button(this);
+        testTranslationButton.setText("测试翻译");
+        testTranslationButton.setOnClickListener(v -> runTestTranslation(false));
+        testRow.addView(testTranslationButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         root.addView(testRow, matchWrap());
@@ -221,112 +243,162 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
     // ------------------------------------------------------------ 读写
 
     private void loadIntoUi() {
-        SharedPreferences p = prefs;
-        if (p == null) {
+        SharedPreferences currentPrefs = prefs;
+        if (currentPrefs == null) {
             return;
         }
-        Config.Snapshot s = Config.read(p);
-        enabledInput.setChecked(s.enabled);
-        urlInput.setText(s.apiUrl);
-        keyInput.setText(s.apiKey);
-        modelInput.setText(s.model);
-        targetLangInput.setText(s.targetLang);
-        headersInput.setText(s.extraHeaders);
-        bodyTemplateInput.setText(s.bodyTemplate);
-        systemPromptInput.setText(s.systemPrompt);
-        responsePathInput.setText(s.responsePath);
-        timeoutInput.setText(String.valueOf(s.timeoutMs));
-        concurrencyInput.setText(String.valueOf(s.maxConcurrency));
-        verboseInput.setChecked(s.verboseLog);
+        Config.Snapshot snapshot = Config.read(currentPrefs);
+        enabledInput.setChecked(snapshot.enabled);
+        urlInput.setText(snapshot.apiUrl);
+        keyInput.setText(snapshot.apiKey);
+        modelInput.setText(snapshot.model);
+        targetLangInput.setText(snapshot.targetLang);
+        headersInput.setText(snapshot.extraHeaders);
+        bodyTemplateInput.setText(snapshot.bodyTemplate);
+        systemPromptInput.setText(snapshot.systemPrompt);
+        responsePathInput.setText(snapshot.responsePath);
+        timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
+        concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
+        verboseInput.setChecked(snapshot.verboseLog);
     }
 
     private void save() {
-        SharedPreferences p = prefs;
-        if (p == null) {
+        if (destroyed || prefs == null || service == null) {
             updateStatus("未连接 LSPosed 服务，无法保存。请确认模块已在 LSPosed 中启用并勾选作用域。");
             return;
         }
+
+        Config.Snapshot snapshot = snapshotFromUi();
+        // 用 Config.read 后的有效模板检查占位符；空白字段会按既有逻辑回落默认模板。
+        List<String> missing = JsonTemplate.missingKeyPlaceholders(snapshot.bodyTemplate);
+        if (!missing.isEmpty()) {
+            warnMissingPlaceholders(missing, snapshot);
+            return;
+        }
+        commitSnapshot(snapshot);
+    }
+
+    /** 使用实际有效模板提示缺少的关键占位符；不替换或迁移用户模板。 */
+    private void warnMissingPlaceholders(List<String> missing, Config.Snapshot snapshot) {
+        StringBuilder message = new StringBuilder("有效 JSON 请求模板缺少以下占位符：\n\n");
+        for (String placeholder : missing) {
+            message.append("  •  ").append(placeholder);
+            if ("{{text}}".equals(placeholder)) {
+                message.append("　—— 消息正文不会进入请求模板，翻译请求可能无法正常工作\n");
+            } else {
+                message.append("　—— 系统提示词不会进入请求模板\n");
+            }
+        }
+        message.append("\n请确认这是有意为之；若否，请先修正模板。仍要保存当前有效配置吗？");
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("请求模板配置提醒")
+                .setMessage(message.toString())
+                .setPositiveButton("仍然保存", (dialog, which) -> commitSnapshot(snapshot))
+                .setNegativeButton("返回修改", null)
+                .show();
+    }
+
+    private void commitSnapshot(Config.Snapshot snapshot) {
+        final SharedPreferences targetPrefs = prefs;
+        final XposedService targetService = service;
+        final long generation = serviceGeneration;
+        if (destroyed || targetPrefs == null || targetService == null) {
+            updateStatus("LSPosed 服务已断开，配置无法保存。");
+            return;
+        }
+
+        final SharedPreferences.Editor editor;
         try {
-            SharedPreferences.Editor ed = p.edit();
-            ed.putBoolean(Config.KEY_ENABLED, enabledInput.isChecked());
-            ed.putString(Config.KEY_API_URL, urlInput.getText().toString().trim());
-            ed.putString(Config.KEY_API_KEY, keyInput.getText().toString().trim());
-            ed.putString(Config.KEY_MODEL, modelInput.getText().toString().trim());
-            ed.putString(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
-            ed.putString(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
-            ed.putString(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
-            ed.putString(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
-            ed.putString(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
-            ed.putInt(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
-            ed.putInt(Config.KEY_MAX_CONCURRENCY, parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
-            ed.putBoolean(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
-            ed.apply();
-            toast("已保存。新消息将按新配置翻译。");
-            updateStatus("配置已保存。");
-            // 关键检查：模板缺关键占位符时，对应配置项会静默失效
-            // （界面能填能存，但根本不会被发送）。因此用弹窗明确提醒。
-            warnMissingPlaceholders();
+            editor = targetPrefs.edit();
+            editor.putBoolean(Config.KEY_ENABLED, snapshot.enabled);
+            editor.putString(Config.KEY_API_URL, snapshot.apiUrl);
+            editor.putString(Config.KEY_API_KEY, snapshot.apiKey);
+            editor.putString(Config.KEY_MODEL, snapshot.model);
+            editor.putString(Config.KEY_TARGET_LANG, snapshot.targetLang);
+            editor.putString(Config.KEY_EXTRA_HEADERS, snapshot.extraHeaders);
+            editor.putString(Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt);
+            editor.putString(Config.KEY_BODY_TEMPLATE, snapshot.bodyTemplate);
+            editor.putString(Config.KEY_RESPONSE_PATH, snapshot.responsePath);
+            editor.putInt(Config.KEY_TIMEOUT_MS, snapshot.timeoutMs);
+            editor.putInt(Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency);
+            editor.putBoolean(Config.KEY_VERBOSE_LOG, snapshot.verboseLog);
         } catch (Throwable t) {
+            updateStatus("保存失败：" + t.getClass().getSimpleName());
+            return;
+        }
+
+        saveInProgress = true;
+        updateSaveButtonState();
+        updateStatus("正在保存配置…");
+        try {
+            saveExecutor.execute(() -> {
+                boolean committed = false;
+                Throwable failure = null;
+                try {
+                    committed = editor.commit();
+                } catch (Throwable t) {
+                    failure = t;
+                }
+                final boolean commitResult = committed;
+                final Throwable commitFailure = failure;
+                mainHandler.post(() -> {
+                    if (destroyed || generation != serviceGeneration
+                            || targetPrefs != prefs || targetService != service) {
+                        return;
+                    }
+                    saveInProgress = false;
+                    updateSaveButtonState();
+                    if (commitFailure != null) {
+                        updateStatus("保存失败：" + commitFailure.getClass().getSimpleName());
+                    } else if (!commitResult) {
+                        updateStatus("保存失败：配置未能持久化。");
+                    } else {
+                        toast("配置已保存。");
+                        // 目标进程不保证会收到跨进程变更通知；不声称已即时生效。
+                        updateStatus("配置已保存；若 Discord 正在运行，新配置可能需要重启 Discord 后才生效。");
+                    }
+                });
+            });
+        } catch (Throwable t) {
+            saveInProgress = false;
+            updateSaveButtonState();
             updateStatus("保存失败：" + t.getClass().getSimpleName());
         }
     }
 
-    /** 模板缺关键占位符时弹窗提醒（每次保存后检查）。 */
-    private void warnMissingPlaceholders() {
-        java.util.List<String> missing = JsonTemplate.missingKeyPlaceholders(
-                bodyTemplateInput.getText().toString());
-        if (missing.isEmpty()) {
-            return;
+    private void updateSaveButtonState() {
+        if (saveButton != null) {
+            saveButton.setEnabled(!destroyed && service != null && prefs != null && !saveInProgress);
         }
-        StringBuilder sb = new StringBuilder();
-        sb.append("JSON 请求模板缺少以下占位符：\n\n");
-        for (String p : missing) {
-            sb.append("  •  ").append(p);
-            if ("{{text}}".equals(p)) {
-                sb.append("　—— 消息正文不会被发送，翻译无法工作\n");
-            } else {
-                sb.append("　—— 系统提示词不会被发送，提示词约束不起作用\n");
-            }
-        }
-        sb.append("\n请把模板中对应内容改为上述占位符。默认模板：\n\n")
-                .append(Config.DEF_BODY_TEMPLATE);
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("请求模板配置有问题")
-                .setMessage(sb.toString())
-                .setPositiveButton("用默认模板", (d, w) -> {
-                    bodyTemplateInput.setText(Config.DEF_BODY_TEMPLATE);
-                    toast("已填入默认模板，请再点一次“保存”。");
-                })
-                .setNegativeButton("知道了", null)
-                .show();
     }
 
-    private static int parseInt(EditText et, int def) {
+    private static int parseInt(EditText editText, int defaultValue) {
         try {
-            return Integer.parseInt(et.getText().toString().trim());
+            return Integer.parseInt(editText.getText().toString().trim());
         } catch (Throwable t) {
-            return def;
+            return defaultValue;
         }
     }
 
     // ------------------------------------------------------------ 测试功能
 
-    /** 用界面当前值构造配置快照（不依赖已保存值，也不发起写入）。 */
+    /** 用界面当前值构造快照，配置检查、网络测试和保存共用同一套字段读取。 */
     private Config.Snapshot snapshotFromUi() {
-        MemoryPrefs p = new MemoryPrefs();
-        p.put(Config.KEY_ENABLED, enabledInput.isChecked());
-        p.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
-        p.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
-        p.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
-        p.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
-        p.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
-        p.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
-        p.put(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
-        p.put(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
-        p.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
-        p.put(Config.KEY_MAX_CONCURRENCY, parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
-        p.put(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
-        return Config.read(p);
+        MemoryPrefs memoryPrefs = new MemoryPrefs();
+        memoryPrefs.put(Config.KEY_ENABLED, enabledInput.isChecked());
+        memoryPrefs.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
+        memoryPrefs.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
+        memoryPrefs.put(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
+        memoryPrefs.put(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
+        memoryPrefs.put(Config.KEY_MAX_CONCURRENCY,
+                parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
+        memoryPrefs.put(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
+        return Config.read(memoryPrefs);
     }
 
     /** 离线配置检查：不发网络请求。 */
@@ -335,49 +407,118 @@ public class SettingsActivity extends Activity implements XposedServiceHelper.On
     }
 
     /**
-     * 真实请求测试。
+     * 真实请求测试，使用本页面独立的单任务 executor。
      *
-     * @param connectionTest true=用固定测试文本（等价于连接测试），
-     *                       false=用界面下方“测试文本”输入框的内容
+     * @param connectionTest true=使用固定测试文本，false=使用测试文本输入框
      */
     private void runTestTranslation(boolean connectionTest) {
-        Config.Snapshot cfg = snapshotFromUi();
+        if (destroyed || testFuture != null) {
+            return;
+        }
+        Config.Snapshot snapshot = snapshotFromUi();
         final String text = connectionTest
-                ? ApiTester.DEFAULT_TEST_TEXT
-                : testTextInput.getText().toString();
-
+                ? ApiTester.DEFAULT_TEST_TEXT : testTextInput.getText().toString();
         if (!connectionTest && text.trim().isEmpty()) {
             resultText.setText("请先输入测试文本。");
             return;
         }
+
+        final long generation = ++testGeneration;
         resultText.setText("请求中…");
-        // 网络请求不得阻塞 UI 线程。
-        new Thread(() -> {
-            final ApiTester.Result r = connectionTest
-                    ? ApiTester.testConnection(cfg)
-                    : ApiTester.testTranslation(cfg, text);
-            runOnUiThread(() -> showResult(r));
-        }, "dat-api-test").start();
-    }
+        setTestButtonsEnabled(false);
 
-    private void showResult(ApiTester.Result r) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(r.ok ? "✓ " : "✗ ").append(r.message);
-        if (r.translated != null) {
-            sb.append("\n译文：").append(r.translated);
+        FutureTask<ApiTester.Result> task = new FutureTask<ApiTester.Result>(() -> connectionTest
+                ? ApiTester.testConnection(snapshot)
+                : ApiTester.testTranslation(snapshot, text)) {
+            @Override
+            protected void done() {
+                final ApiTester.Result result;
+                final Throwable failure;
+                try {
+                    result = get();
+                    failure = null;
+                } catch (CancellationException e) {
+                    return;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    mainHandler.post(() -> finishTest(generation, this, null, e));
+                    return;
+                } catch (ExecutionException e) {
+                    mainHandler.post(() -> finishTest(generation, this, null,
+                            e.getCause() == null ? e : e.getCause()));
+                    return;
+                }
+                mainHandler.post(() -> finishTest(generation, this, result, failure));
+            }
+        };
+        testFuture = task;
+        try {
+            testExecutor.execute(task);
+        } catch (Throwable t) {
+            testFuture = null;
+            setTestButtonsEnabled(true);
+            resultText.setText("测试未能启动：" + t.getClass().getSimpleName());
         }
-        resultText.setText(sb.toString());
-        // 仅提示是否成功，不把密钥或正文写入状态行。
-        updateStatus(r.ok ? "测试通过。" : "测试失败，详见下方结果。");
     }
 
-    private void updateStatus(String s) {
-        if (statusText != null) {
-            statusText.setText(s);
+    private void finishTest(long generation, Future<?> task,
+                            @Nullable ApiTester.Result result, @Nullable Throwable failure) {
+        if (destroyed || generation != testGeneration || testFuture != task) {
+            return;
+        }
+        testFuture = null;
+        setTestButtonsEnabled(true);
+        if (result != null) {
+            showResult(result);
+        } else {
+            resultText.setText("测试失败："
+                    + (failure == null ? "未知错误" : failure.getClass().getSimpleName()));
+            updateStatus("测试失败，详见下方结果。");
         }
     }
 
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    private void cancelPendingTest() {
+        testGeneration++;
+        Future<?> pending = testFuture;
+        testFuture = null;
+        if (pending != null) {
+            // Future 取消会发出中断请求；不假定网络实现一定能因此中断 HTTP I/O。
+            pending.cancel(true);
+        }
+        setTestButtonsEnabled(true);
+    }
+
+    private void setTestButtonsEnabled(boolean enabled) {
+        if (configCheckButton != null) {
+            configCheckButton.setEnabled(enabled);
+        }
+        if (testConnectionButton != null) {
+            testConnectionButton.setEnabled(enabled);
+        }
+        if (testTranslationButton != null) {
+            testTranslationButton.setEnabled(enabled);
+        }
+    }
+
+    private void showResult(ApiTester.Result result) {
+        StringBuilder message = new StringBuilder();
+        message.append(result.ok ? "✓ " : "✗ ").append(result.message);
+        if (result.translated != null) {
+            message.append("\n译文：").append(result.translated);
+        }
+        resultText.setText(message.toString());
+        updateStatus(result.ok ? "测试通过。" : "测试失败，详见下方结果。");
+    }
+
+    private void updateStatus(String status) {
+        if (!destroyed && statusText != null) {
+            statusText.setText(status);
+        }
+    }
+
+    private void toast(String message) {
+        if (!destroyed) {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+        }
     }
 }
