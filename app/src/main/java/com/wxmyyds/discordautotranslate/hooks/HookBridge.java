@@ -249,7 +249,6 @@ public final class HookBridge {
             entry.status = StateStore.Status.TRANSLATED;
             entry.showingOriginal = false;
             XLog.d("cache hit for " + messageId);
-            IconRegistry.refresh(messageId);
             RerenderRegistry.rerender(messageId);
             return;
         }
@@ -258,7 +257,7 @@ public final class HookBridge {
             entry.status = StateStore.Status.FAILED;
             entry.lastError = "API 未配置";
             XLog.d("api not configured, skip " + messageId);
-            IconRegistry.refresh(messageId);
+            RerenderRegistry.rerender(messageId);
             return;
         }
 
@@ -272,9 +271,8 @@ public final class HookBridge {
         entry.status = StateStore.Status.TRANSLATING;
         XLog.i("translate start " + messageId + " " + v.reason
                 + " text=" + XLog.text(ex.text));
-        // 立即刷新，让「翻译中」旋转图标显示出来；同时也便于排障时
-        // 直接看出图标是否已成功挂载。
-        IconRegistry.refresh(messageId);
+        // 立即重渲染，让「翻译中」旋转图标显示出来。
+        RerenderRegistry.rerender(messageId);
 
         Scheduler.get().submit(messageId, hash, ex.text, engine,
                 (generationSnapshot, contentHash) -> {
@@ -308,7 +306,7 @@ public final class HookBridge {
                         ? StateStore.Status.TRANSLATED
                         : StateStore.Status.IDLE;
             }
-            IconRegistry.refresh(id);
+            RerenderRegistry.rerender(id);
             return;
         }
         if (error != null || translated == null || translated.isEmpty()) {
@@ -323,7 +321,6 @@ public final class HookBridge {
             TranslationCache.get().put(cur.contentHash, translated);
             XLog.i("translate done " + id + " -> " + XLog.text(translated));
         }
-        IconRegistry.refresh(id);
         RerenderRegistry.rerender(id);
     }
 
@@ -348,7 +345,35 @@ public final class HookBridge {
         e.showingOriginal = !e.showingOriginal;
         XLog.d("toggle " + messageId + " showingOriginal=" + e.showingOriginal);
         RerenderRegistry.rerender(messageId);
-        IconRegistry.refresh(messageId);
+    }
+
+    /**
+     * 行内图标点击的统一入口（需求：成功时切换原文/译文，失败时重试）。
+     *
+     * <p>由 {@code IconClickSpanFactory} 创建的 span 回调触发。
+     * 状态可能因列表复用而变化，因此每次都重新读取当前状态。</p>
+     */
+    public void onIconClicked(String messageId) {
+        if (messageId == null) {
+            return;
+        }
+        StateStore.Entry e = StateStore.get().peek(messageId);
+        if (e == null) {
+            return;
+        }
+        switch (e.status) {
+            case TRANSLATED:
+                if (e.translatedText != null) {
+                    toggleShowingOriginal(messageId);
+                }
+                break;
+            case FAILED:
+                retry(messageId);
+                break;
+            default:
+                // 翻译中或未开始：忽略，避免重复触发。
+                break;
+        }
     }
 
     /** 失败后重试：由图标点击触发（需求 §2.6）。 */
@@ -359,7 +384,7 @@ public final class HookBridge {
         }
         e.status = StateStore.Status.IDLE;
         e.lastError = null;
-        IconRegistry.refresh(messageId);
+        RerenderRegistry.rerender(messageId);
 
         Object structurable = rawContent.get(messageId);
         java.lang.ref.WeakReference<View> viewRef = lastView.get(messageId);

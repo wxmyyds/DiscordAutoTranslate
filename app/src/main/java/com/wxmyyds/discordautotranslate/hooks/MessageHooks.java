@@ -1,7 +1,6 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
 import android.view.View;
-import android.view.ViewGroup;
 
 import androidx.annotation.Nullable;
 
@@ -28,19 +27,20 @@ import io.github.libxposed.api.XposedModule;
  * 回复引用  MessageViewReplyPreview → TextUtilsKt.toSpannable   (不经 setMessageContent)
  * </pre>
  *
- * <p>因此本类安装三个 Hook：</p>
+ * <p>因此本类安装四个 Hook：</p>
  * <ol>
  *   <li><b>bind</b>：{@code MessageContentViewHolder.bind} —— 唯一可靠的
  *       「视图 → 消息 ID」来源（{@code MessageContentAccessory.getMessageId}）。</li>
  *   <li><b>渲染入口</b>：{@code MessageContentView} 上的展开式 {@code setMessageContent}
  *       （参数最多、首参为 {@code MessageMargins} 的那个重载）——
- *       提供「视图 + 内容」，用于挂图标、登记重渲染、触发翻译。
+ *       提供「视图 + 内容」，用于登记重渲染、触发翻译，并把宿主视图传给行内图标注入器。
  *       注意：<b>不能</b> Hook 6 参的 {@code setMessageContent}，它只被
  *       {@code TextDisplayComponentView} 调用，不在消息路径上。</li>
  *   <li><b>文本漏斗</b>：{@code TextUtilsKt.toSpannable} —— 所有文本渲染的唯一汇聚点
- *       （含回复引用与 Embed）。翻译替换在此处完成，因为该方法是静态的、
- *       接收的 {@code StructurableText} 与 bind 阶段是同一实例，
- *       可用身份映射反查消息 ID。</li>
+ *       （含回复引用与 Embed）。翻译替换与行内图标注入都在此处完成，因为该方法是静态的、
+ *       接收的 {@code StructurableText} 与 bind 阶段是同一实例，可用身份映射反查消息 ID。</li>
+ *   <li><b>回复引用</b>：{@code MessageViewReplyPreview.configureReply} ——
+ *       把引用内的正文视图关联到被引用消息 ID，使引用内译文也能更新。</li>
  * </ol>
  *
  * <p>所有 Hook 均以 {@code ExceptionMode.PROTECTIVE} 安装，保证模块自身异常不会
@@ -58,31 +58,15 @@ public final class MessageHooks {
             "com.discord.chat.presentation.message.messagepart.MessageMargins";
 
     /**
-     * 聊天列表的<b>行容器</b>。
-     *
-     * <p>已核对：{@code RegularMessageDelegate.createView()} 返回的是
-     * {@code MessageView}（{@code extends ChatListRelativeLayout extends RelativeLayout}），
-     * <b>不是</b> {@code DecoratedMessageView}。后者只用于 React Native 组件
-     * {@code DCDMessageView}（另一个使用场景）。</p>
-     *
-     * <p>阶段 3 修正：图标不再靠从正文视图沿父链上溯挂载（时机不可靠，
-     * 会导致图标时有时无），改为 Hook {@code MessageView.setMessage} 直接
-     * 在行控件上挂载 —— 该方法的 {@code this} 就是行控件。</p>
+     * 回复引用容器。行内图标不注入它（见 {@link InlineIconInjector}），
+     * 但需要 Hook 它的 {@code configureReply} 登记重渲染目标。
      */
-    private static final String CLS_MESSAGE_VIEW =
-            "com.discord.chat.presentation.message.MessageView";
-    /** 消息数据对象，用于从 {@code setMessage} 首参取消息 ID。 */
-    private static final String CLS_MESSAGE_BRIDGE =
-            "com.discord.chat.bridge.Message";
     private static final String CLS_REPLY_PREVIEW =
             "com.discord.chat.presentation.message.MessageViewReplyPreview";
     private static final String CLS_TEXT_UTILS =
             "com.discord.chat.presentation.textutils.TextUtilsKt";
     private static final String CLS_STRUCTURABLE =
             "com.discord.chat.bridge.structurabletext.StructurableText";
-
-    /** {@code MessageView.setMessage} 的参数个数（340.13 已确认：7 个）。 */
-    private static final int SET_MESSAGE_PARAM_COUNT = 7;
 
     /** bind 的参数个数（340.13 已确认）。 */
     private static final int BIND_PARAM_COUNT = 17;
@@ -104,8 +88,6 @@ public final class MessageHooks {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(6);
         try {
             installBindHook(module, cl, handles);
-            installRowHook(module, cl, handles);
-            installRowTouchHook(module, cl, handles);
             installExpandedRenderHook(module, cl, handles);
             installToSpannableHook(module, cl, handles);
             installReplyHook(module, cl, handles);
@@ -122,10 +104,10 @@ public final class MessageHooks {
             return handles;
         }
 
-        // 单行启动摘要：排障时一眼看出六个关键 Hook 是否都就位。
-        // 期望看到 6；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
-        XLog.i("hook pipeline armed: " + handles.size() + "/6 "
-                + "(bind, row, rowTouch, expandedRender, toSpannable, configureReply)");
+        // 单行启动摘要：排障时一眼看出关键 Hook 是否都就位。
+        // 期望看到 4；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
+        XLog.i("hook pipeline armed: " + handles.size() + "/4 "
+                + "(bind, expandedRender, toSpannable, configureReply)");
         if (handles.size() < MIN_REQUIRED_HOOKS) {
             XLog.w("too few hooks installed; module will not function on this Discord version");
         }
@@ -161,13 +143,7 @@ public final class MessageHooks {
                     } catch (Throwable t) {
                         XLog.w("bind pre failed", t);
                     }
-                    Object result = chain.proceed();
-                    try {
-                        bindPost(chain.getThisObject());
-                    } catch (Throwable t) {
-                        XLog.w("bind post failed", t);
-                    }
-                    return result;
+                    return chain.proceed();
                 }));
         XLog.i("hooked MessageContentViewHolder.bind");
     }
@@ -193,35 +169,8 @@ public final class MessageHooks {
             return;
         }
         HookBridge.get().bindView(contentView, messageId);
-        // 注意：不在此处调用 onRowRecycled。bind 阶段可能早于槽位确定，
-        // 行与消息的对应关系统一由 setMessage Hook 管理（见 installRowHook）。
         XLog.d("bind " + messageId + " -> " + contentView.getClass().getSimpleName()
                 + "@" + Integer.toHexString(System.identityHashCode(contentView)));
-    }
-
-    /**
-     * bind 后置：仅记录行与消息 ID 的对应关系。
-     *
-     * <p>图标改由 {@code MessageView.setMessage} Hook 挂载（它能直接拿到行控件），
-     * 此处不再依赖父链遍历。</p>
-     */
-    private static void bindPost(@Nullable Object holder) {
-        View contentView = asView(Reflect.getField(holder, "messageContentView"));
-        if (contentView == null) {
-            return;
-        }
-        String messageId = HookBridge.get().messageIdOf(contentView);
-        if (messageId == null) {
-            return;
-        }
-        // 兼容路径：若 setMessage Hook 未生效（版本差异），仍尝试从父链找行控件。
-        // 正常情况下图标已由 setMessage Hook 挂上，findByTag 能直接命中。
-        ViewGroup row = findRowContainer(contentView);
-        if (row != null && TranslationIconView.findByTag(row) == null) {
-            IconRegistry.attach(messageId, row);
-            IconRegistry.refresh(messageId);
-            XLog.d("icon via fallback parent-chain " + messageId);
-        }
     }
 
     // ------------------------------------------------- Hook 2: 展开式 setMessageContent
@@ -253,30 +202,26 @@ public final class MessageHooks {
                 .setId("dat.setMessageContent")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
+                    View view = asView(chain.getThisObject());
+                    // 宿主必须在调用链内传递给 toSpannable（同一线程同步），
+                    // 行内图标靠它驱动旋转重绘；重渲染时同样需要，故无条件设置。
+                    InlineIconInjector.enterHost(view);
                     try {
                         // 重渲染（本模块自行发起）时无需重复登记与触发翻译；
                         // 文本替换由 toSpannable Hook 完成。
-                        if (!HookBridge.get().isRerendering()) {
-                            View view = asView(chain.getThisObject());
-                            if (view != null) {
-                                Object structurable = chain.getArg(1);
-                                Object[] renderArgs = chain.getArgs().toArray();
-                                // 记录内容身份映射，并登记“视图 + 调用目标 + 实参”供重渲染。
-                                HookBridge.get().interceptRender(view, renderArgs, structurable);
+                        if (!HookBridge.get().isRerendering() && view != null) {
+                            Object structurable = chain.getArg(1);
+                            Object[] renderArgs = chain.getArgs().toArray();
+                            // 记录内容身份映射，并登记“视图 + 调用目标 + 实参”供重渲染。
+                            HookBridge.get().interceptRender(view, renderArgs, structurable);
 
-                                String messageId = HookBridge.get().messageIdOf(view);
-                                if (messageId != null) {
-                                    RerenderRegistry.register(messageId, view,
-                                            chain.getThisObject(), target, renderArgs);
-                                    // 图标主挂载点是 setMessage Hook（能直接拿到行控件）；
-                                    // 这里只刷新状态，使“翻译中”旋转图标及时可见。
-                                    if (IconRegistry.has(messageId)) {
-                                        IconRegistry.refresh(messageId);
-                                    }
-                                    if (structurable != null) {
-                                        HookBridge.get().onMessageBound(
-                                                view, messageId, structurable);
-                                    }
+                            String messageId = HookBridge.get().messageIdOf(view);
+                            if (messageId != null) {
+                                RerenderRegistry.register(messageId, view,
+                                        chain.getThisObject(), target, renderArgs);
+                                if (structurable != null) {
+                                    HookBridge.get().onMessageBound(
+                                            view, messageId, structurable);
                                 }
                             }
                         }
@@ -284,7 +229,11 @@ public final class MessageHooks {
                         // 任何异常都不影响原始渲染（需求 §5.4 优雅降级）。
                         XLog.w("expanded render hook failed", t);
                     }
-                    return chain.proceed();
+                    try {
+                        return chain.proceed();
+                    } finally {
+                        InlineIconInjector.exitHost();
+                    }
                 }));
         XLog.i("hooked expanded setMessageContent");
     }
@@ -332,7 +281,7 @@ public final class MessageHooks {
 
     /**
      * Hook {@code TextUtilsKt.toSpannable}：所有文本渲染的唯一汇聚点，
-     * 翻译替换在此完成（含回复引用与 Embed）。
+     * 翻译替换与行内图标注入都在此完成（含回复引用与 Embed）。
      */
     private static void installToSpannableHook(XposedModule module, ClassLoader cl,
                                                List<XposedInterface.HookHandle> out) {
@@ -398,14 +347,19 @@ public final class MessageHooks {
                                     Object[] args = chain.getArgs().toArray();
                                     args[0] = replacement;
                                     XLog.d("toSpannable substituted for " + messageId);
-                                    return chain.proceed(args);
+                                    // 行内图标：用原始 structurable 反查身份映射
+                                    // （替换后的对象不在映射中）。
+                                    return InlineIconInjector.inject(structurable,
+                                            chain.proceed(args), chain.getArg(1), cl);
                                 }
                             }
                         }
                     } catch (Throwable t) {
                         XLog.w("toSpannable hook failed, falling back", t);
                     }
-                    return chain.proceed();
+                    // 行内图标注入（仅正常消息正文：回复引用/Embed 无宿主，内部会跳过）。
+                    return InlineIconInjector.inject(chain.getArg(0),
+                            chain.proceed(), chain.getArg(1), cl);
                 }));
         XLog.i("hooked TextUtilsKt.toSpannable (" + toSpannable.getParameterCount() + " params)");
     }
@@ -415,7 +369,8 @@ public final class MessageHooks {
     /**
      * Hook {@code MessageViewReplyPreview.configureReply}：把回复引用内的正文视图
      * 关联到<b>被引用消息自己的 ID</b>，使引用内的内容也能被翻译。
-     * 图标仍只挂被引用消息自身所在的行（{@link #findRowContainer} 在引用容器处返回 null）。
+     * 行内图标<b>不</b>注入回复引用（{@link InlineIconInjector} 在无宿主时跳过），
+     * 但引用内的译文切换仍需要重渲染登记。
      */
     private static void installReplyHook(XposedModule module, ClassLoader cl,
                                          List<XposedInterface.HookHandle> out) {
@@ -511,176 +466,10 @@ public final class MessageHooks {
         return asView(Reflect.getField(binding, "replyText"));
     }
 
-    /**
-     * 把消息行控件与消息 ID 绑定，并在该行直接挂载图标。
-     *
-     * <p><b>为何改 Hook 这一处</b>：之前靠从正文视图沿 {@code getParent()}
-     * 向上遍历找行控件，时机不可靠 —— 正文视图是
-     * {@code MessageAccessoriesView}（RecyclerView）的 itemView，
-     * 绑定阶段尚未 {@code addView}，且列表回收/重建时序多变，
-     * 造成「图标时有时无、且翻译完成后才出现」。
-     * {@code MessageView.setMessage} 的 {@code this} <b>就是行控件本身</b>，
-     * 首参又是带 ID 的消息对象，一次调用同时拿到两者，无需任何父链遍历。</p>
-     *
-     * <p>同时这里也负责行复用时清理旧图标，保证不会出现图标串位。</p>
-     */
-    private static void installRowHook(XposedModule module, ClassLoader cl,
-                                       List<XposedInterface.HookHandle> out) {
-        Class<?> messageViewCls = Reflect.loadClass(cl, CLS_MESSAGE_VIEW);
-        Class<?> messageCls = Reflect.loadClass(cl, CLS_MESSAGE_BRIDGE);
-        if (messageViewCls == null || messageCls == null) {
-            XLog.w("MessageView/Message not found; icon row hook unavailable");
-            return;
-        }
-        Method setMessage = Reflect.findMethod(
-                messageViewCls, "setMessage", SET_MESSAGE_PARAM_COUNT, messageCls);
-        if (setMessage == null) {
-            XLog.w("MessageView.setMessage not found (paramCount="
-                    + SET_MESSAGE_PARAM_COUNT + "); icon will rely on fallback");
-            return;
-        }
-
-        out.add(module.hook(setMessage)
-                .setId("dat.setMessage")
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(chain -> {
-                    Object result = chain.proceed();
-                    try {
-                        onRowBound(chain.getThisObject(), chain.getArg(0));
-                    } catch (Throwable t) {
-                        XLog.w("setMessage hook failed", t);
-                    }
-                    return result;
-                }));
-        XLog.i("hooked MessageView.setMessage (" + SET_MESSAGE_PARAM_COUNT + " params)");
-    }
-
-    /**
-     * Hook {@code MessageView.onInterceptTouchEvent}，让触摸落在翻译图标上时不拦截。
-     *
-     * <p><b>为何必须 Hook 这里（已核对 smali，非推测）</b>：
-     * {@code MessageView.onInterceptTouchEvent} 的实现为
-     * {@code return !allowChildGestures}。当其为 true（即
-     * {@code allowChildGestures == false}）时，行控件在
-     * {@code ViewGroup} 派发阶段就<b>直接接管整个手势</b>，
-     * 子视图（包括我们的图标）根本收不到任何触摸事件。</p>
-     *
-     * <p>因此在图标自己的 {@code onTouchEvent} 里调
-     * {@code requestDisallowInterceptTouchEvent} 是<b>无效的</b> ——
-     * 那一刻图标还没拿到事件。唯一的可行点是这个拦截器：
-     * 当触点落在图标范围内时返回 false，让事件继续下发给图标。</p>
-     */
-    private static void installRowTouchHook(XposedModule module, ClassLoader cl,
-                                            List<XposedInterface.HookHandle> out) {
-        Class<?> messageViewCls = Reflect.loadClass(cl, CLS_MESSAGE_VIEW);
-        if (messageViewCls == null) {
-            return;
-        }
-        Class<?> motionEventCls;
-        try {
-            motionEventCls = Class.forName("android.view.MotionEvent", false, cl);
-        } catch (Throwable t) {
-            motionEventCls = null;
-        }
-        Method intercept = Reflect.findMethod(
-                messageViewCls, "onInterceptTouchEvent", 1, motionEventCls);
-        if (intercept == null) {
-            XLog.w("MessageView.onInterceptTouchEvent not found; icon may be unclickable");
-            return;
-        }
-        out.add(module.hook(intercept)
-                .setId("dat.onInterceptTouchEvent")
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(chain -> {
-                    try {
-                        Object ev = chain.getArg(0);
-                        if (ev instanceof android.view.MotionEvent
-                                && TranslationIconView.hitTestIcon(
-                                asView(chain.getThisObject()),
-                                (android.view.MotionEvent) ev)) {
-                            // 让图标自己处理这次手势。
-                            return false;
-                        }
-                    } catch (Throwable t) {
-                        XLog.w("onInterceptTouchEvent hook failed", t);
-                    }
-                    return chain.proceed();
-                }));
-        XLog.i("hooked MessageView.onInterceptTouchEvent");
-    }
-
-    /**
-     * 行控件绑定消息后：登记行 → 消息 ID，并挂载/刷新图标。
-     *
-     * <p>在 {@code proceed()} 之后调用，此时行内子视图已完成重建
-     * （{@code setMessage} 内部会清空并重建 accessories）。</p>
-     */
-    private static void onRowBound(@Nullable Object rowObj, @Nullable Object messageObj) {
-        View rowView = asView(rowObj);
-        if (!(rowView instanceof ViewGroup) || messageObj == null) {
-            return;
-        }
-        String messageId = Reflect.callString(messageObj, "getId");
-        if (!HookBridge.looksLikeSnowflake(messageId)) {
-            return;
-        }
-        ViewGroup row = (ViewGroup) rowView;
-
-        // 行被复用到新消息：先解绑旧图标，避免图标与状态串位（需求 §风险 2）。
-        TranslationIconView existing = TranslationIconView.findByTag(row);
-        if (existing != null) {
-            String prev = existing.getMessageId();
-            if (prev != null && !prev.equals(messageId)) {
-                IconRegistry.detach(prev, existing);
-            }
-        }
-
-        TranslationIconView icon = IconRegistry.attach(messageId, row);
-        if (icon == null) {
-            XLog.d("row hook: attach failed for " + messageId);
-            return;
-        }
-        // 关账后行已确定可见：立即按当前状态显示（翻译中就能看到旋转图标）。
-        IconRegistry.refresh(messageId);
-        XLog.d("icon on row " + messageId + " vis=" + icon.getVisibility()
-                + " children=" + row.getChildCount());
-    }
-
     // ------------------------------------------------------------------ 工具
 
     @Nullable
     private static View asView(@Nullable Object o) {
         return o instanceof View ? (View) o : null;
-    }
-
-    /**
-     * 从正文视图向父链上溯找到消息行容器。
-     *
-     * <p>保留作为兼容位：主挂载路径已改为 {@code MessageView.setMessage}
-     * （见 {@link #installRowHook}），那里能直接拿到行控件，不依赖父链。
-     * 此处仅用于在无法拿到行控件时的兼容场景。</p>
-     */
-    @Nullable
-    static ViewGroup findRowContainer(@Nullable View contentView) {
-        return findRowContainer(contentView, true);
-    }
-
-    @Nullable
-    static ViewGroup findRowContainer(@Nullable View contentView, boolean allowReplySkip) {
-        View current = contentView;
-        int depth = 0;
-        while (current != null && depth < 24) {
-            String name = current.getClass().getName();
-            if (CLS_MESSAGE_VIEW.equals(name)) {
-                return current instanceof ViewGroup ? (ViewGroup) current : null;
-            }
-            if (allowReplySkip && CLS_REPLY_PREVIEW.equals(name)) {
-                return null;
-            }
-            android.view.ViewParent vp = current.getParent();
-            current = vp instanceof View ? (View) vp : null;
-            depth++;
-        }
-        return null;
     }
 }
