@@ -124,4 +124,37 @@ public class InlineIconGeometryTest {
         assertEquals(0, InlineIconGeometry.dpToPxAllowZero(0, 2.0f));
         assertTrue(InlineIconGeometry.dpToPxAllowZero(3, 0f) >= 0);
     }
+
+    @Test
+    public void angleAdvancesWithElapsedTimeNotFrames() {
+        // 转速只由时间决定：同样的流逝时间下，60Hz（更多帧）与 120Hz（更少帧）
+        // 得到相同角度，因此不会因刷新率不同而卡顿或变速。
+        assertEquals(90f, InlineIconGeometry.angleForElapsed(225, 900), 0.001f);
+        assertEquals(90f, InlineIconGeometry.angleForElapsed(225, 900), 0.001f);
+        assertEquals(180f, InlineIconGeometry.angleForElapsed(450, 900), 0.001f);
+    }
+
+    @Test
+    public void angleWrapsAtFullTurn() {
+        // 满一圈回到 0，不累积成 360 以上（否则 draw 时 canvas.rotate 虽可接受，
+        // 但长时间运行会让 float 精度下降）。
+        assertEquals(0f, InlineIconGeometry.angleForElapsed(900, 900), 0.001f);
+        assertEquals(180f, InlineIconGeometry.angleForElapsed(1350, 900), 0.001f);
+    }
+
+    @Test
+    public void angleIsSafeForDegenerateInputs() {
+        // 暂停后恢复会传入累计流逝时间；负值与非正周期都不得产生 NaN/异常。
+        assertEquals(0f, InlineIconGeometry.angleForElapsed(-50, 900), 0.001f);
+        assertEquals(0f, InlineIconGeometry.angleForElapsed(100, 0), 0.001f);
+        assertEquals(0f, InlineIconGeometry.angleForElapsed(100, -1), 0.001f);
+    }
+
+    @Test
+    public void angleIsAlwaysWithinOneTurn() {
+        for (long t = 0; t <= 9000; t += 137) {
+            float a = InlineIconGeometry.angleForElapsed(t, 900);
+            assertTrue("t=" + t + " angle=" + a, a >= 0f && a < 360f);
+        }
+    }
 }

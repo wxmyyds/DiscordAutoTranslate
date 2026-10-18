@@ -3,15 +3,19 @@ package com.wxmyyds.discordautotranslate.hooks;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.text.style.ImageSpan;
 import android.view.View;
 
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.StateStore;
+import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.ref.WeakReference;
-import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -32,11 +36,31 @@ import java.util.WeakHashMap;
  * <p>{@link #getSize} 刻意不修改 {@code fm}，因此图标不会撑高行距，
  * 满足「不得挤压、遮挡或截断正文」的要求。</p>
  *
- * <h3>旋转动画如何可靠重绘</h3>
+ * <h3>旋转动画如何可靠重绘（本类的关键约束）</h3>
  * <p>{@code ReplacementSpan} 本身不会触发重绘，必须由外部驱动。行内 span 拿不到
  * 宿主 {@code TextView}，因此注入时通过 {@link #bindHost} 记下宿主 View（弱引用），
- * 翻译中状态用 {@code View.postOnAnimation} 自驱动重绘。以下情况都会停止动画：
- * 宿主已回收、已 detach、状态不再是翻译中、或被同视图上的新 span 取代。</p>
+ * 翻译中状态用 {@code View.postOnAnimation} 自驱动重绘。</p>
+ *
+ * <p>「翻译中图标卡死不动」有四条已知成因，本类逐一防御：</p>
+ * <ol>
+ *   <li><b>瞬时 detach 不能终止动画</b>。列表布局/复用过程中条目视图会被 detach
+ *       再 attach；若 detach 时直接终止，动画就再也起不来。因此用两个状态区分：
+ *       {@link #active}（动画应存在）与 {@link #running}（正在排帧）。detach 只把
+ *       {@code running} 置假，{@link #active} 保持不变；重新附着时由
+ *       {@link View.OnAttachStateChangeListener} 恢复排帧。</li>
+ *   <li><b>过期链条必须能自行作废</b>。每次「重新启动」都新建 ticker 实例并登记为
+ *       当前链条（同一链条内重复投递自己的实例，每帧不产生新对象），旧实例醒来时
+ *       发现已不是当前链条就直接退出，避免同一帧被重复 invalidate
+ *       （{@code View.removeCallbacks} 无法撤销 {@code postOnAnimation}
+ *       已投递到 Choreographer 的回调）。</li>
+ *   <li><b>视角按时间计算</b>，不用每帧固定增量，否则转速随刷新率变化，
+ *       且暂停恢复后会跳变。</li>
+ *   <li><b>不旋转的新 span 也必须接管旧动画</b>。翻译完成时新 span 不再旋转，
+ *       若不停止旧 span，旧 ticker 会持续 invalidate 该视图。</li>
+ * </ol>
+ *
+ * <p>线程约定：{@link #bindHost}、排帧与视图监听器相关操作都在主线程；
+ * {@link #resetAll} 可能在热重载线程调用，内部会自行切主线程处理视图。</p>
  */
 public final class InlineIconSpan extends ImageSpan {
 
@@ -58,39 +82,60 @@ public final class InlineIconSpan extends ImageSpan {
     private static final int COLOR_ORIGINAL = 0xFF72767D;
     private static final int COLOR_FAILED = 0xFFED4245;
 
-    /** 一圈用时（毫秒）。 */
+    /** 转一圈用时（毫秒）。视角按此换算，与刷新率解耦。 */
     private static final long SPIN_DURATION_MS = 900L;
 
-    /** 当前承载动画的 span。键与值都是弱引用，视图回收后自动消失。 */
-    private static final Map<View, InlineIconSpan> ANIMATING =
-            Collections.synchronizedMap(new WeakHashMap<>());
+    /**
+     * 当前在某个视图上承担动画的 span。
+     *
+     * <p>键是弱引用；值为 span，而 span 只通过弱引用持有视图，因此不存在
+     * 「值强引用键」导致弱键永不回收的引用环。</p>
+     *
+     * <p>复合操作需要原子性，因此不用 {@code Collections.synchronizedMap}，
+     * 统一在 {@link #ANIMATING_LOCK} 下访问。</p>
+     */
+    private static final Map<View, InlineIconSpan> ANIMATING = new WeakHashMap<>();
+    private static final Object ANIMATING_LOCK = new Object();
 
     private final int iconPx;
     private final int leadingGapPx;
     private final int trailingGapPx;
 
-    /** 图标所属消息，仅用于诊断。 */
+    /** 图标所属消息，仅用于诊断日志。 */
     private final String messageId;
     /** 是否处于翻译中（决定要不要转动）。构造后不再变化：状态变化会重建 span。 */
     private final boolean spinning;
 
+    /** 宿主视图。弱引用：既不固定视图，也避免与 {@link #ANIMATING} 形成强引用环。 */
     @Nullable
     private WeakReference<View> host;
+    /** 当前视角（度）。 */
     private volatile float angle;
+    /** 动画是否应当存在（翻译中即为真）。detach 不会改变它。 */
+    private volatile boolean active;
+    /** 是否正在排帧。detach 时置假，重新附着时恢复。 */
     private volatile boolean running;
-    private final Runnable ticker = new Runnable() {
-        @Override
-        public void run() {
-            View v = host == null ? null : host.get();
-            if (!running || v == null || !v.isAttachedToWindow()) {
-                running = false;
-                return;
-            }
-            angle = (angle + 24f) % 360f;
-            v.invalidate();
-            v.postOnAnimation(this);
-        }
-    };
+    /** 本轮排帧的起始时间，用于按时间换算视角。 */
+    private volatile long spinStartMs;
+    /** 当前有效的 ticker 链条；旧链条醒来时据此判断自己已过期。 */
+    @Nullable
+    private volatile Runnable ticker;
+
+    /** detach 只暂停、attach 恢复，避免列表复用造成的瞬时 detach 永久停掉动画。 */
+    private final View.OnAttachStateChangeListener attachListener =
+            new View.OnAttachStateChangeListener() {
+                @Override
+                public void onViewAttachedToWindow(View v) {
+                    if (active) {
+                        startSpin();
+                    }
+                }
+
+                @Override
+                public void onViewDetachedFromWindow(View v) {
+                    running = false;
+                }
+            };
 
     private InlineIconSpan(Drawable drawable, float density, StateStore.Status status,
                            String messageId) {
@@ -111,7 +156,7 @@ public final class InlineIconSpan extends ImageSpan {
      *
      * @param icon      已按状态着色、且已独立复制的 Drawable
      * @param density   屏幕密度
-     * @param status    当前翻译状态（决定是否转动与配色已在 icon 上体现）
+     * @param status    当前翻译状态（配色已体现在 icon 上）
      * @param messageId 所属消息 ID
      */
     @Nullable
@@ -159,53 +204,128 @@ public final class InlineIconSpan extends ImageSpan {
     }
 
     /**
-     * 绑定宿主 View 并在需要时启动旋转。
+     * 绑定宿主 View。
      *
-     * <p>同一视图上已存在旧的动画 span 时先停掉它，避免旧 Runnable 继续刷新。</p>
+     * <p><b>无条件接管</b>：无论本 span 是否需要旋转，都先停掉该视图上原有的动画
+     * span。否则翻译完成（新 span 不旋转）时旧 ticker 会持续 invalidate 该视图。</p>
      */
     void bindHost(@Nullable View view) {
         if (view == null) {
             return;
         }
+        InlineIconSpan previous;
+        synchronized (ANIMATING_LOCK) {
+            // 需要旋转的登记为当前动画；不需要旋转的直接清掉登记。
+            previous = spinning ? ANIMATING.put(view, this) : ANIMATING.remove(view);
+        }
+        if (previous != null && previous != this) {
+            previous.terminate();
+        }
+
         this.host = new WeakReference<>(view);
         if (!spinning) {
             return;
         }
-        InlineIconSpan previous = ANIMATING.put(view, this);
-        if (previous != null && previous != this) {
-            previous.stopSpin();
-        }
+        this.active = true;
+        // 同一实例重复添加会被 View 去重（addOnAttachStateChangeListener）。
+        view.addOnAttachStateChangeListener(attachListener);
         startSpin();
     }
 
+    /** 启动（或继续）排帧。需在主线程调用。 */
     private void startSpin() {
-        if (running) {
+        if (running || !active) {
             return;
         }
         View v = host == null ? null : host.get();
-        if (v == null) {
+        if (v == null || !v.isAttachedToWindow()) {
+            // 尚未附着：不排帧，等 attach 监听器回调时再来。
+            // 这里若强行把 running 置真，attach 回调会因 running 已为真而直接返回，
+            // 动画就永远不会启动。
             return;
         }
         running = true;
-        v.postOnAnimation(ticker);
+        // 之前若暂停过，按已转过的角度回推起点，恢复时不跳变。
+        long elapsed = (long) (angle / 360f * SPIN_DURATION_MS);
+        spinStartMs = SystemClock.uptimeMillis() - elapsed;
+
+        // 每次「重新启动」才新建一条链条；同一链条内重复投递自己的实例，
+        // 因此每帧不产生新对象。旧链条醒来时据 ticker 判定自己已过期而自行退出。
+        final Runnable chain = new Runnable() {
+            @Override
+            public void run() {
+                onTick(this);
+            }
+        };
+        ticker = chain;
+        v.postOnAnimation(chain);
+        XLog.d("icon spin start " + messageId);
     }
 
-    /** 停止动画。可在任意线程调用；Runnable 下一次醒来会自行退出。 */
-    void stopSpin() {
-        running = false;
+    private void onTick(Runnable self) {
+        // 已被新链条取代（stop 后又 start，或已被新 span 接管）：本链条就此终止。
+        if (ticker != self) {
+            return;
+        }
         View v = host == null ? null : host.get();
-        if (v != null && !spinning) {
-            ANIMATING.remove(v, this);
+        if (!active || v == null) {
+            running = false;
+            return;
+        }
+        if (!v.isAttachedToWindow()) {
+            // 瞬时 detach（列表布局/复用）：只暂停排帧，保持 active，
+            // 由 attach 监听器恢复。这里若终止动画，就会永久卡死。
+            running = false;
+            return;
+        }
+        angle = InlineIconGeometry.angleForElapsed(
+                SystemClock.uptimeMillis() - spinStartMs, SPIN_DURATION_MS);
+        v.invalidate();
+        v.postOnAnimation(self);
+    }
+
+    /**
+     * 终止动画并解除本 span 在宿主上的登记。需在主线程调用。
+     */
+    private void terminate() {
+        active = false;
+        running = false;
+        ticker = null;
+        View v = host == null ? null : host.get();
+        host = null;
+        if (v != null) {
+            v.removeOnAttachStateChangeListener(attachListener);
+        }
+    }
+
+    /**
+     * 供 {@link #resetAll} 使用：终止动画，必要时切到主线程摘除视图监听器。
+     */
+    private void terminateThreadSafe() {
+        active = false;
+        running = false;
+        ticker = null;
+        final View v = host == null ? null : host.get();
+        host = null;
+        if (v == null) {
+            return;
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            v.removeOnAttachStateChangeListener(attachListener);
+        } else {
+            v.post(() -> v.removeOnAttachStateChangeListener(attachListener));
         }
     }
 
     /** 热重载/配置重置时调用：停止所有在途动画，避免旧代次 Runnable 继续存活。 */
     public static void resetAll() {
-        synchronized (ANIMATING) {
-            for (InlineIconSpan span : ANIMATING.values()) {
-                span.running = false;
-            }
+        List<InlineIconSpan> spans;
+        synchronized (ANIMATING_LOCK) {
+            spans = new ArrayList<>(ANIMATING.values());
             ANIMATING.clear();
+        }
+        for (InlineIconSpan span : spans) {
+            span.terminateThreadSafe();
         }
     }
 

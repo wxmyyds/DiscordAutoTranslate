@@ -1,13 +1,10 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
 /**
- * 实验用：行内图标的纯几何计算。
- *
- * <p><b>本类只服务于 {@code exp/inline-icon-draw-test} 分支的可行性验证</b>，
- * 不属于正式功能。</p>
+ * 行内图标的纯几何与动画计算。
  *
  * <p>把与 Android 框架无关的纯计算抽出来，便于在单元测试中直接校验，
- * 无需真机或 Robolectric。真正的绘制仍由 {@link InlineIconSpan} 调用这些结果完成。</p>
+ * 无需真机或 Robolectric。真正的绘制与排帧仍由 {@link InlineIconSpan} 调用这些结果完成。</p>
  */
 public final class InlineIconGeometry {
 
@@ -73,6 +70,24 @@ public final class InlineIconGeometry {
                                               int minTapPx, int minTrailingPx) {
         int natural = leadingGapPx + iconPx;
         return Math.max(minTrailingPx, minTapPx - natural);
+    }
+
+    /**
+     * 由已流逝时间换算旋转角度。
+     *
+     * <p>视角只与时间有关，因此转速与屏幕刷新率无关；暂停后恢复时传入「累计已流过
+     * 的时间」即可从原角度继续，不会跳变。</p>
+     *
+     * @param elapsedMs      已流逝时间（毫秒），可为 0；负值按 0 处理
+     * @param durationMs     转一圈所需时间（毫秒），必须为正
+     * @return 角度，范围 [0, 360)
+     */
+    public static float angleForElapsed(long elapsedMs, long durationMs) {
+        if (durationMs <= 0) {
+            return 0f;
+        }
+        long safe = Math.max(0L, elapsedMs);
+        return (safe % durationMs) * 360f / durationMs;
     }
 
     private InlineIconGeometry() {
