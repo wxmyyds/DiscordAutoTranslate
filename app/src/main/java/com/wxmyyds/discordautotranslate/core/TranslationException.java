@@ -31,6 +31,7 @@ public class TranslationException extends Exception {
 
     private final Kind kind;
     private final int httpStatus;
+    private final int retryAfterSeconds;
 
     public TranslationException(Kind kind, String message) {
         this(kind, message, 0, null);
@@ -41,9 +42,15 @@ public class TranslationException extends Exception {
     }
 
     public TranslationException(Kind kind, String message, int httpStatus, Throwable cause) {
+        this(kind, message, httpStatus, 0, cause);
+    }
+
+    public TranslationException(Kind kind, String message, int httpStatus,
+                                int retryAfterSeconds, Throwable cause) {
         super(message, cause);
         this.kind = kind;
         this.httpStatus = httpStatus;
+        this.retryAfterSeconds = Math.max(0, retryAfterSeconds);
     }
 
     public Kind kind() {
@@ -52,6 +59,10 @@ public class TranslationException extends Exception {
 
     public int httpStatus() {
         return httpStatus;
+    }
+
+    public int retryAfterSeconds() {
+        return retryAfterSeconds;
     }
 
     /** 是否值得自动重试（限流与临时网络/服务端错误）。 */

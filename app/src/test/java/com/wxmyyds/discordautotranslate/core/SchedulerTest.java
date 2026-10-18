@@ -278,6 +278,20 @@ public class SchedulerTest {
     }
 
     @Test
+    public void rateLimitBackoffHonorsRetryAfterWithinBound() {
+        TranslationException advised = new TranslationException(
+                TranslationException.Kind.RATE_LIMIT, "limited", 429, 7, null);
+        TranslationException huge = new TranslationException(
+                TranslationException.Kind.RATE_LIMIT, "limited", 429, Integer.MAX_VALUE, null);
+        TranslationException missing = new TranslationException(
+                TranslationException.Kind.RATE_LIMIT, "limited", 429, null);
+
+        assertEquals(7000L, Scheduler.backoffMillis(1, advised));
+        assertEquals(60000L, Scheduler.backoffMillis(1, huge));
+        assertEquals(2000L, Scheduler.backoffMillis(1, missing));
+    }
+
+    @Test
     public void configErrorIsNeverRetryable() {
         TranslationException e = new TranslationException(
                 TranslationException.Kind.CONFIG, "missing url");

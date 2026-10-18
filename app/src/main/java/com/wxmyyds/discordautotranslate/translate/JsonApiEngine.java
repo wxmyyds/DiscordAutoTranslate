@@ -128,7 +128,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
             String hint = resp.retryAfterSeconds > 0
                     ? "，建议 " + resp.retryAfterSeconds + "s 后重试" : "";
             return new TranslationException(TranslationException.Kind.RATE_LIMIT,
-                    "限流" + hint, status, null);
+                    "限流" + hint, status, resp.retryAfterSeconds, null);
         }
         if (status == 401 || status == 403) {
             return new TranslationException(TranslationException.Kind.HTTP,

@@ -81,7 +81,6 @@ public final class ModuleResources {
             if (sResolved) {
                 return sModuleRes != null;
             }
-            sResolved = true;
             XposedInterface x = sXposed;
             if (x == null) {
                 XLog.w("ModuleResources used before attach(); cannot resolve module resources");
@@ -105,6 +104,7 @@ public final class ModuleResources {
                 Resources res = ctx.getPackageManager().getResourcesForApplication(info);
                 if (res != null) {
                     sModuleRes = res;
+                    sResolved = true;
                     XLog.i("module resources resolved via PackageManager");
                     return true;
                 }
@@ -119,6 +119,7 @@ public final class ModuleResources {
                 Resources res = moduleCtx == null ? null : moduleCtx.getResources();
                 if (res != null) {
                     sModuleRes = res;
+                    sResolved = true;
                     XLog.i("module resources resolved via createPackageContext");
                     return true;
                 }

@@ -445,16 +445,17 @@ public final class Scheduler {
                 && ((TranslationException) t).isRetryable();
     }
 
-    /** 退避时长：1s、2s……并尊重服务端 Retry-After（若已被转换进消息）。 */
-    private static long backoffMillis(int attempt, Throwable t) {
+    static long backoffMillis(int attempt, Throwable t) {
+        long exponential = Math.min(4000L, 1000L * (1L << (attempt - 1)));
         if (t instanceof TranslationException) {
-            int status = ((TranslationException) t).httpStatus();
-            if (status == 429) {
-                // 限流时给更长的退避，避免加剧限流。
-                return Math.min(8000L, 2000L * (1L << (attempt - 1)));
+            TranslationException error = (TranslationException) t;
+            if (error.httpStatus() == 429) {
+                long rateLimitBackoff = Math.min(8000L, 2000L * (1L << (attempt - 1)));
+                long retryAfter = error.retryAfterSeconds() * 1000L;
+                return Math.min(60000L, Math.max(retryAfter, rateLimitBackoff));
             }
         }
-        return Math.min(4000L, 1000L * (1L << (attempt - 1)));
+        return exponential;
     }
 
     /** @return true 表示正常睡满；false 表示被中断 */
