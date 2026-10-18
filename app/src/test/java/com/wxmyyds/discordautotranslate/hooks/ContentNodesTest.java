@@ -614,20 +614,4 @@ public class ContentNodesTest {
         assertEquals("", parts.get(1));
         assertEquals("", parts.get(2));
     }
-
-    // ---------------------------------------------------------------- 工厂
-
-    @Test
-    public void factoryRejectsUnknownTypes() {
-        // 渲染器只接受 Primitive/Annotated，其他类型必须拒绝替换
-        assertFalse(StructurableTextFactory.isRenderableType(new EmojiContentNode("x")));
-        assertFalse(StructurableTextFactory.isRenderableType(null));
-    }
-
-    @Test
-    public void factoryAcceptsRenderableTypes() {
-        assertTrue(StructurableTextFactory.isRenderableType(new PrimitiveStructurableText("x")));
-        assertTrue(StructurableTextFactory.isRenderableType(
-                new AnnotatedStructurableText(list())));
-    }
 }

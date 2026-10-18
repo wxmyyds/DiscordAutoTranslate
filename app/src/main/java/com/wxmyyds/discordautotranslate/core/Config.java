@@ -110,7 +110,7 @@ public final class Config {
         public final boolean verboseLog;
 
         Snapshot(SharedPreferences p) {
-            enabled = p.getBoolean(KEY_ENABLED, DEF_ENABLED);
+            enabled = readBoolean(p, KEY_ENABLED, DEF_ENABLED);
             apiUrl = str(p, KEY_API_URL, DEF_API_URL);
             apiKey = str(p, KEY_API_KEY, DEF_API_KEY);
             model = str(p, KEY_MODEL, DEF_MODEL);
@@ -121,7 +121,7 @@ public final class Config {
             responsePath = str(p, KEY_RESPONSE_PATH, DEF_RESPONSE_PATH);
             timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
-            verboseLog = p.getBoolean(KEY_VERBOSE_LOG, DEF_VERBOSE_LOG);
+            verboseLog = readBoolean(p, KEY_VERBOSE_LOG, DEF_VERBOSE_LOG);
         }
 
         /**
@@ -136,22 +136,34 @@ public final class Config {
          * 不会影响“无需认证 / 无额外请求头”的正常用法。</p>
          */
         private static String str(SharedPreferences p, String key, String def) {
-            String v = p.getString(key, def);
+            String v;
+            try {
+                v = p.getString(key, def);
+            } catch (RuntimeException e) {
+                return def;
+            }
             if (v == null || v.trim().isEmpty()) {
                 return def;
             }
             return v;
         }
 
-        /**
-         * 读取正整数配置。未配置、小于等于 0、或无法解析时回落默认值。
-         *
-         * <p>超时与并发为 0 或负数会导致请求立即失败或无法调度，
-         * 不应当被当作有效配置。</p>
-         */
+        private static boolean readBoolean(SharedPreferences p, String key, boolean def) {
+            try {
+                return p.getBoolean(key, def);
+            } catch (RuntimeException e) {
+                return def;
+            }
+        }
+
         private static int positiveInt(SharedPreferences p, String key, int def) {
-            int v = p.getInt(key, def);
-            return v > 0 ? v : def;
+            int value;
+            try {
+                value = p.getInt(key, def);
+            } catch (RuntimeException e) {
+                return def;
+            }
+            return value > 0 ? value : def;
         }
 
         /**

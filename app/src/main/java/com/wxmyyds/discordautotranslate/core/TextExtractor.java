@@ -177,11 +177,4 @@ public final class TextExtractor {
         }
         return " ";
     }
-
-    /** 便捷方法：只取文本。 */
-    @Nullable
-    public static String textOf(@Nullable Object structurableText) {
-        Result r = extract(structurableText);
-        return r == null ? null : r.text;
-    }
 }

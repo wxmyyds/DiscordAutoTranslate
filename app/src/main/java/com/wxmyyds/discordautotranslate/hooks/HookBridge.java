@@ -382,17 +382,18 @@ public final class HookBridge {
         if (e == null) {
             return;
         }
-        e.status = StateStore.Status.IDLE;
-        e.lastError = null;
-        RerenderRegistry.rerender(messageId);
-
         Object structurable = rawContent.get(messageId);
-        java.lang.ref.WeakReference<View> viewRef = lastView.get(messageId);
-        View last = viewRef == null ? null : viewRef.get();
         if (structurable == null) {
             XLog.d("retry skipped: no raw content for " + messageId);
             return;
         }
+
+        e.status = StateStore.Status.IDLE;
+        e.lastError = null;
+        RerenderRegistry.rerender(messageId);
+
+        java.lang.ref.WeakReference<View> viewRef = lastView.get(messageId);
+        View last = viewRef == null ? null : viewRef.get();
         onMessageBound(last, messageId, structurable);
     }
 

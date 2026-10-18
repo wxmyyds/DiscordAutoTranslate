@@ -324,17 +324,18 @@ public final class MessageHooks {
                 .setId("dat.toSpannable")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
+                    Object source = chain.getArg(0);
+                    Object[] renderArgs = chain.getArgs().toArray();
                     try {
-                        Object structurable = chain.getArg(0);
-                        String messageId = HookBridge.get().resolveMessageId(structurable);
+                        String messageId = HookBridge.get().resolveMessageId(source);
                         if (messageId != null) {
                             // 回复引用/Embed 路径不经过 setMessageContent，
                             // 在此登记内容并触发翻译。
-                            HookBridge.get().rememberContent(messageId, structurable);
+                            HookBridge.get().rememberContent(messageId, source);
 
                             StateStore.Entry e = StateStore.get().peek(messageId);
                             if (e == null) {
-                                HookBridge.get().onMessageBound(null, messageId, structurable);
+                                HookBridge.get().onMessageBound(null, messageId, source);
                                 e = StateStore.get().peek(messageId);
                             }
                             String translated = (e != null
@@ -342,24 +343,26 @@ public final class MessageHooks {
                                     && !e.showingOriginal) ? e.translatedText : null;
                             if (translated != null) {
                                 Object replacement = StructurableTextFactory
-                                        .forTranslation(structurable, translated);
+                                        .forTranslation(source, translated);
                                 if (replacement != null) {
-                                    Object[] args = chain.getArgs().toArray();
-                                    args[0] = replacement;
+                                    renderArgs[0] = replacement;
                                     XLog.d("toSpannable substituted for " + messageId);
-                                    // 行内图标：用原始 structurable 反查身份映射
-                                    // （替换后的对象不在映射中）。
-                                    return InlineIconInjector.inject(structurable,
-                                            chain.proceed(args), chain.getArg(1), cl);
                                 }
                             }
                         }
                     } catch (Throwable t) {
-                        XLog.w("toSpannable hook failed, falling back", t);
+                        XLog.w("toSpannable preparation failed, using original content", t);
+                        renderArgs[0] = source;
                     }
-                    // 行内图标注入（仅正常消息正文：回复引用/Embed 无宿主，内部会跳过）。
-                    return InlineIconInjector.inject(chain.getArg(0),
-                            chain.proceed(), chain.getArg(1), cl);
+
+                    // 宿主渲染只执行一次；图标注入失败时保留原始渲染结果。
+                    Object rendered = chain.proceed(renderArgs);
+                    try {
+                        return InlineIconInjector.inject(source, rendered, chain.getArg(1), cl);
+                    } catch (Throwable t) {
+                        XLog.w("inline icon injection failed", t);
+                        return rendered;
+                    }
                 }));
         XLog.i("hooked TextUtilsKt.toSpannable (" + toSpannable.getParameterCount() + " params)");
     }

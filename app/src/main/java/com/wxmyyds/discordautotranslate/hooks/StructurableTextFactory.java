@@ -140,10 +140,4 @@ public final class StructurableTextFactory {
                 + original.getClass().getName());
         return null;
     }
-
-    /** 判断给定对象是否为可安全替换的类型（渲染器只接受这两种）。 */
-    public static boolean isRenderableType(@Nullable Object structurableText) {
-        return ContentNodes.isPrimitive(structurableText)
-                || ContentNodes.isAnnotated(structurableText);
-    }
 }

@@ -35,7 +35,9 @@ public final class MemoryPrefs implements SharedPreferences {
     @Override
     public String getString(String key, @Nullable String defValue) {
         Object v = values.get(key);
-        return v instanceof String ? (String) v : defValue;
+        if (v == null) return defValue;
+        if (!(v instanceof String)) throw new ClassCastException(key + " is not a String");
+        return (String) v;
     }
 
     @Nullable
@@ -49,25 +51,33 @@ public final class MemoryPrefs implements SharedPreferences {
     @Override
     public int getInt(String key, int defValue) {
         Object v = values.get(key);
-        return v instanceof Integer ? (Integer) v : defValue;
+        if (v == null) return defValue;
+        if (!(v instanceof Integer)) throw new ClassCastException(key + " is not an Integer");
+        return (Integer) v;
     }
 
     @Override
     public long getLong(String key, long defValue) {
         Object v = values.get(key);
-        return v instanceof Long ? (Long) v : defValue;
+        if (v == null) return defValue;
+        if (!(v instanceof Long)) throw new ClassCastException(key + " is not a Long");
+        return (Long) v;
     }
 
     @Override
     public float getFloat(String key, float defValue) {
         Object v = values.get(key);
-        return v instanceof Float ? (Float) v : defValue;
+        if (v == null) return defValue;
+        if (!(v instanceof Float)) throw new ClassCastException(key + " is not a Float");
+        return (Float) v;
     }
 
     @Override
     public boolean getBoolean(String key, boolean defValue) {
         Object v = values.get(key);
-        return v instanceof Boolean ? (Boolean) v : defValue;
+        if (v == null) return defValue;
+        if (!(v instanceof Boolean)) throw new ClassCastException(key + " is not a Boolean");
+        return (Boolean) v;
     }
 
     @Override

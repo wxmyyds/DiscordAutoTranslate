@@ -38,6 +38,22 @@ public class ConfigTest {
     }
 
     @Test
+    public void wrongTypedPreferenceFallsBackPerField() {
+        Config.Snapshot s = Config.read(new MemoryPrefs()
+                .put(Config.KEY_API_URL, 17)
+                .put(Config.KEY_ENABLED, "true")
+                .put(Config.KEY_TIMEOUT_MS, "15000")
+                .put(Config.KEY_MODEL, "kept-model")
+                .put(Config.KEY_MAX_CONCURRENCY, 6));
+
+        assertEquals(Config.DEF_API_URL, s.apiUrl);
+        assertEquals(Config.DEF_ENABLED, s.enabled);
+        assertEquals(Config.DEF_TIMEOUT_MS, s.timeoutMs);
+        assertEquals("kept-model", s.model);
+        assertEquals(6, s.maxConcurrency);
+    }
+
+    @Test
     public void versionEncodingHasUnambiguousFieldBoundaries() {
         MemoryPrefs first = new MemoryPrefs()
                 .put(Config.KEY_API_URL, "a|b")
