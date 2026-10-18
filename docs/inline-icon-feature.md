@@ -41,7 +41,6 @@ finally { InlineIconInjector.exitHost(); }
 `setMessageContent → toSpannable` 同线程同步，因此该传递可靠。
 
 ### 1.3 三态与旋转
-
 | 状态 | 图标 | 配色 | 动画 |
 |---|---|---|---|
 | `TRANSLATING` | `progress_activity_24` | `#B9BBBE` | 原地旋转 |
@@ -52,15 +51,22 @@ finally { InlineIconInjector.exitHost(); }
 
 **旋转的可靠重绘与停止**：`ReplacementSpan` 不会自行触发重绘，因此
 `InlineIconSpan` 用 `host.postOnAnimation` 自驱动，每次 `invalidate()`。
-停止条件（任一满足即退出，不再申请下一帧）：
 
-1. 宿主已被回收（弱引用取空）；
-2. 宿主已 `detach`；
-3. span 被标记为不再旋转（状态已变，重渲染会重建 span 并停掉旧的）；
-4. 同一视图上有新 span 接管（旧的先 `stopSpin`）；
-5. `InlineIconSpan.resetAll()`（热重载 / 配置重置）。
+「翻译中图标卡死不动」有四条已知成因，均已防御：
+
+| 成因 | 修复 |
+|---|---|
+| **瞬时 detach 永久终止动画**（主因）。列表布局/复用会 detach 再 attach；原实现一旦发现 `!isAttachedToWindow()` 就把运行标记永久置为终止 | 区分 `active`（动画应存在）与 `running`（正在排帧）：detach 只置 `running=false`，`active` 不变；`View.OnAttachStateChangeListener` 在重新附着时恢复排帧 |
+| **不旋转的新 span 不停止旧的旋转 span**。翻译完成时新 span `spinning=false`，原实现直接 return，旧 ticker 永远 invalidate | `bindHost` **无条件接管**：不旋转时从登记中移除该视图的旧 span 并终止它 |
+| **转速与刷新率耦合、恢复后跳变**。原实现每帧固定 +24°，`SPIN_DURATION_MS` 声明未用 | 按 `SystemClock.uptimeMillis()` 换算角度；恢复时按已转角度回推起点；换算抽为纯函数 `angleForElapsed` |
+| **旧链条无法作废**，可能重复投递。`View.removeCallbacks` 无法撤销 `postOnAnimation` 已交给 Choreographer 的回调 | 每次重新启动新建 ticker 实例并登记为当前链条；旧链条醒来发现已非当前链条即退出 |
+
+另修复 `WeakHashMap` 的 value→key 强引用（值为 span、span 强引用作为键的 View，
+弱键永不回收）：`host` 改为弱引用，并改用私有锁 + 显式同步以支持复合操作。
 
 动画只在 `TRANSLATING` 状态运行，**不存在无意义的持续刷新**。
+
+诊断日志：翻译中启动旋转时输出 `icon spin start <id>`。
 
 ### 1.4 点击（切换 / 重试）
 
@@ -115,7 +121,7 @@ switch (状态) {
 | `hooks/InlineIconInjector.java` | 注入入口：宿主传递、范围限制、span 挂载 |
 | `hooks/IconClickSpanFactory.java` | 动态代理实现宿主 `NestedClickableSpan`；点击转发 |
 | `hooks/InlineIconGeometry.java` | 与框架无关的纯几何计算（尺寸 / 间距 / 垂直居中 / 点击宽度） |
-| `test/.../InlineIconGeometryTest.java` | 上述计算的离线断言（含点击区 32–40dp） |
+| `test/.../InlineIconGeometryTest.java` | 上述计算与时间→角度的离线断言（含点击区 32–40dp、整圈回绕、异常输入） |
 
 ### 修改
 
@@ -152,12 +158,13 @@ Run [39115884475](https://github.com/wxmyyds/DiscordAutoTranslate/actions/runs/3
 | 项目 | 结果 |
 |---|---|
 | `assembleDebug` | ✅ |
-| `testDebugUnitTest` | ✅ 114 个用例，0 失败 |
-| `InlineIconGeometryTest` | ✅ 11/11（含点击区 32–40dp） |
+| `testDebugUnitTest` | ✅ 118 个用例，0 失败 |
+| `InlineIconGeometryTest` | ✅ 15/15（含点击区 32–40dp 与旋转角度换算） |
 | APK 产物（`META-INF/xposed/*` + 3 drawable） | ✅ 上传成功 |
 
-> 首轮 Run 39115778265 因 `InlineIconSpan.resetAll()` 非 public（`ModuleEntry` 在不同包）
-> 编译失败，已在 `53384d1` 修复。
+> 失败记录：Run 39115778265 因 `InlineIconSpan.resetAll()` 非 public（`ModuleEntry` 在不同包）
+> 编译失败，已在 `53384d1` 修复。修复卡死的提交为 `ac76cc7`
+> （Run [39117238632](https://github.com/wxmyyds/DiscordAutoTranslate/actions/runs/39117238632)）。
 
 > 仓库规定禁止本地构建，以上通过 GitHub Actions 执行。
 
@@ -177,7 +184,7 @@ Run [39115884475](https://github.com/wxmyyds/DiscordAutoTranslate/actions/runs/3
 |---|---|---|
 | 1 | 成功切换 | 译文出现；点图标切回原文，再点切回译文 |
 | 2 | 失败重试 | 配置错误 API → 图标变 `error_24`；修正后点图标重试成功 |
-| 3 | 翻译中动画 | 图标原地旋转，无状态文字 |
+| 3 | 翻译中动画 | 图标原地旋转，无状态文字；**连续翻译多条也不卡死，滚动后不卡死** |
 | 4 | 长消息换行 | 图标随文字换行，不遮挡、不截断正文 |
 | 5 | 滚动复用 | 滚动后图标仍属于对应消息，不串位、无残留 |
 | 6 | 编辑消息 | 编辑后图标跟新文本末尾，旧译文不残留 |
@@ -204,6 +211,7 @@ Run [39115884475](https://github.com/wxmyyds/DiscordAutoTranslate/actions/runs/3
    这是「自然换行」的正常代价。
 4. **旋转动画按每帧 invalidate 驱动**：只在翻译中状态运行，但若同时有大量消息
    处于翻译中，会有多份动画。当前并发上限（默认 3）限制了同时翻译中的数量。
+   转速已与刷新率解耦（按时间换算）。
 5. **热重载后旧动画**：`resetAll()` 会停止所有在途动画；新代次重新注入时重建。
 6. **`progress_activity_24` 图标本身非对称**，旋转时视觉中心略有偏移；如需像素级
    校正需另做处理（本轮未做）。
