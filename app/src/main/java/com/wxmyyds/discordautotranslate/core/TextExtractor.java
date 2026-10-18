@@ -40,6 +40,7 @@ public final class TextExtractor {
     }
 
     private static final Result EMPTY = new Result("", 0, 0, false);
+    private static final int MAX_DEPTH = 12;
 
     private TextExtractor() {
     }
@@ -67,7 +68,7 @@ public final class TextExtractor {
             }
             StringBuilder sb = new StringBuilder();
             int[] counters = new int[3]; // text, opaque, codeBlocks
-            walkList((List<?>) list, sb, counters);
+            walkList((List<?>) list, sb, counters, 0);
             return new Result(sb.toString(), counters[0], counters[1], counters[2] > 0);
         }
 
@@ -75,17 +76,17 @@ public final class TextExtractor {
         return null;
     }
 
-    private static void walkList(List<?> nodes, StringBuilder out, int[] counters) {
-        if (nodes == null) {
+    private static void walkList(List<?> nodes, StringBuilder out, int[] counters, int depth) {
+        if (nodes == null || depth > MAX_DEPTH) {
             return;
         }
         for (Object node : nodes) {
-            walkNode(node, out, counters);
+            walkNode(node, out, counters, depth);
         }
     }
 
-    private static void walkNode(@Nullable Object node, StringBuilder out, int[] counters) {
-        if (node == null) {
+    private static void walkNode(@Nullable Object node, StringBuilder out, int[] counters, int depth) {
+        if (node == null || depth > MAX_DEPTH) {
             return;
         }
         String name = node.getClass().getSimpleName();
@@ -100,20 +101,16 @@ public final class TextExtractor {
                 return;
             }
             case "InlineCodeContentNode": {
-                String s = Reflect.callString(node, "getContent");
-                if (s != null) {
-                    // 行内代码保留原文，不参与翻译，但保留在文本中以便语言判断。
-                    out.append('`').append(s).append('`');
-                    counters[0]++;
-                }
+                // 代码内容不发给模型：模型会原样复述它，而节点树里代码本来就保留，
+                // 从而造成同一段代码重复出现。计入 opaque（不可翻译结构）。
+                counters[1]++;
+                out.append(' ');
                 return;
             }
             case "CodeBlockContentNode": {
                 counters[2]++;
-                String s = Reflect.callString(node, "getContent");
-                if (s != null) {
-                    out.append('\n').append(s).append('\n');
-                }
+                // 同上：代码块内容由节点树原样保留，不进请求正文。
+                out.append('\n');
                 return;
             }
             case "NewLineContentNode":
@@ -134,7 +131,7 @@ public final class TextExtractor {
                 Object inner = Reflect.call(
                         Reflect.findMethod(node.getClass(), "getContent", 0), node);
                 if (inner instanceof List) {
-                    walkList((List<?>) inner, out, counters);
+                    walkList((List<?>) inner, out, counters, depth + 1);
                 }
                 return;
             }
@@ -142,9 +139,13 @@ public final class TextExtractor {
                 Object items = Reflect.call(
                         Reflect.findMethod(node.getClass(), "getItems", 0), node);
                 if (items instanceof List) {
-                    for (Object it : (List<?>) items) {
+                    for (Object item : (List<?>) items) {
                         out.append('\n').append("• ");
-                        walkNode(it, out, counters);
+                        if (item instanceof List) {
+                            walkList((List<?>) item, out, counters, depth + 1);
+                        } else {
+                            walkNode(item, out, counters, depth + 1);
+                        }
                     }
                 }
                 return;

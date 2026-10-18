@@ -48,6 +48,24 @@ public class ConfigTest {
         assertNotEquals(Config.read(first).version(), Config.read(second).version());
     }
 
+    /**
+     * 密钥与额外请求头会改变服务端归属与响应内容，必须参与配置版本，
+     * 否则凭据变更后仍会复用旧缓存与旧在途结果。
+     */
+    @Test
+    public void credentialChangeChangesConfigVersion() {
+        String base = Config.read(new MemoryPrefs()).version();
+        String keyChanged = Config.read(new MemoryPrefs()
+                .put(Config.KEY_API_KEY, "sk-test-key")).version();
+        String headersChanged = Config.read(new MemoryPrefs()
+                .put(Config.KEY_EXTRA_HEADERS, "X-Tenant: acme")).version();
+
+        assertNotEquals("api key change must change version", base, keyChanged);
+        assertNotEquals("extra header change must change version", base, headersChanged);
+        // 版本字符串本身不得包含原始密钥。
+        assertFalse(keyChanged.contains("sk-test-key"));
+    }
+
     /** 密钥与额外请求头可为空；其他关键字段空白时回落默认。 */
     @Test
     public void blankStringsFallBackToDefaults() {

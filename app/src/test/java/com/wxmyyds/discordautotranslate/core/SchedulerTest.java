@@ -7,6 +7,8 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.util.concurrent.CountDownLatch;
@@ -19,10 +21,21 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>这些是需求 §5.4 与 §风险 3 的核心行为，也是阶段 2 的验收点。</p>
  *
- * <p>注意：{@link Scheduler.MainThread} 在未安装 Handler 时直接在当前线程执行回调，
- * 因此单测中回调是同步可见的（见 {@code MainThread.post} 的兜底分支）。</p>
+ * <p>回写必须经过 {@link Scheduler.MainThread}。生产环境没有 Handler 时会直接丢弃回调，
+ * 因此单测显式安装直投 dispatcher，不能依赖已删除的“无 Handler 时同步执行”兜底。</p>
  */
 public class SchedulerTest {
+
+    @Before
+    public void installTestDispatcher() {
+        Scheduler.MainThread.clear();
+        Scheduler.MainThread.setDirectDispatcherForTests();
+    }
+
+    @After
+    public void clearTestDispatcher() {
+        Scheduler.MainThread.clear();
+    }
 
     /** 恒成功的引擎，记录调用次数。 */
     private static final class CountingEngine implements Scheduler.Engine {
@@ -369,19 +382,120 @@ public class SchedulerTest {
         }
     }
 
+    /**
+     * 关闭之后的实例不再交付任何回调：旧代次的回调不得再触碰新代次的状态。
+     */
     @Test
-    public void rejectionCallbackReportsSubmissionFailure() throws Exception {
+    public void submitAfterShutdownDeliversNothing() throws Exception {
+        Scheduler s = new Scheduler();
+        s.shutdown();
+        Collector c = new Collector();
+        s.submit("1", "h1", "hello", new CountingEngine("t"), ALWAYS, c);
+        assertFalse("retired scheduler must not call back",
+                c.latch.await(500, TimeUnit.MILLISECONDS));
+    }
+
+    /** 线程池已满时提交失败必须回报错误，而不是静默丢弃。 */
+    @Test
+    public void rejectedSubmitReportsFailure() throws Exception {
         Scheduler s = new Scheduler();
         try {
-            s.shutdown();
-            Collector c = new Collector();
-            s.submit("1", "h1", "hello", new CountingEngine("t"), ALWAYS, c);
-            c.await();
-            assertTrue(c.accepted);
-            assertNotNull(c.error);
+            // POOL_MAX = 8；用阻塞任务把 8 个线程全部占满。
+            CountDownLatch release = new CountDownLatch(1);
+            Scheduler.Engine blocking = text -> {
+                release.await(5, TimeUnit.SECONDS);
+                return "t";
+            };
+            for (int i = 0; i < 8; i++) {
+                s.submit("busy" + i, "h" + i, "text", blocking, ALWAYS, new Collector());
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!s.stats().contains("inFlight=8") && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertTrue("pool should be saturated: " + s.stats(), s.stats().contains("inFlight=8"));
+
+            Collector rejected = new Collector();
+            s.submit("overflow", "h", "text", new CountingEngine("t"), ALWAYS, rejected);
+            rejected.await();
+            assertNotNull("submission failure must be reported", rejected.error);
+
+            release.countDown();
         } finally {
             s.shutdown();
         }
+    }
+
+    /** 同一条消息的新内容不会被旧内容的在途任务去重掉。 */
+    @Test
+    public void sameMessageWithNewContentIsNotDeduped() throws Exception {
+        Scheduler s = new Scheduler();
+        try {
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicInteger calls = new AtomicInteger();
+            Scheduler.Engine blocking = text -> {
+                calls.incrementAndGet();
+                release.await(5, TimeUnit.SECONDS);
+                return "t";
+            };
+            s.submit("1", "old-hash", "old text", blocking, ALWAYS, new Collector());
+            Collector edited = new Collector();
+            s.submit("1", "new-hash", "new text", blocking, ALWAYS, edited);
+            release.countDown();
+            edited.await();
+            assertEquals("edited content must reach the engine", 2, calls.get());
+        } finally {
+            s.shutdown();
+        }
+    }
+
+    /** 等待并发许可期间内容已失效时，不得再发出请求。 */
+    @Test
+    public void staleWhileWaitingForPermitDoesNotCallEngine() throws Exception {
+        Scheduler s = new Scheduler();
+        try {
+            s.setMaxConcurrency(1);
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicInteger calls = new AtomicInteger();
+            Scheduler.Engine engine = text -> {
+                calls.incrementAndGet();
+                release.await(5, TimeUnit.SECONDS);
+                return "t";
+            };
+            s.submit("hold", "h0", "text", engine, ALWAYS, new Collector());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!s.stats().contains("inFlight=1") && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+
+            Collector stale = new Collector();
+            s.submit("1", "h1", "text", engine, (gen, hash) -> false, stale);
+            release.countDown();
+            stale.await();
+            assertEquals("stale content must not produce a request", 1, calls.get());
+            assertFalse(stale.accepted);
+        } finally {
+            s.shutdown();
+        }
+    }
+
+    /** 热重载要求线程真正停止后才返回，因此 shutdownAndAwait 必须等待线程池终止。 */
+    @Test
+    public void shutdownAndAwaitWaitsForTermination() throws Exception {
+        Scheduler s = new Scheduler();
+        AtomicInteger calls = new AtomicInteger();
+        Scheduler.Engine slow = text -> {
+            calls.incrementAndGet();
+            Thread.sleep(300);
+            return "t";
+        };
+        s.submit("1", "h1", "text", slow, ALWAYS, new Collector());
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!s.stats().contains("inFlight=1") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertTrue("task should be running: " + s.stats(), s.stats().contains("inFlight=1"));
+        assertTrue("pool must terminate within the timeout", s.shutdownAndAwait(5000));
     }
 
     @Test

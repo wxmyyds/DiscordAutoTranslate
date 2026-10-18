@@ -7,6 +7,9 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import com.wxmyyds.discordautotranslate.core.EnglishDetector;
+import com.wxmyyds.discordautotranslate.core.TextExtractor;
+
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -175,6 +178,36 @@ public class ContentNodesTest {
         }
     }
 
+    /** 带样式的文本容器。 */
+    public static final class StrongContentNode {
+        private final List<Object> content;
+
+        public StrongContentNode(List<Object> content) {
+            this.content = content;
+        }
+
+        public List<Object> getContent() {
+            return content;
+        }
+
+        public List<Object> component1() {
+            return content;
+        }
+
+        public StrongContentNode copy(List<Object> content) {
+            return new StrongContentNode(content);
+        }
+    }
+
+    /** 提及叶子节点。 */
+    public static final class UserMentionContentNode {
+        private final String userId;
+
+        public UserMentionContentNode(String userId) {
+            this.userId = userId;
+        }
+    }
+
     /** Link 节点：除内容外还有 LinkContextData，必须原样保留。 */
     public static final class LinkContentNode {
         private final List<Object> content;
@@ -202,19 +235,19 @@ public class ContentNodesTest {
         }
     }
 
-    /** Bullet list：内容字段是 items。 */
+    /** Bullet list：items 是逐项保存的 List<List<ContentNode>>。 */
     public static final class BulletListContentNode {
         private final Long start;
         private final boolean ordered;
-        private final List<Object> items;
+        private final List<List<Object>> items;
 
-        public BulletListContentNode(Long start, boolean ordered, List<Object> items) {
+        public BulletListContentNode(Long start, boolean ordered, List<List<Object>> items) {
             this.start = start;
             this.ordered = ordered;
             this.items = items;
         }
 
-        public List<Object> getItems() {
+        public List<List<Object>> getItems() {
             return items;
         }
 
@@ -226,11 +259,11 @@ public class ContentNodesTest {
             return ordered;
         }
 
-        public List<Object> component3() {
+        public List<List<Object>> component3() {
             return items;
         }
 
-        public BulletListContentNode copy(Long start, boolean ordered, List<Object> items) {
+        public BulletListContentNode copy(Long start, boolean ordered, List<List<Object>> items) {
             return new BulletListContentNode(start, ordered, items);
         }
     }
@@ -262,6 +295,11 @@ public class ContentNodesTest {
     }
 
     private static List<Object> list(Object... items) {
+        return new ArrayList<>(Arrays.asList(items));
+    }
+
+    @SafeVarargs
+    private static List<List<Object>> itemLists(List<Object>... items) {
         return new ArrayList<>(Arrays.asList(items));
     }
 
@@ -391,17 +429,128 @@ public class ContentNodesTest {
 
     @Test
     public void handlesBulletListItems() {
-        List<Object> items = list(
-                new TextContentNode("first"),
-                new TextContentNode("second"));
-        List<Object> nodes = list(new BulletListContentNode(null, false, items));
+        List<Object> firstItem = list(new TextContentNode("first"));
+        List<Object> secondItem = list(new TextContentNode("second"));
+        List<Object> nodes = list(new BulletListContentNode(
+                3L, false, itemLists(firstItem, secondItem)));
         List<Object> out = ContentNodes.replaceText(nodes, "第一\n第二");
         assertNotNull(out);
         BulletListContentNode b = (BulletListContentNode) out.get(0);
+        assertEquals("start 必须保留", Long.valueOf(3L), b.component1());
         assertFalse("ordered 必须保留", b.component2());
         assertEquals(2, b.getItems().size());
-        assertEquals("第一", ((TextContentNode) b.getItems().get(0)).getContent());
-        assertEquals("第二", ((TextContentNode) b.getItems().get(1)).getContent());
+        assertTrue("每个列表项必须仍是 List", b.getItems().get(0) instanceof List);
+        assertEquals("第一", ((TextContentNode) b.getItems().get(0).get(0)).getContent());
+        assertEquals("第二", ((TextContentNode) b.getItems().get(1).get(0)).getContent());
+    }
+
+    @Test
+    public void rebuildsNestedBulletListsWithoutFlatteningItems() {
+        TextContentNode firstText = new TextContentNode("first");
+        InlineCodeContentNode code = new InlineCodeContentNode("keep-code");
+        UserMentionContentNode mention = new UserMentionContentNode("42");
+        TextContentNode styledText = new TextContentNode("styled");
+        StrongContentNode strong = new StrongContentNode(list(styledText));
+        TextContentNode nestedText = new TextContentNode("nested");
+        List<Object> nestedItem = list(nestedText);
+        List<List<Object>> nestedItems = itemLists(nestedItem);
+        BulletListContentNode nested = new BulletListContentNode(2L, true, nestedItems);
+        List<Object> firstItem = list(firstText, code, mention, strong, nested);
+        TextContentNode secondText = new TextContentNode("second");
+        List<Object> secondItem = list(secondText);
+        List<List<Object>> originalItems = itemLists(firstItem, secondItem);
+        BulletListContentNode original = new BulletListContentNode(7L, false, originalItems);
+        List<Object> nodes = list(original);
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "first translated\nstyled translated\nnested translated\nsecond translated");
+
+        assertNotNull(out);
+        BulletListContentNode rebuilt = (BulletListContentNode) out.get(0);
+        assertEquals(Long.valueOf(7L), rebuilt.component1());
+        assertFalse(rebuilt.component2());
+        assertEquals(2, rebuilt.getItems().size());
+        assertTrue("外层列表项仍为 List", rebuilt.getItems().get(0) instanceof List);
+        List<Object> rebuiltFirstItem = rebuilt.getItems().get(0);
+        assertEquals(5, rebuiltFirstItem.size());
+        assertEquals("first translated", ((TextContentNode) rebuiltFirstItem.get(0)).getContent());
+        assertSame("代码节点必须保留", code, rebuiltFirstItem.get(1));
+        assertSame("提及节点必须保留", mention, rebuiltFirstItem.get(2));
+        StrongContentNode rebuiltStrong = (StrongContentNode) rebuiltFirstItem.get(3);
+        assertEquals("styled translated",
+                ((TextContentNode) rebuiltStrong.getContent().get(0)).getContent());
+
+        BulletListContentNode rebuiltNested = (BulletListContentNode) rebuiltFirstItem.get(4);
+        assertEquals(Long.valueOf(2L), rebuiltNested.component1());
+        assertTrue(rebuiltNested.component2());
+        assertEquals(1, rebuiltNested.getItems().size());
+        assertTrue("嵌套列表项仍为 List", rebuiltNested.getItems().get(0) instanceof List);
+        assertEquals("nested translated",
+                ((TextContentNode) rebuiltNested.getItems().get(0).get(0)).getContent());
+        assertEquals("second translated", ((TextContentNode)
+                rebuilt.getItems().get(1).get(0)).getContent());
+
+        // 重建不得就地修改传入对象或把任一层 item list 摊平。
+        assertSame(originalItems, original.getItems());
+        assertSame(firstItem, original.getItems().get(0));
+        assertEquals("first", firstText.getContent());
+        assertSame(nestedItems, nested.getItems());
+        assertEquals("nested", nestedText.getContent());
+    }
+
+    @Test
+    public void extractsEnglishTextFromMessageContainingOnlyBulletLists() {
+        BulletListContentNode bullets = new BulletListContentNode(null, false,
+                itemLists(list(new TextContentNode("Read the guide")),
+                        list(new TextContentNode("Follow the examples"))));
+
+        TextExtractor.Result result = TextExtractor.extract(
+                new AnnotatedStructurableText(list(bullets)));
+
+        assertNotNull(result);
+        assertEquals("\n• Read the guide\n• Follow the examples", result.text);
+        assertEquals(2, result.textNodeCount);
+        assertEquals(0, result.opaqueNodeCount);
+        assertTrue(EnglishDetector.evaluate(result.text, result.textNodeCount,
+                result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+    }
+
+    @Test
+    public void extractsNestedBulletListTextWithoutCountingItemListsAsOpaque() {
+        BulletListContentNode nested = new BulletListContentNode(null, true,
+                itemLists(list(new TextContentNode("Nested instructions"))));
+        BulletListContentNode bullets = new BulletListContentNode(null, false,
+                itemLists(list(new TextContentNode("Read the guide"), nested),
+                        list(new TextContentNode("Follow the examples"))));
+
+        TextExtractor.Result result = TextExtractor.extract(
+                new AnnotatedStructurableText(list(bullets)));
+
+        assertNotNull(result);
+        assertEquals("\n• Read the guide\n• Nested instructions\n• Follow the examples",
+                result.text);
+        assertEquals(3, result.textNodeCount);
+        assertEquals(0, result.opaqueNodeCount);
+        assertTrue(EnglishDetector.evaluate(result.text, result.textNodeCount,
+                result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+    }
+
+    @Test
+    public void inlineCodeIsNotSentToTheModel() {
+        List<Object> nodes = list(
+                new TextContentNode("run "),
+                new InlineCodeContentNode("npm install"),
+                new TextContentNode(" now"));
+
+        TextExtractor.Result result = TextExtractor.extract(
+                new AnnotatedStructurableText(nodes));
+
+        assertNotNull(result);
+        // 代码节点会被原样保留在节点树里；若把它也发给模型，
+        // 模型会把代码复述进译文，导致同一段代码显示两次。
+        assertFalse("inline code must not be sent verbatim",
+                result.text.contains("npm install"));
+        assertTrue("surrounding text must still be sent", result.text.contains("run"));
     }
 
     @Test

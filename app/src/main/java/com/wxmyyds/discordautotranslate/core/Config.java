@@ -156,10 +156,36 @@ public final class Config {
 
         /**
          * 返回请求配置版本，并使用无歧义的字段边界编码。
+         *
+         * <p>密钥与额外请求头也参与版本：它们会改变服务端归属与响应内容，
+         * 因此变更后必须使用旧缓存/旧在途结果失效。为避免把密钥写进版本字符串
+         * （它会被日志与诊断间接引用），这里只编码其 SHA-256 摘要。</p>
          */
         public String version() {
             return encode(apiUrl) + encode(model) + encode(targetLang) + encode(responsePath)
-                    + encode(systemPrompt) + encode(bodyTemplate);
+                    + encode(systemPrompt) + encode(bodyTemplate)
+                    + encode(credentialFingerprint());
+        }
+
+        /** 密钥与额外请求头的不可逆指纹，用于版本比较。 */
+        private String credentialFingerprint() {
+            try {
+                java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                md.update((apiKey == null ? "" : apiKey).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                md.update((byte) 0);
+                md.update((extraHeaders == null ? "" : extraHeaders)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                byte[] digest = md.digest();
+                StringBuilder sb = new StringBuilder(digest.length * 2);
+                for (byte b : digest) {
+                    sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                    sb.append(Character.forDigit(b & 0xF, 16));
+                }
+                return sb.toString();
+            } catch (Throwable t) {
+                // 极端环境下退化为不参与版本比较，行为与旧实现一致。
+                return "";
+            }
         }
 
         private static String encode(String value) {
@@ -173,7 +199,9 @@ public final class Config {
         }
     }
 
-    /** 从 SharedPreferences 读取快照；prefs 为 null 时返回默认值快照。 */
+    /**
+     * 从 SharedPreferences 读取快照；prefs 为 null 时返回默认值快照。
+     */
     public static Snapshot read(@Nullable SharedPreferences prefs) {
         if (prefs == null) {
             return new Defaults();

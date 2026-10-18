@@ -90,24 +90,43 @@ public final class MessageHooks {
     /** 展开式 setMessageContent 的参数个数下限（实测 34，留出余量以耐受版本差异）。 */
     private static final int EXPANDED_PARAM_COUNT_MIN = 20;
 
+    /** 低于该数量视为安装不完整：模块不会生效，调用方应回滚并等待重启。 */
+    public static final int MIN_REQUIRED_HOOKS = 4;
+
     private MessageHooks() {
     }
 
-    /** 安装全部 Hook，返回句柄供热重载清理。 */
+    /** 安装全部 Hook，返回句柄供热重载清理。
+     *
+     * <p>任一步骤抛出异常时回滚已安装的 Hook，避免留下“部分安装”的进程状态；
+     * 调用方应据返回的句柄数量判断模块是否可用。</p> */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(6);
-        installBindHook(module, cl, handles);
-        installRowHook(module, cl, handles);
-        installRowTouchHook(module, cl, handles);
-        installExpandedRenderHook(module, cl, handles);
-        installToSpannableHook(module, cl, handles);
-        installReplyHook(module, cl, handles);
+        try {
+            installBindHook(module, cl, handles);
+            installRowHook(module, cl, handles);
+            installRowTouchHook(module, cl, handles);
+            installExpandedRenderHook(module, cl, handles);
+            installToSpannableHook(module, cl, handles);
+            installReplyHook(module, cl, handles);
+        } catch (Throwable t) {
+            XLog.e("hook installation aborted, rolling back " + handles.size() + " hooks", t);
+            for (XposedInterface.HookHandle handle : handles) {
+                try {
+                    handle.unhook();
+                } catch (Throwable ignored) {
+                    // 回滚尽力而为；单个 unhook 失败不应掩盖原始异常。
+                }
+            }
+            handles.clear();
+            return handles;
+        }
 
         // 单行启动摘要：排障时一眼看出六个关键 Hook 是否都就位。
         // 期望看到 6；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
         XLog.i("hook pipeline armed: " + handles.size() + "/6 "
                 + "(bind, row, rowTouch, expandedRender, toSpannable, configureReply)");
-        if (handles.size() < 4) {
+        if (handles.size() < MIN_REQUIRED_HOOKS) {
             XLog.w("too few hooks installed; module will not function on this Discord version");
         }
         return handles;
@@ -241,13 +260,14 @@ public final class MessageHooks {
                             View view = asView(chain.getThisObject());
                             if (view != null) {
                                 Object structurable = chain.getArg(1);
-                                // 记录原始参数供重渲染，并登记内容身份映射。
-                                HookBridge.get().interceptRender(
-                                        view, chain.getArgs().toArray(), structurable, null);
+                                Object[] renderArgs = chain.getArgs().toArray();
+                                // 记录内容身份映射，并登记“视图 + 调用目标 + 实参”供重渲染。
+                                HookBridge.get().interceptRender(view, renderArgs, structurable);
 
                                 String messageId = HookBridge.get().messageIdOf(view);
                                 if (messageId != null) {
-                                    RerenderRegistry.register(messageId, view, target);
+                                    RerenderRegistry.register(messageId, view,
+                                            chain.getThisObject(), target, renderArgs);
                                     // 图标主挂载点是 setMessage Hook（能直接拿到行控件）；
                                     // 这里只刷新状态，使“翻译中”旋转图标及时可见。
                                     if (IconRegistry.has(messageId)) {
@@ -419,9 +439,34 @@ public final class MessageHooks {
                     } catch (Throwable t) {
                         XLog.w("configureReply pre failed", t);
                     }
-                    return chain.proceed();
+                    Object result = chain.proceed();
+                    try {
+                        replyPost(chain, configure);
+                    } catch (Throwable t) {
+                        XLog.w("configureReply post failed", t);
+                    }
+                    return result;
                 }));
         XLog.i("hooked MessageViewReplyPreview.configureReply");
+    }
+
+    /** 后置：登记回复引用的重渲染目标，使译文完成后引用内也能更新。 */
+    private static void replyPost(XposedInterface.Chain chain, Method configureReply) {
+        Object preview = chain.getThisObject();
+        if (preview == null) {
+            return;
+        }
+        View replyText = replyTextViewOf(preview);
+        if (replyText == null) {
+            return;
+        }
+        String messageId = HookBridge.get().messageIdOf(replyText);
+        if (messageId == null) {
+            return;
+        }
+        // 回复引用的渲染入口就是这个 configureReply 自身；用同一组实参重跑即可。
+        RerenderRegistry.register(messageId, replyText, preview,
+                configureReply, chain.getArgs().toArray());
     }
 
     /** 前置：从被引用消息取 ID，登记到回复引用内的正文视图与内容映射。 */

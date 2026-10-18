@@ -9,6 +9,7 @@ import com.wxmyyds.discordautotranslate.core.Config;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
+import com.wxmyyds.discordautotranslate.core.TranslationCache;
 import com.wxmyyds.discordautotranslate.core.XLog;
 import com.wxmyyds.discordautotranslate.hooks.HookBridge;
 import com.wxmyyds.discordautotranslate.hooks.IconRegistry;
@@ -41,7 +42,7 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public class ModuleEntry extends XposedModule {
 
-    /** 目标包名。scope.list 已限定，仍做二次校验（框架可能回传同进程内的其他包）。 */
+    /** 固定包名，scope.list 已限定，仍做二次校验（框架可能回传同进程内的其他包）。 */
     private static final String TARGET_PACKAGE = "com.discord";
 
     /** 已确认适配的 Discord 版本（smali/com/discord/BuildConfig.smali）。 */
@@ -52,7 +53,6 @@ public class ModuleEntry extends XposedModule {
     private final List<XposedInterface.HookHandle> hooks = new java.util.ArrayList<>();
 
     private volatile boolean installed;
-    private volatile boolean isTargetProcess;
     private volatile ClassLoader targetClassLoader;
 
     // ------------------------------------------------------------ 生命周期
@@ -83,13 +83,13 @@ public class ModuleEntry extends XposedModule {
             return;
         }
         targetClassLoader = param.getClassLoader();
-        isTargetProcess = true;
 
         try {
             install(param.getClassLoader());
             installed = true;
         } catch (Throwable t) {
             // Hook 失败不能导致 Discord 崩溃（需求 §5.1）。仅记录诊断信息。
+            installed = false;
             XLog.e("install hooks failed, module inactive in this process", t);
         }
     }
@@ -129,10 +129,22 @@ public class ModuleEntry extends XposedModule {
             }
         }
 
-        // 丢弃旧代次状态与线程池，避免旧任务结果影响新实例。
+        // 热重载不会重放 onPackageReady，因此必须从旧 Hook 目标反推宿主 ClassLoader，
+        // 否则新代次无法重新安装 Hook（旧实例的 targetClassLoader 已经不存在）。
+        ClassLoader recovered = targetClassLoader;
+        if (recovered == null) {
+            recovered = classLoaderFromOldHooks(param.getOldHookHandles());
+        }
+        if (recovered != null) {
+            targetClassLoader = recovered;
+        }
+
+        // Drop old state and the old thread pool so stale results cannot leak in.
+        Scheduler.MainThread.clear();
         Scheduler.reset();
         StateStore.get().onNewGeneration();
         HookBridge.get().reset();
+        TranslationCache.reset();
         IconRegistry.clear();
         RerenderRegistry.clear();
         StructurableTextFactory.reset();
@@ -140,6 +152,8 @@ public class ModuleEntry extends XposedModule {
         // 否则旧代次持有的 Drawable 会被继续使用。
         ModuleResources.reset();
         TranslationIconView.clearIconDrawables();
+        // reset() 会把框架引用置空；必须重新绑定，否则图标资源全部解析失败。
+        ModuleResources.attach(this);
 
         hooks.clear();
         installed = false;
@@ -175,8 +189,42 @@ public class ModuleEntry extends XposedModule {
         loadIconDrawable();
 
         List<XposedInterface.HookHandle> created = MessageHooks.install(this, cl);
+        if (created.size() < MessageHooks.MIN_REQUIRED_HOOKS) {
+            // 半安装状态会让模块“看似已启用、实际不工作”；回滚并等待重启。
+            XLog.e("only " + created.size() + " hooks installed; rolling back partial install",
+                    null);
+            for (XposedInterface.HookHandle handle : created) {
+                try {
+                    handle.unhook();
+                } catch (Throwable ignored) {
+                    // 回滚尽力而为。
+                }
+            }
+            throw new IllegalStateException("incomplete hook installation: "
+                    + created.size() + "/" + MessageHooks.MIN_REQUIRED_HOOKS);
+        }
         hooks.addAll(created);
         XLog.i("installed " + created.size() + " hooks");
+    }
+
+    /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
+    @Nullable
+    private static ClassLoader classLoaderFromOldHooks(
+            @NonNull List<XposedInterface.HookHandle> oldHandles) {
+        for (XposedInterface.HookHandle handle : oldHandles) {
+            try {
+                java.lang.reflect.Executable target = handle.getExecutable();
+                Class<?> declaring = target == null ? null : target.getDeclaringClass();
+                ClassLoader loader = declaring == null ? null : declaring.getClassLoader();
+                if (loader != null) {
+                    XLog.i("recovered target classloader from old hook " + handle.getId());
+                    return loader;
+                }
+            } catch (Throwable t) {
+                XLog.w("cannot recover classloader from old hook", t);
+            }
+        }
+        return null;
     }
 
     /** 停止线程、解绑 Hook、清理引用。 */
@@ -189,9 +237,14 @@ public class ModuleEntry extends XposedModule {
             }
         }
         hooks.clear();
-        Scheduler.reset();
         Scheduler.MainThread.clear();
+        // 等待线程真正结束再返回 true，否则旧代次线程会继续存活（需求 §5.1）。
+        boolean stopped = Scheduler.resetAndAwait(2000L);
+        if (!stopped) {
+            XLog.w("scheduler threads did not stop within 2s; hot reload continues");
+        }
         HookBridge.get().reset();
+        TranslationCache.reset();
         IconRegistry.clear();
         RerenderRegistry.clear();
         ModuleResources.reset();
@@ -205,7 +258,7 @@ public class ModuleEntry extends XposedModule {
             Config.Snapshot snapshot = Config.read(prefs);
             HookBridge.get().updateConfig(snapshot);
             XLog.i("config loaded: enabled=" + snapshot.enabled
-                    + " url=" + snapshot.apiUrl
+                    + " url=" + XLog.safeUrl(snapshot.apiUrl)
                     + " key=" + XLog.redact(snapshot.apiKey));
         } catch (Throwable t) {
             XLog.w("getRemotePreferences failed, using defaults", t);
@@ -259,10 +312,5 @@ public class ModuleEntry extends XposedModule {
         } catch (Throwable t) {
             XLog.w("cannot read Discord BuildConfig", t);
         }
-    }
-
-    /** 供 Hook 层在需要时判断当前是否为已安装的目标进程。 */
-    public boolean isTargetProcess() {
-        return isTargetProcess;
     }
 }

@@ -40,24 +40,6 @@ import java.util.Map;
  */
 public final class ContentNodes {
 
-    /** 节点类名后缀，用于按语义分类（Discord 的节点类名稳定且未混淆）。 */
-    private static final String PKG = "com.discord.chat.bridge.contentnode.";
-
-    /** 会被递归进入、且其内容应参与翻译的容器节点（简单包装）。 */
-    private static final java.util.Set<String> CONTAINER_SIMPLE = new java.util.HashSet<>(java.util.Arrays.asList(
-            "ParagraphContentNode",
-            "StrongContentNode",
-            "EmphasisContentNode",
-            "UnderlineContentNode",
-            "StrikethroughContentNode",
-            "SpoilerContentNode",
-            "SubtextContentNode",
-            "LHeadingContentNode",
-            "BlockQuoteContentNode",
-            "LinkContentNode",
-            "HeadingContentNode"
-    ));
-
     /** 代码类节点：内容不翻译，但需要保留。 */
     private static final java.util.Set<String> CODE_NODES = new java.util.HashSet<>(java.util.Arrays.asList(
             "InlineCodeContentNode",
@@ -142,6 +124,10 @@ public final class ContentNodes {
             if (n == null) {
                 continue;
             }
+            if (n instanceof List<?>) {
+                collectTextNodes((List<?>) n, out, depth + 1);
+                continue;
+            }
             String simple = n.getClass().getSimpleName();
             if ("TextContentNode".equals(simple)) {
                 out.add(n);
@@ -175,6 +161,20 @@ public final class ContentNodes {
         if (node == null || depth > 12) {
             return node;
         }
+        if (node instanceof List<?>) {
+            List<?> children = (List<?>) node;
+            List<Object> rebuiltChildren = new ArrayList<>(children.size());
+            boolean localChanged = false;
+            for (Object child : children) {
+                Object rebuiltChild = rebuild(child, replacements, changed, depth + 1);
+                if (rebuiltChild != child) {
+                    localChanged = true;
+                }
+                rebuiltChildren.add(rebuiltChild);
+            }
+            return localChanged ? rebuiltChildren : node;
+        }
+
         String simple = node.getClass().getSimpleName();
 
         // 命中的文本节点：直接换成承载译文的同类型节点。
@@ -214,17 +214,15 @@ public final class ContentNodes {
         if (!localChanged) {
             return node;
         }
-        Object rebuilt = copyWith(node, listGetter, newChildren);
+        Object rebuilt = copyWith(node, newChildren);
         return rebuilt != null ? rebuilt : node;
     }
 
     /**
      * 用 {@code copy(...)} 重建节点，只替换内容列表，其余字段原样保留。
-     *
-     * @param listGetter "getContent" 或 "getItems"
      */
     @Nullable
-    private static Object copyWith(Object node, String listGetter, List<Object> newChildren) {
+    private static Object copyWith(Object node, List<Object> newChildren) {
         Class<?> cls = node.getClass();
         Method copy = findCopyMethod(cls);
         if (copy == null) {
