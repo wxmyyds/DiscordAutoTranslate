@@ -200,7 +200,7 @@ public final class InlineIconSpan extends ImageSpan {
     }
 
     /** 热重载/配置重置时调用：停止所有在途动画，避免旧代次 Runnable 继续存活。 */
-    static void resetAll() {
+    public static void resetAll() {
         synchronized (ANIMATING) {
             for (InlineIconSpan span : ANIMATING.values()) {
                 span.running = false;
