@@ -147,10 +147,17 @@ switch (状态) {
 
 ### 3.2 构建与单测（GitHub Actions）
 
+Run [39115884475](https://github.com/wxmyyds/DiscordAutoTranslate/actions/runs/39115884475)（commit `53384d1`）：
+
 | 项目 | 结果 |
 |---|---|
-| `assembleDebug` | 待填 |
-| `testDebugUnitTest` | 待填 |
+| `assembleDebug` | ✅ |
+| `testDebugUnitTest` | ✅ 114 个用例，0 失败 |
+| `InlineIconGeometryTest` | ✅ 11/11（含点击区 32–40dp） |
+| APK 产物（`META-INF/xposed/*` + 3 drawable） | ✅ 上传成功 |
+
+> 首轮 Run 39115778265 因 `InlineIconSpan.resetAll()` 非 public（`ModuleEntry` 在不同包）
+> 编译失败，已在 `53384d1` 修复。
 
 > 仓库规定禁止本地构建，以上通过 GitHub Actions 执行。
 
@@ -158,6 +165,33 @@ switch (状态) {
 
 需覆盖：成功切换、失败重试、翻译中动画、长消息换行、滚动复用、编辑消息、
 纯表情消息、回复引用，以及链接/提及/表情点击、长按、滚动。
+
+**测试步骤**：
+
+1. 从 Run 39115884475 下载 `DiscordAutoTranslate-Debug-*` APK；
+2. 安装并启用（作用域 `com.discord`），重启 Discord；
+3. 确认 logcat 出现 `hook pipeline armed: 4/4 (bind, expandedRender, toSpannable, configureReply)`；
+4. 逐项测试下列行为：
+
+| # | 测试项 | 预期 |
+|---|---|---|
+| 1 | 成功切换 | 译文出现；点图标切回原文，再点切回译文 |
+| 2 | 失败重试 | 配置错误 API → 图标变 `error_24`；修正后点图标重试成功 |
+| 3 | 翻译中动画 | 图标原地旋转，无状态文字 |
+| 4 | 长消息换行 | 图标随文字换行，不遮挡、不截断正文 |
+| 5 | 滚动复用 | 滚动后图标仍属于对应消息，不串位、无残留 |
+| 6 | 编辑消息 | 编辑后图标跟新文本末尾，旧译文不残留 |
+| 7 | 纯表情消息 | 不出现图标 |
+| 8 | 回复引用 | 引用预览内不出现图标；被引用消息自身行有图标 |
+| 9 | 链接/提及/表情点击 | 均正常，不被图标干扰 |
+| 10 | 长按 | 仍弹出消息菜单 |
+| 11 | 滚动 | 流畅，无卡顿或误触发 |
+
+排障日志（`adb logcat -s DiscordAutoTranslate:I`）：
+
+- `inline icon injected msg=... status=... widthPx=... clickable=true`（注入成功）
+- `translate start <id>` / `translate done <id>`（翻译流程）
+- `toggle <id> showingOriginal=...`（切换）
 
 ---
 
