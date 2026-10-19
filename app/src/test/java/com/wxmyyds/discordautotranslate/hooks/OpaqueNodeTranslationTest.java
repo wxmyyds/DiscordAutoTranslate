@@ -3,9 +3,13 @@ package com.wxmyyds.discordautotranslate.hooks;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
+import com.wxmyyds.discordautotranslate.core.EnglishDetector;
+import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
 import com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.AnnotatedStructurableText;
 import com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.BulletListContentNode;
@@ -68,6 +72,9 @@ public class OpaqueNodeTranslationTest {
         public List<Object> getContent() { return content; }
     }
 
+    public static final class TimestampContentNode {
+    }
+
     private static List<Object> list(Object... nodes) {
         return new ArrayList<>(Arrays.asList(nodes));
     }
@@ -92,6 +99,8 @@ public class OpaqueNodeTranslationTest {
 
             assertNotNull(extracted);
             assertEquals(1, extracted.textNodeCount);
+            assertEquals(" hello world ", extracted.text);
+            assertEquals(2, extracted.opaqueNodeCount);
             assertFalse(extracted.text.contains("AliceDisplayName"));
             List<Object> out = ContentNodes.replaceText(nodes, "你好世界");
 
@@ -158,6 +167,9 @@ public class OpaqueNodeTranslationTest {
             TextExtractor.Result extracted = TextExtractor.extract(new AnnotatedStructurableText(nodes));
             assertNotNull(extracted);
             assertEquals(0, extracted.textNodeCount);
+            assertTrue(extracted.text.trim().isEmpty());
+            assertFalse(EnglishDetector.evaluate(extracted.text, extracted.textNodeCount,
+                    extracted.opaqueNodeCount, extracted.codeHeavy).shouldTranslate);
             assertNull(ContentNodes.replaceText(nodes, "不应写入名称"));
         }
     }
@@ -174,6 +186,67 @@ public class OpaqueNodeTranslationTest {
         assertSame(shared, mention.getContent().get(0));
         assertEquals("hello", shared.getContent());
         assertEquals("你好", ((TextContentNode) out.get(1)).getContent());
+    }
+
+    @Test
+    public void preservedStructuresContributeOnlyWordSeparators() {
+        List<Object> structures = opaqueNodes(list(new TextContentNode("DisplayName")));
+        structures.add(new EmojiContentNode("1"));
+        structures.add(new TimestampContentNode());
+        for (Object structure : structures) {
+            TextExtractor.Result result = TextExtractor.extract(new AnnotatedStructurableText(
+                    list(new TextContentNode("hello"), structure, new TextContentNode("world"))));
+
+            assertNotNull(result);
+            assertEquals("hello world", result.text);
+            assertEquals(2, result.textNodeCount);
+            assertEquals(1, result.opaqueNodeCount);
+            assertTrue(EnglishDetector.evaluate(result.text, result.textNodeCount,
+                    result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+        }
+    }
+
+    @Test
+    public void removedMentionPlaceholderChangesCacheKey() {
+        String body = " recommend me some design system skills bro";
+        UserOrRoleMentionContentNode mention = new UserOrRoleMentionContentNode(
+                list(new TextContentNode("ExampleUser")));
+        TextExtractor.Result result = TextExtractor.extract(new AnnotatedStructurableText(
+                list(mention, new TextContentNode(body))));
+
+        assertNotNull(result);
+        assertEquals(" " + body, result.text);
+        assertNotEquals("旧的占位词译文不能继续命中缓存",
+                Scheduler.contentHash(" @mention " + body, "same-config"),
+                Scheduler.contentHash(result.text, "same-config"));
+    }
+
+    @Test
+    public void realTextContainingMarkerWordsIsNotStripped() {
+        String literal = "Explain @mention, #channel, :emoji:, [time] and @提及 literally.";
+        TextExtractor.Result result = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new TextContentNode(literal))));
+
+        assertNotNull(result);
+        assertEquals(literal, result.text);
+        assertEquals(1, result.textNodeCount);
+        assertEquals(0, result.opaqueNodeCount);
+        TextExtractor.Result primitive = TextExtractor.extract(
+                new ContentNodesTest.PrimitiveStructurableText(literal));
+        assertNotNull(primitive);
+        assertEquals(literal, primitive.text);
+    }
+
+    @Test
+    public void structureMarkersCannotMakeShortNonEnglishTextTranslatable() {
+        TextExtractor.Result result = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new UserOrRoleMentionContentNode(list(new TextContentNode("Someone"))),
+                        new TextContentNode("ok"), new EmojiContentNode("1"))));
+
+        assertNotNull(result);
+        assertEquals(" ok ", result.text);
+        assertFalse(EnglishDetector.evaluate(result.text, result.textNodeCount,
+                result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
     }
 
     @Test
