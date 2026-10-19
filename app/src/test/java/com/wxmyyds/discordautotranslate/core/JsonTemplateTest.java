@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import org.json.JSONObject;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -141,12 +142,32 @@ public class JsonTemplateTest {
     }
 
     @Test
-    public void defaultTemplateUsesTemperatureZeroForDeterminism() {
+    public void defaultTemplateUsesLowTemperatureAndMildFrequencyPenalty() throws Exception {
         JsonTemplate.RenderResult r = JsonTemplate.render(
-                Config.DEF_BODY_TEMPLATE, "hi", "简体中文", "gpt-4o-mini",
+                Config.DEF_BODY_TEMPLATE, "hii everyone", "简体中文", "gpt-4o-mini",
                 Config.DEF_SYSTEM_PROMPT);
-        assertTrue(r.body.contains("\"temperature\":0"));
+        JSONObject body = new JSONObject(r.body);
+        assertEquals(0.0, body.getDouble("temperature"), 0.0);
+        assertEquals(0.2, body.getDouble("frequency_penalty"), 0.0);
+        assertEquals("hii everyone", body.getJSONArray("messages")
+                .getJSONObject(1).getString("content"));
         assertFalse(r.hasUnknownPlaceholders());
+    }
+
+    /** 只验证规则和示例被发送，不以单测断言远端模型一定服从。 */
+    @Test
+    public void greetingPromptExamplesRoundTripWithoutTurningIntoUserMessages() throws Exception {
+        JsonTemplate.RenderResult r = JsonTemplate.render(Config.DEF_BODY_TEMPLATE,
+                "hii everyone", Config.DEF_TARGET_LANG, Config.DEF_MODEL, Config.DEF_SYSTEM_PROMPT);
+        JSONObject body = new JSONObject(r.body);
+        assertEquals(2, body.getJSONArray("messages").length());
+        JSONObject system = body.getJSONArray("messages").getJSONObject(0);
+        assertEquals("system", system.getString("role"));
+        String prompt = system.getString("content");
+        assertTrue(prompt.contains("不要续写对话"));
+        assertTrue(prompt.contains("原文：hii everyone\n译文：嗨，大家好"));
+        assertTrue(prompt.contains("原文：Can you help me?\n译文：你能帮我吗？"));
+        assertTrue(prompt.contains("仅当原文包含提供帮助的问句时才翻译该问句"));
     }
 
     /**

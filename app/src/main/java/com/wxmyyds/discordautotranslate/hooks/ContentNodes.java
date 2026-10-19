@@ -3,13 +3,12 @@ package com.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
+import com.wxmyyds.discordautotranslate.core.TextExtractor;
 import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Discord 消息内容结构的反射访问层（需求 §7 阶段 3）。
@@ -36,7 +35,8 @@ import java.util.Map;
  *   <li>调用 {@code copy(...)} 重建节点，保留其余字段（如 Heading 的 level、
  *       Link 的 LinkContextData、CodeBlock 的 lang）。</li>
  * </ul>
- * 这样新增节点类型时无需改动代码。</p>
+ * 只遍历与 {@link TextExtractor} 相同的格式容器；提及、频道、emoji 和未知节点
+ * 即使含有子列表也整节点保留，不参与译文分配。</p>
  */
 public final class ContentNodes {
 
@@ -85,52 +85,65 @@ public final class ContentNodes {
      *
      * @param nodes        原始节点列表
      * @param translated   译文（纯文本；换行会被还原为换行）
-     * @return 新的节点列表；无需变化时返回 null
+     * @return 新的节点列表；无需变化或任一节点重建失败时返回 null，调用方应保留原文
      */
     @Nullable
     public static List<Object> replaceText(@Nullable List<?> nodes, String translated) {
-        if (nodes == null) {
+        if (nodes == null || translated == null || translated.trim().isEmpty()) {
             return null;
         }
-        // 收集承载自然语言的 TextContentNode（原文顺序）。
-        List<Object> targets = new ArrayList<>();
-        collectTextNodes(nodes, targets, 0);
-        if (targets.isEmpty()) {
+        int targetCount = countTextNodes(nodes, 0);
+        if (targetCount == 0) {
             XLog.d("no TextContentNode found; nothing to substitute");
             return null;
         }
-        // 把译文按原有文本节点数量切分，尽量保持段落结构。
-        List<String> parts = splitTranslation(translated, targets.size());
-
-        Map<Object, String> replacements = new IdentityHashMap<>();
-        for (int i = 0; i < targets.size(); i++) {
-            replacements.put(targets.get(i), parts.get(i));
-        }
-
+        // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
+        // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
+        Replacement replacement = new Replacement(splitTranslation(translated, targetCount));
         List<Object> result = new ArrayList<>(nodes.size());
-        boolean[] changed = new boolean[1];
         for (Object n : nodes) {
-            result.add(rebuild(n, replacements, changed, 0));
+            result.add(rebuild(n, replacement, 0));
         }
-        return changed[0] ? result : null;
+        // 容器复制失败可能丢弃已重建的子节点；不得把其他已清空的文本节点
+        // 作为部分成功的结果交给宿主。只允许整棵树替换成功。
+        if (replacement.failed || replacement.next != targetCount) {
+            XLog.d("node replacement aborted: targets=" + targetCount
+                    + " visited=" + replacement.next);
+            return null;
+        }
+        return result;
     }
 
-    /** 递归收集自然语言文本节点（按原文顺序）。 */
-    private static void collectTextNodes(@Nullable List<?> nodes, List<Object> out, int depth) {
-        if (nodes == null || depth > 12) {
-            return;
+    private static final class Replacement {
+        final List<String> parts;
+        int next;
+        boolean failed;
+
+        Replacement(List<String> parts) {
+            this.parts = parts;
         }
+    }
+
+    /** 递归统计自然语言文本节点，每次出现分别计数（包括共享实例）。 */
+    private static int countTextNodes(@Nullable List<?> nodes, int depth) {
+        if (nodes == null || depth > 12) {
+            return 0;
+        }
+        int count = 0;
         for (Object n : nodes) {
             if (n == null) {
                 continue;
             }
             if (n instanceof List<?>) {
-                collectTextNodes((List<?>) n, out, depth + 1);
+                count += countTextNodes((List<?>) n, depth + 1);
                 continue;
             }
             String simple = n.getClass().getSimpleName();
             if ("TextContentNode".equals(simple)) {
-                out.add(n);
+                // 与提取阶段一致：null 内容不会进入请求，也不占用译文片段。
+                if (Reflect.callString(n, "getContent") != null) {
+                    count++;
+                }
                 continue;
             }
             if (CODE_NODES.contains(simple)) {
@@ -138,14 +151,18 @@ public final class ContentNodes {
             }
             List<?> inner = childListOf(n, simple);
             if (inner != null) {
-                collectTextNodes(inner, out, depth + 1);
+                count += countTextNodes(inner, depth + 1);
             }
         }
+        return count;
     }
 
     /** 取出节点的子列表：容器的 content，或列表节点的 items。 */
     @Nullable
     private static List<?> childListOf(Object node, String simpleName) {
+        if (!BULLET_LIST.equals(simpleName) && !TextExtractor.isTextContainer(simpleName)) {
+            return null;
+        }
         String getter = BULLET_LIST.equals(simpleName) ? "getItems" : "getContent";
         Object v = Reflect.call(
                 Reflect.findMethod(
@@ -156,8 +173,7 @@ public final class ContentNodes {
     /**
      * 重建单个节点：递归处理子列表，并把命中的文本节点替换为译文。
      */
-    private static Object rebuild(@Nullable Object node, Map<Object, String> replacements,
-                                  boolean[] changed, int depth) {
+    private static Object rebuild(@Nullable Object node, Replacement replacement, int depth) {
         if (node == null || depth > 12) {
             return node;
         }
@@ -166,7 +182,7 @@ public final class ContentNodes {
             List<Object> rebuiltChildren = new ArrayList<>(children.size());
             boolean localChanged = false;
             for (Object child : children) {
-                Object rebuiltChild = rebuild(child, replacements, changed, depth + 1);
+                Object rebuiltChild = rebuild(child, replacement, depth + 1);
                 if (rebuiltChild != child) {
                     localChanged = true;
                 }
@@ -177,14 +193,21 @@ public final class ContentNodes {
 
         String simple = node.getClass().getSimpleName();
 
-        // 命中的文本节点：直接换成承载译文的同类型节点。
-        String repl = replacements.get(node);
-        if (repl != null) {
+        // 按出现位置消费译文片段，同一实例在不同位置可以承载不同片段。
+        if ("TextContentNode".equals(simple)) {
+            if (Reflect.callString(node, "getContent") == null) {
+                return node;
+            }
+            if (replacement.next >= replacement.parts.size()) {
+                replacement.failed = true;
+                return node;
+            }
+            String repl = replacement.parts.get(replacement.next++);
             Object created = createTextNode(node, repl);
             if (created != null) {
-                changed[0] = true;
                 return created;
             }
+            replacement.failed = true;
             return node;
         }
 
@@ -193,19 +216,15 @@ public final class ContentNodes {
             return node;
         }
 
-        String listGetter = BULLET_LIST.equals(simple) ? "getItems" : "getContent";
-        Object childList = Reflect.call(
-                Reflect.findMethod(
-                        node.getClass(), listGetter, 0), node);
-        if (!(childList instanceof List)) {
-            return node; // 无子列表（例如表情、提及），原样返回
+        List<?> children = childListOf(node, simple);
+        if (children == null) {
+            return node; // 不是正文格式容器（例如提及/频道/emoji），原样保留
         }
 
-        List<?> children = (List<?>) childList;
         List<Object> newChildren = new ArrayList<>(children.size());
         boolean localChanged = false;
         for (Object c : children) {
-            Object nc = rebuild(c, replacements, changed, depth + 1);
+            Object nc = rebuild(c, replacement, depth + 1);
             if (nc != c) {
                 localChanged = true;
             }
@@ -215,7 +234,11 @@ public final class ContentNodes {
             return node;
         }
         Object rebuilt = copyWith(node, newChildren);
-        return rebuilt != null ? rebuilt : node;
+        if (rebuilt == null) {
+            replacement.failed = true;
+            return node;
+        }
+        return rebuilt;
     }
 
     /**

@@ -53,9 +53,8 @@ public final class EnglishDetector {
         text = text.replaceAll("https?://\\S+", " ");
         // 去掉行内代码内容。
         text = text.replaceAll("`[^`]*`", " ");
-        // 去掉自定义表情与提及占位符。
+        // 去掉原文中的自定义表情语法；结构节点不再生成可翻译的占位词。
         text = text.replaceAll(":[A-Za-z0-9_]+:", " ");
-        text = text.replaceAll("@mention|#channel|\\[time\\]", " ");
 
         int letters = 0;
         int cjk = 0;

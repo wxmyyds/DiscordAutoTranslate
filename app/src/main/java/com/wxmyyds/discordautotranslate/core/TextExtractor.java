@@ -22,7 +22,7 @@ public final class TextExtractor {
 
     /** 提取结果。 */
     public static final class Result {
-        /** 可翻译的纯文本（已含换行与占位符）。 */
+        /** 可翻译的纯文本（含换行；原样保留的结构节点仅贡献空白分隔）。 */
         public final String text;
         /** 文本节点数量，用于判断消息是否包含自然语言。 */
         public final int textNodeCount;
@@ -76,6 +76,30 @@ public final class TextExtractor {
         return null;
     }
 
+    /**
+     * 允许递归翻译的格式容器（列表节点另行处理）。
+     * 提取与重建必须共享此边界：提及/频道/emoji 即使带有 content 子列表，
+     * 也不能将其显示名称当成正文或译文的存放位置。
+     */
+    public static boolean isTextContainer(String simpleName) {
+        switch (simpleName) {
+            case "ParagraphContentNode":
+            case "BlockQuoteContentNode":
+            case "HeadingContentNode":
+            case "LHeadingContentNode":
+            case "SubtextContentNode":
+            case "StrongContentNode":
+            case "EmphasisContentNode":
+            case "UnderlineContentNode":
+            case "StrikethroughContentNode":
+            case "SpoilerContentNode":
+            case "LinkContentNode":
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static void walkList(List<?> nodes, StringBuilder out, int[] counters, int depth) {
         if (nodes == null || depth > MAX_DEPTH) {
             return;
@@ -90,6 +114,14 @@ public final class TextExtractor {
             return;
         }
         String name = node.getClass().getSimpleName();
+        if (isTextContainer(name)) {
+            Object inner = Reflect.call(
+                    Reflect.findMethod(node.getClass(), "getContent", 0), node);
+            if (inner instanceof List) {
+                walkList((List<?>) inner, out, counters, depth + 1);
+            }
+            return;
+        }
 
         switch (name) {
             case "TextContentNode": {
@@ -117,24 +149,6 @@ public final class TextExtractor {
             case "LineBreakContentNode":
                 out.append('\n');
                 return;
-            case "ParagraphContentNode":
-            case "BlockQuoteContentNode":
-            case "HeadingContentNode":
-            case "LHeadingContentNode":
-            case "SubtextContentNode":
-            case "StrongContentNode":
-            case "EmphasisContentNode":
-            case "UnderlineContentNode":
-            case "StrikethroughContentNode":
-            case "SpoilerContentNode":
-            case "LinkContentNode": {
-                Object inner = Reflect.call(
-                        Reflect.findMethod(node.getClass(), "getContent", 0), node);
-                if (inner instanceof List) {
-                    walkList((List<?>) inner, out, counters, depth + 1);
-                }
-                return;
-            }
             case "BulletListContentNode": {
                 Object items = Reflect.call(
                         Reflect.findMethod(node.getClass(), "getItems", 0), node);
@@ -151,30 +165,12 @@ public final class TextExtractor {
                 return;
             }
             default: {
-                // 提及、表情、时间戳等：以占位符形式保留，避免破坏语义，并计入 opaque。
+                // 提及、频道、emoji、时间戳等由原节点渲染，不再发送 @mention
+                // 等可被模型复述/翻译的占位词，否则会与保留节点重复显示。
+                // 留空格避免节点两侧的单词被拼接；opaque 计数仍参与语言检测。
                 counters[1]++;
-                String placeholder = placeholderFor(name);
-                if (placeholder != null) {
-                    out.append(placeholder);
-                }
+                out.append(' ');
             }
         }
-    }
-
-    @Nullable
-    private static String placeholderFor(String simpleName) {
-        if (simpleName.contains("Mention")) {
-            return " @mention ";
-        }
-        if (simpleName.contains("Emoji")) {
-            return " :emoji: ";
-        }
-        if (simpleName.contains("Timestamp")) {
-            return " [time] ";
-        }
-        if (simpleName.contains("Channel")) {
-            return " #channel ";
-        }
-        return " ";
     }
 }
