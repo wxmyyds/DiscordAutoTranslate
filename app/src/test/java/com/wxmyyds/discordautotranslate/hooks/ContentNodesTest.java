@@ -294,6 +294,51 @@ public class ContentNodesTest {
         }
     }
 
+    /** 模拟宿主版本变化：有可读子节点，但没有兼容的 copy 方法。 */
+    public static final class NoCopyContainer {
+        private final List<Object> content;
+
+        public NoCopyContainer(List<Object> content) {
+            this.content = content;
+        }
+
+        public List<Object> getContent() {
+            return content;
+        }
+    }
+
+    /** 模拟 copy 调用失败，而不是只有缺少方法的情况。 */
+    public static final class ThrowingCopyContainer {
+        private final List<Object> content;
+
+        public ThrowingCopyContainer(List<Object> content) {
+            this.content = content;
+        }
+
+        public List<Object> getContent() {
+            return content;
+        }
+
+        public ThrowingCopyContainer copy(List<Object> content) {
+            throw new IllegalStateException("simulated copy failure");
+        }
+    }
+
+    public static final class MissingTextConstructor {
+        /** 简单类名仍为 TextContentNode，但不提供单 String 构造函数。 */
+        public static final class TextContentNode {
+            private final String content;
+
+            public TextContentNode(String content, boolean ignored) {
+                this.content = content;
+            }
+
+            public String getContent() {
+                return content;
+            }
+        }
+    }
+
     private static List<Object> list(Object... items) {
         return new ArrayList<>(Arrays.asList(items));
     }
@@ -366,6 +411,115 @@ public class ContentNodesTest {
             }
         }
         assertEquals("译文内容必须完整保留", "你好世界", joined.toString());
+    }
+
+    @Test
+    public void sharedTextInstanceDoesNotLoseTranslationToLaterEmptyPart() {
+        TextContentNode shared = new TextContentNode("hello");
+        EmojiContentNode emoji = new EmojiContentNode("1");
+        List<Object> nodes = list(shared, emoji, shared);
+
+        List<Object> out = ContentNodes.replaceText(nodes, "你好");
+
+        assertNotNull(out);
+        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("", ((TextContentNode) out.get(2)).getContent());
+        assertSame(emoji, out.get(1));
+        assertEquals("hello", shared.getContent());
+        assertSame(shared, nodes.get(0));
+        assertSame(shared, nodes.get(2));
+    }
+
+    @Test
+    public void sharedTextInstanceReceivesSeparateMultilineParts() {
+        TextContentNode shared = new TextContentNode("hello");
+        List<Object> out = ContentNodes.replaceText(list(shared, shared), "第一\n第二");
+
+        assertNotNull(out);
+        assertEquals("第一", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("第二", ((TextContentNode) out.get(1)).getContent());
+    }
+
+    @Test
+    public void sharedContainerIsRebuiltSeparatelyAtEachPosition() {
+        TextContentNode text = new TextContentNode("hello");
+        ParagraphContentNode shared = new ParagraphContentNode(list(text));
+        List<Object> out = ContentNodes.replaceText(list(shared, shared), "你好");
+
+        assertNotNull(out);
+        ParagraphContentNode first = (ParagraphContentNode) out.get(0);
+        ParagraphContentNode second = (ParagraphContentNode) out.get(1);
+        assertEquals("你好", ((TextContentNode) first.getContent().get(0)).getContent());
+        assertEquals("", ((TextContentNode) second.getContent().get(0)).getContent());
+        assertSame(text, shared.getContent().get(0));
+        assertEquals("hello", text.getContent());
+    }
+
+    @Test
+    public void failedFirstContainerDoesNotClearRemainingTextAndLeaveOnlyEmoji() {
+        TextContentNode spacer = new TextContentNode("");
+        NoCopyContainer container = new NoCopyContainer(list(spacer));
+        TextContentNode visible = new TextContentNode("hello world");
+        EmojiContentNode emoji = new EmojiContentNode("1");
+        List<Object> nodes = list(container, visible, emoji);
+
+        // 旧实现丢弃首片段的译文却把 visible 变为空串，只剩 emoji。
+        assertNull(ContentNodes.replaceText(nodes, "你好世界"));
+        assertEquals("hello world", visible.getContent());
+        assertSame(container, nodes.get(0));
+        assertSame(visible, nodes.get(1));
+        assertSame(emoji, nodes.get(2));
+        assertSame(spacer, container.getContent().get(0));
+    }
+
+    @Test
+    public void throwingCopyAbortsWholeReplacement() {
+        ThrowingCopyContainer first = new ThrowingCopyContainer(list(new TextContentNode("")));
+        TextContentNode visible = new TextContentNode("hello");
+        List<Object> nodes = list(first, visible, new EmojiContentNode("1"));
+
+        assertNull(ContentNodes.replaceText(nodes, "你好"));
+        assertEquals("hello", visible.getContent());
+    }
+
+    @Test
+    public void failedLaterContainerDiscardsEarlierSuccessfulRebuild() {
+        TextContentNode first = new TextContentNode("first");
+        NoCopyContainer last = new NoCopyContainer(list(new TextContentNode("last")));
+        List<Object> nodes = list(new ParagraphContentNode(list(first)), last);
+
+        assertNull(ContentNodes.replaceText(nodes, "第一\n最后"));
+        assertEquals("first", first.getContent());
+        assertEquals("last", ((TextContentNode) last.getContent().get(0)).getContent());
+    }
+
+    @Test
+    public void failedParentCopyDiscardsRebuiltDescendants() {
+        NoCopyContainer parent = new NoCopyContainer(list(
+                new StrongContentNode(list(new TextContentNode("hello")))));
+        assertNull(ContentNodes.replaceText(list(parent), "你好"));
+    }
+
+    @Test
+    public void missingTextConstructorAbortsWholeReplacement() {
+        TextContentNode first = new TextContentNode("first");
+        MissingTextConstructor.TextContentNode last =
+                new MissingTextConstructor.TextContentNode("last", true);
+
+        assertNull(ContentNodes.replaceText(list(first, last), "第一\n最后"));
+        assertEquals("first", first.getContent());
+        assertEquals("last", last.getContent());
+    }
+
+    @Test
+    public void emptyTranslationNeverErasesOriginalText() {
+        TextContentNode text = new TextContentNode("hello");
+        List<Object> nodes = list(text, new EmojiContentNode("1"));
+
+        assertNull(ContentNodes.replaceText(nodes, null));
+        assertNull(ContentNodes.replaceText(nodes, ""));
+        assertNull(ContentNodes.replaceText(nodes, " \n\t"));
+        assertEquals("hello", text.getContent());
     }
 
     @Test

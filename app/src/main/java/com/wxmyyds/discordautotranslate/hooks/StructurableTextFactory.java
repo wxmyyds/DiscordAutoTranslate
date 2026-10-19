@@ -20,7 +20,8 @@ import java.util.List;
  *
  * <p>因此替换时必须产出上述两种类型之一。为保留 Markdown，优先产出
  * {@code AnnotatedStructurableText}（见 {@link ContentNodes}）；
- * 仅在无法重建节点树时退化为 {@code PrimitiveStructurableText}。</p>
+ * 只在原文也是纯文本时产出 {@code PrimitiveStructurableText}。
+ * 富文本重建失败时保持原文，避免降级丢失 emoji、提及和代码等结构。</p>
  */
 public final class StructurableTextFactory {
 
@@ -125,9 +126,10 @@ public final class StructurableTextFactory {
                     return out;
                 }
             }
-            // 节点重建失败或无可翻译文本节点：退化为纯文本，避免显示原文。
-            XLog.d("markdown preserve unavailable, falling back to primitive");
-            return primitive(translated);
+            // 不接受部分重建，也不退化为纯文本（会丢失 emoji/提及/代码）。
+            // 返回 null，让所有调用路径继续使用未修改的原始结构。
+            XLog.d("markdown replacement unavailable, keeping original content");
+            return null;
         }
 
         // 2) 原始是 Primitive：直接给纯文本。
