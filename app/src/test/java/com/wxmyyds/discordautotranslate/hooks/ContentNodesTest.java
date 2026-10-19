@@ -294,33 +294,37 @@ public class ContentNodesTest {
         }
     }
 
-    /** 模拟宿主版本变化：有可读子节点，但没有兼容的 copy 方法。 */
+    /** 已知格式容器的兼容性故障；未知容器现在应整节点保留。 */
     public static final class NoCopyContainer {
-        private final List<Object> content;
+        public static final class ParagraphContentNode {
+            private final List<Object> content;
 
-        public NoCopyContainer(List<Object> content) {
-            this.content = content;
-        }
+            public ParagraphContentNode(List<Object> content) {
+                this.content = content;
+            }
 
-        public List<Object> getContent() {
-            return content;
+            public List<Object> getContent() {
+                return content;
+            }
         }
     }
 
-    /** 模拟 copy 调用失败，而不是只有缺少方法的情况。 */
+    /** 模拟已知格式容器的 copy 调用失败。 */
     public static final class ThrowingCopyContainer {
-        private final List<Object> content;
+        public static final class ParagraphContentNode {
+            private final List<Object> content;
 
-        public ThrowingCopyContainer(List<Object> content) {
-            this.content = content;
-        }
+            public ParagraphContentNode(List<Object> content) {
+                this.content = content;
+            }
 
-        public List<Object> getContent() {
-            return content;
-        }
+            public List<Object> getContent() {
+                return content;
+            }
 
-        public ThrowingCopyContainer copy(List<Object> content) {
-            throw new IllegalStateException("simulated copy failure");
+            public ParagraphContentNode copy(List<Object> content) {
+                throw new IllegalStateException("simulated copy failure");
+            }
         }
     }
 
@@ -458,7 +462,8 @@ public class ContentNodesTest {
     @Test
     public void failedFirstContainerDoesNotClearRemainingTextAndLeaveOnlyEmoji() {
         TextContentNode spacer = new TextContentNode("");
-        NoCopyContainer container = new NoCopyContainer(list(spacer));
+        NoCopyContainer.ParagraphContentNode container =
+                new NoCopyContainer.ParagraphContentNode(list(spacer));
         TextContentNode visible = new TextContentNode("hello world");
         EmojiContentNode emoji = new EmojiContentNode("1");
         List<Object> nodes = list(container, visible, emoji);
@@ -474,7 +479,8 @@ public class ContentNodesTest {
 
     @Test
     public void throwingCopyAbortsWholeReplacement() {
-        ThrowingCopyContainer first = new ThrowingCopyContainer(list(new TextContentNode("")));
+        ThrowingCopyContainer.ParagraphContentNode first =
+                new ThrowingCopyContainer.ParagraphContentNode(list(new TextContentNode("")));
         TextContentNode visible = new TextContentNode("hello");
         List<Object> nodes = list(first, visible, new EmojiContentNode("1"));
 
@@ -485,7 +491,8 @@ public class ContentNodesTest {
     @Test
     public void failedLaterContainerDiscardsEarlierSuccessfulRebuild() {
         TextContentNode first = new TextContentNode("first");
-        NoCopyContainer last = new NoCopyContainer(list(new TextContentNode("last")));
+        NoCopyContainer.ParagraphContentNode last =
+                new NoCopyContainer.ParagraphContentNode(list(new TextContentNode("last")));
         List<Object> nodes = list(new ParagraphContentNode(list(first)), last);
 
         assertNull(ContentNodes.replaceText(nodes, "第一\n最后"));
@@ -495,7 +502,7 @@ public class ContentNodesTest {
 
     @Test
     public void failedParentCopyDiscardsRebuiltDescendants() {
-        NoCopyContainer parent = new NoCopyContainer(list(
+        NoCopyContainer.ParagraphContentNode parent = new NoCopyContainer.ParagraphContentNode(list(
                 new StrongContentNode(list(new TextContentNode("hello")))));
         assertNull(ContentNodes.replaceText(list(parent), "你好"));
     }

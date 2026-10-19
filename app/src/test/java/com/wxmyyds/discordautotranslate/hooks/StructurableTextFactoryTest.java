@@ -51,7 +51,8 @@ public class StructurableTextFactoryTest {
     public void failedRichTextReplacementKeepsOriginalInsteadOfPrimitiveFallback() {
         TextContentNode text = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");
-        List<Object> nodes = list(new NoCopyContainer(list(new TextContentNode(""))), text, emoji);
+        List<Object> nodes = list(new NoCopyContainer.ParagraphContentNode(
+                list(new TextContentNode(""))), text, emoji);
         AnnotatedStructurableText original = new AnnotatedStructurableText(nodes);
 
         // 返回 null 是 forTranslation 的“不替换”协议，所有 Hook 调用方保留 original。
@@ -95,6 +96,25 @@ public class StructurableTextFactoryTest {
         assertSame(emoji, nodes.get(1));
         assertEquals("", ((TextContentNode) nodes.get(2)).getContent());
         assertEquals("hello", shared.getContent());
+    }
+
+    @Test
+    public void mentionBodyAndEmojiProduceTranslatedRichTextInsteadOfFallback() {
+        OpaqueNodeTranslationTest.UserOrRoleMentionContentNode mention =
+                new OpaqueNodeTranslationTest.UserOrRoleMentionContentNode(
+                        list(new TextContentNode("Alice")));
+        EmojiContentNode emoji = new EmojiContentNode("1");
+        AnnotatedStructurableText original = new AnnotatedStructurableText(
+                list(mention, new TextContentNode("hello world"), emoji));
+
+        Object out = StructurableTextFactory.forTranslation(original, "你好世界");
+
+        assertTrue("有提及时也必须产出译文，不能只靠保留英文通过测试",
+                out instanceof AnnotatedStructurableText);
+        List<Object> nodes = ((AnnotatedStructurableText) out).getContent();
+        assertSame(mention, nodes.get(0));
+        assertEquals("你好世界", ((TextContentNode) nodes.get(1)).getContent());
+        assertSame(emoji, nodes.get(2));
     }
 
     @Test

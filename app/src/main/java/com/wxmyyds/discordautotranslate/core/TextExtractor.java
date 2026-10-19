@@ -76,6 +76,30 @@ public final class TextExtractor {
         return null;
     }
 
+    /**
+     * 允许递归翻译的格式容器（列表节点另行处理）。
+     * 提取与重建必须共享此边界：提及/频道/emoji 即使带有 content 子列表，
+     * 也不能将其显示名称当成正文或译文的存放位置。
+     */
+    public static boolean isTextContainer(String simpleName) {
+        switch (simpleName) {
+            case "ParagraphContentNode":
+            case "BlockQuoteContentNode":
+            case "HeadingContentNode":
+            case "LHeadingContentNode":
+            case "SubtextContentNode":
+            case "StrongContentNode":
+            case "EmphasisContentNode":
+            case "UnderlineContentNode":
+            case "StrikethroughContentNode":
+            case "SpoilerContentNode":
+            case "LinkContentNode":
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static void walkList(List<?> nodes, StringBuilder out, int[] counters, int depth) {
         if (nodes == null || depth > MAX_DEPTH) {
             return;
@@ -90,6 +114,14 @@ public final class TextExtractor {
             return;
         }
         String name = node.getClass().getSimpleName();
+        if (isTextContainer(name)) {
+            Object inner = Reflect.call(
+                    Reflect.findMethod(node.getClass(), "getContent", 0), node);
+            if (inner instanceof List) {
+                walkList((List<?>) inner, out, counters, depth + 1);
+            }
+            return;
+        }
 
         switch (name) {
             case "TextContentNode": {
@@ -117,24 +149,6 @@ public final class TextExtractor {
             case "LineBreakContentNode":
                 out.append('\n');
                 return;
-            case "ParagraphContentNode":
-            case "BlockQuoteContentNode":
-            case "HeadingContentNode":
-            case "LHeadingContentNode":
-            case "SubtextContentNode":
-            case "StrongContentNode":
-            case "EmphasisContentNode":
-            case "UnderlineContentNode":
-            case "StrikethroughContentNode":
-            case "SpoilerContentNode":
-            case "LinkContentNode": {
-                Object inner = Reflect.call(
-                        Reflect.findMethod(node.getClass(), "getContent", 0), node);
-                if (inner instanceof List) {
-                    walkList((List<?>) inner, out, counters, depth + 1);
-                }
-                return;
-            }
             case "BulletListContentNode": {
                 Object items = Reflect.call(
                         Reflect.findMethod(node.getClass(), "getItems", 0), node);

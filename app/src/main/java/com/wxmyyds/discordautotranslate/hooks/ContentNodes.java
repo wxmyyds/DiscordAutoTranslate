@@ -3,6 +3,7 @@ package com.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
+import com.wxmyyds.discordautotranslate.core.TextExtractor;
 import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
@@ -34,7 +35,8 @@ import java.util.List;
  *   <li>调用 {@code copy(...)} 重建节点，保留其余字段（如 Heading 的 level、
  *       Link 的 LinkContextData、CodeBlock 的 lang）。</li>
  * </ul>
- * 这样新增节点类型时无需改动代码。</p>
+ * 只遍历与 {@link TextExtractor} 相同的格式容器；提及、频道、emoji 和未知节点
+ * 即使含有子列表也整节点保留，不参与译文分配。</p>
  */
 public final class ContentNodes {
 
@@ -138,7 +140,10 @@ public final class ContentNodes {
             }
             String simple = n.getClass().getSimpleName();
             if ("TextContentNode".equals(simple)) {
-                count++;
+                // 与提取阶段一致：null 内容不会进入请求，也不占用译文片段。
+                if (Reflect.callString(n, "getContent") != null) {
+                    count++;
+                }
                 continue;
             }
             if (CODE_NODES.contains(simple)) {
@@ -155,6 +160,9 @@ public final class ContentNodes {
     /** 取出节点的子列表：容器的 content，或列表节点的 items。 */
     @Nullable
     private static List<?> childListOf(Object node, String simpleName) {
+        if (!BULLET_LIST.equals(simpleName) && !TextExtractor.isTextContainer(simpleName)) {
+            return null;
+        }
         String getter = BULLET_LIST.equals(simpleName) ? "getItems" : "getContent";
         Object v = Reflect.call(
                 Reflect.findMethod(
@@ -187,6 +195,9 @@ public final class ContentNodes {
 
         // 按出现位置消费译文片段，同一实例在不同位置可以承载不同片段。
         if ("TextContentNode".equals(simple)) {
+            if (Reflect.callString(node, "getContent") == null) {
+                return node;
+            }
             if (replacement.next >= replacement.parts.size()) {
                 replacement.failed = true;
                 return node;
@@ -205,15 +216,11 @@ public final class ContentNodes {
             return node;
         }
 
-        String listGetter = BULLET_LIST.equals(simple) ? "getItems" : "getContent";
-        Object childList = Reflect.call(
-                Reflect.findMethod(
-                        node.getClass(), listGetter, 0), node);
-        if (!(childList instanceof List)) {
-            return node; // 无子列表（例如表情、提及），原样返回
+        List<?> children = childListOf(node, simple);
+        if (children == null) {
+            return node; // 不是正文格式容器（例如提及/频道/emoji），原样保留
         }
 
-        List<?> children = (List<?>) childList;
         List<Object> newChildren = new ArrayList<>(children.size());
         boolean localChanged = false;
         for (Object c : children) {
