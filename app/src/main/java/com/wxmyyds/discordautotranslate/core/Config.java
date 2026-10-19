@@ -69,12 +69,24 @@ public final class Config {
             + "此时也必须只给出对应的中文译文（如 Dumbass → 混蛋），"
             + "不得解释词义、不得说明它为何冒犯、不得进行道德提醒或说教。\n"
             + "9. 你只是翻译工具，不对原文内容做任何价值判断、安全提示或建议，"
-            + "也不以“我建议”“我很乐意”等句式与用户对话。";
+            + "也不以“我建议”“我很乐意”等句式与用户对话。\n"
+            + "10. 问候、告别和简短寒暄也只翻译其本身，保留称呼和对象范围；"
+            + "不要续写对话，不得补出原文没有的问候、提问或提供帮助的话。\n"
+            + "对照示例（实际输出不带“原文”“译文”标签）：\n"
+            + "原文：hii everyone\n译文：嗨，大家好\n"
+            + "原文：Can you help me?\n译文：你能帮我吗？\n"
+            + "原文：Hi! Is there anything I can help you with?\n"
+            + "译文：嗨！有什么我可以帮你的吗？\n"
+            + "仅当原文包含提供帮助的问句时才翻译该问句；"
+            + "不能把 hii everyone 扩写成“嗨！有什么需要帮助的吗？”。"
+            + "只输出当前原文的译文，不要输出示例或额外内容。";
 
     /** 请求体模板，{@code {{text}}} / {@code {{system}}} / {@code {{target}}} / {@code {{model}}} 为占位符。 */
     public static final String KEY_BODY_TEMPLATE = "body_template";
+    // temperature 保持 0 以降低采样随机性，不保证服务端完全确定性。
+    // 轻度频率惩罚仅抑制重复，不承担“只翻译”约束；兼容接口需支持此参数。
     public static final String DEF_BODY_TEMPLATE =
-            "{\"model\":\"{{model}}\",\"messages\":[{\"role\":\"system\",\"content\":\"{{system}}\"},{\"role\":\"user\",\"content\":\"{{text}}\"}],\"temperature\":0}";
+            "{\"model\":\"{{model}}\",\"messages\":[{\"role\":\"system\",\"content\":\"{{system}}\"},{\"role\":\"user\",\"content\":\"{{text}}\"}],\"temperature\":0,\"frequency_penalty\":0.2}";
 
     /** 响应中译文的提取路径，点号分隔，数组用下标，例如 {@code choices.0.message.content}。 */
     public static final String KEY_RESPONSE_PATH = "response_path";

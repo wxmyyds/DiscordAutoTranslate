@@ -135,6 +135,21 @@ public class ConfigTest {
     }
 
     @Test
+    public void savedPromptAndSamplingSettingsAreNotSilentlyOverwritten() {
+        String prompt = "My custom translation instructions";
+        String template = "{\"model\":\"{{model}}\",\"temperature\":0.7,"
+                + "\"frequency_penalty\":0,\"text\":\"{{text}}\",\"system\":\"{{system}}\"}";
+        Config.Snapshot snapshot = Config.read(new MemoryPrefs()
+                .put(Config.KEY_SYSTEM_PROMPT, prompt)
+                .put(Config.KEY_BODY_TEMPLATE, template));
+
+        assertEquals(prompt, snapshot.systemPrompt);
+        assertEquals(template, snapshot.bodyTemplate);
+        Config.Snapshot defaults = Config.read(new MemoryPrefs());
+        assertNotEquals(snapshot.version(), defaults.version());
+    }
+
+    @Test
     public void verboseLoggingStillNeverIncludesMessageBody() {
         String sensitive = "unique-private-message-body";
         XLog.setVerbose(false);
