@@ -52,6 +52,12 @@ public final class ContentNodes {
     private ContentNodes() {
     }
 
+    /** 会被宿主渲染为纯空白的节点（它们不留文本，只占一行高度）。 */
+    private static final java.util.Set<String> BLANK_NODES = new java.util.HashSet<>(java.util.Arrays.asList(
+            "NewLineContentNode",
+            "LineBreakContentNode"
+    ));
+
     // ---------------------------------------------------------------- 类型判断
 
     public static boolean isAnnotated(@Nullable Object structurableText) {
@@ -99,7 +105,8 @@ public final class ContentNodes {
         }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
         // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
-        Replacement replacement = new Replacement(splitTranslation(translated, targetCount));
+        Replacement replacement = new Replacement(
+                splitTranslation(normalize(translated), targetCount));
         List<Object> result = new ArrayList<>(nodes.size());
         for (Object n : nodes) {
             result.add(rebuild(n, replacement, 0));
@@ -111,8 +118,122 @@ public final class ContentNodes {
                     + " visited=" + replacement.next);
             return null;
         }
-        return result;
+        // 译文行数通常少于原文，多余位置会被补成空串；原换行结构节点也会保留。
+        // 不裁剪就会在译文下方留下原文遗留的空行。
+        return trimTrailingBlank(result, 0);
     }
+
+    /**
+     * 统一换行符并去掉首尾空白：模型常以换行收尾（开头偶尔也会多一行），
+     * 直接渲染就会在译文上下方留下多余空行。正文中间的空行保持不变。
+     */
+    static String normalize(String translated) {
+        return translated.replace("\r\n", "\n").replace('\r', '\n').trim();
+    }
+
+    /**
+     * 去掉列表末尾的空行与空文本节点。
+     *
+     * <p>只处理尾部：正文中间的空行可能是用户有意留白。容器的 copy 失败时
+     * 保留原节点（宁可多一行空白，也不能丢弃已翻译的文字）。
+     *
+     * @param nodes    待裁剪的列表
+     * @param depth    递归深度保护
+     */
+    private static List<Object> trimTrailingBlank(List<Object> nodes, int depth) {
+        List<Object> out = new ArrayList<>(nodes);
+        while (!out.isEmpty() && depth <= 12) {
+            Object last = out.get(out.size() - 1);
+            if (last == null) {
+                out.remove(out.size() - 1);
+                continue;
+            }
+            String simple = last.getClass().getSimpleName();
+            if (BLANK_NODES.contains(simple)) {
+                out.remove(out.size() - 1);
+                continue;
+            }
+            if ("TextContentNode".equals(simple)) {
+                String content = Reflect.callString(last, "getContent");
+                if (content == null || content.trim().isEmpty()) {
+                    out.remove(out.size() - 1);
+                    continue;
+                }
+                break;
+            }
+            if (BULLET_LIST.equals(simple)) {
+                // 列表项内部的行尾空白可以裁剪，但项目符号本身可见，不能删项目。
+                Object itemsRaw = Reflect.call(
+                        Reflect.findMethod(last.getClass(), "getItems", 0), last);
+                if (!(itemsRaw instanceof List)) {
+                    break;
+                }
+                List<?> items = (List<?>) itemsRaw;
+                List<Object> newItems = new ArrayList<>(items.size());
+                boolean itemsChanged = false;
+                for (Object item : items) {
+                    if (!(item instanceof List)) {
+                        newItems = null;
+                        break;
+                    }
+                    List<Object> itemNodes = new ArrayList<>((List<?>) item);
+                    List<Object> trimmedItem = trimTrailingBlank(itemNodes, depth + 1);
+                    if (trimmedItem.size() != itemNodes.size()) {
+                        itemsChanged = true;
+                    }
+                    newItems.add(trimmedItem);
+                }
+                if (newItems == null) {
+                    break;
+                }
+                // 内容全为空白、只剩项目符号的尾项一并去掉。
+                while (!newItems.isEmpty() && ((List<?>) newItems.get(newItems.size() - 1)).isEmpty()) {
+                    newItems.remove(newItems.size() - 1);
+                    itemsChanged = true;
+                }
+                if (!itemsChanged) {
+                    break;
+                }
+                if (newItems.isEmpty()) {
+                    out.remove(out.size() - 1); // 列表项全为空白：整个列表不渲染
+                    continue;
+                }
+                Object rebuiltItems = copyWith(last, newItems);
+                if (rebuiltItems == null) {
+                    break;
+                }
+                out.set(out.size() - 1, rebuiltItems);
+                break;
+            }
+            if (!TextExtractor.isTextContainer(simple)) {
+                // 提及/emoji/代码等可见结构：不能当作空白裁掉。
+                break;
+            }
+            List<?> children = childListOf(last, simple);
+            if (children == null) {
+                break;
+            }
+            List<Object> childList = new ArrayList<>(children.size());
+            for (Object child : children) {
+                childList.add(child);
+            }
+            List<Object> trimmed = trimTrailingBlank(childList, depth + 1);
+            if (trimmed.size() == children.size()) {
+                break; // 容器本身以可见内容收尾
+            }            if (trimmed.isEmpty()) {
+                out.remove(out.size() - 1); // 容器内容全为空白：整节点去掉
+                continue;
+            }
+            Object rebuilt = copyWith(last, trimmed);
+            if (rebuilt == null) {
+                break; // 裁剪失败：保留原样，不放弃译文
+            }
+            out.set(out.size() - 1, rebuilt);
+            break;
+        }
+        return out;
+    }
+
 
     private static final class Replacement {
         final List<String> parts;
@@ -157,7 +278,9 @@ public final class ContentNodes {
         return count;
     }
 
-    /** 取出节点的子列表：容器的 content，或列表节点的 items。 */
+    /**
+     * 取出节点的子列表：容器的 content，或列表节点的 items。
+     */
     @Nullable
     private static List<?> childListOf(Object node, String simpleName) {
         if (!BULLET_LIST.equals(simpleName) && !TextExtractor.isTextContainer(simpleName)) {
