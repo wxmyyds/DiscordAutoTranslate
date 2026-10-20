@@ -408,14 +408,14 @@ public class ContentNodesTest {
         assertEquals(1, out.size());
         ParagraphContentNode para = (ParagraphContentNode) out.get(0);
 
-        // 结构必须保留：仍然是 3 个子节点，且表情节点原样复用（同一实例）
-        assertEquals("段落结构必须保留", 3, para.getContent().size());
+        // 尾部空文本节点被裁剪，但容器结构与可见的 emoji 必须保留（同一实例）。
+        assertEquals("段落结构必须保留", 2, para.getContent().size());
         assertSame("结构化节点必须原样复用", inner.get(1), para.getContent().get(1));
         assertTrue(para.getContent().get(1) instanceof EmojiContentNode);
 
         // 不变量：替换后所有文本节点的拼接应等于译文。
         // （译文无换行时不会为了凑节点数而把句子硬切碎，因此首节点承载全部、
-        //   其余为空串；这是刻意设计，避免产生读不通的断句。）
+        //   其余为空串；尾部的空文本节点随后被裁剪。）
         StringBuilder joined = new StringBuilder();
         for (Object o : para.getContent()) {
             if (o instanceof TextContentNode) {
