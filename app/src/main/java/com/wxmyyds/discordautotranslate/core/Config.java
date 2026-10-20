@@ -103,6 +103,14 @@ public final class Config {
     // 详细日志默认关闭；正文日志始终脱敏，不允许 verbose 解除脱敏。
     public static final boolean DEF_VERBOSE_LOG = false;
 
+    /**
+     * 模块回写的布局诊断内容（只读，由模块进程写入、设置页读取展示）。
+     *
+     * <p>设备上常常取不到 logcat，因此诊断结果需要一条不依赖日志的通道。
+     * 内容只含消息 ID、视图类型、高度等流程数据，不含正文与密钥。</p>
+     */
+    public static final String KEY_DIAGNOSTICS = "layout_diagnostics";
+
     private Config() {
     }
 

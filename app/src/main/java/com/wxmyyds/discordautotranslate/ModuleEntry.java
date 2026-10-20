@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -251,8 +252,16 @@ public class ModuleEntry extends XposedModule {
 
     private void reloadConfig() {
         try {
-            SharedPreferences prefs = getRemotePreferences(Config.GROUP);
+            final SharedPreferences prefs = getRemotePreferences(Config.GROUP);
             Config.Snapshot snapshot = Config.read(prefs);
+            // 没有 logcat 时诊断只能靠回写：把结果写进远程配置，由设置页显示。
+            Diagnostics.install(text -> {
+                try {
+                    prefs.edit().putString(Config.KEY_DIAGNOSTICS, text).apply();
+                } catch (Throwable ignored) {
+                    // 诊断写盘失败不影响渲染。
+                }
+            });
             HookBridge.get().updateConfig(snapshot);
             XLog.i("config loaded: enabled=" + snapshot.enabled
                     + " url=" + XLog.safeUrl(snapshot.apiUrl)

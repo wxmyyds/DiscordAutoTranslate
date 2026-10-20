@@ -5,6 +5,7 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.EnglishDetector;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -319,17 +320,21 @@ public final class HookBridge {
      */
     private static void logRerender(@Nullable String messageId, @Nullable View view,
                                     @Nullable String bound, String outcome) {
+        String line;
         if (view == null) {
-            XLog.d("layout-diag: msg=" + messageId + " view=null outcome=" + outcome);
-            return;
+            line = "msg=" + messageId + " view=null outcome=" + outcome;
+        } else {
+            line = "msg=" + messageId
+                    + " view=" + view.getClass().getSimpleName()
+                    + " attached=" + view.isAttachedToWindow()
+                    + " visible=" + (view.getVisibility() == View.VISIBLE)
+                    + " height=" + view.getHeight()
+                    + " bound=" + (bound == null ? "null" : bound)
+                    + " outcome=" + outcome;
         }
-        XLog.d("layout-diag: msg=" + messageId
-                + " view=" + view.getClass().getSimpleName()
-                + " attached=" + view.isAttachedToWindow()
-                + " visible=" + (view.getVisibility() == View.VISIBLE)
-                + " height=" + view.getHeight()
-                + " bound=" + (bound == null ? "null" : bound)
-                + " outcome=" + outcome);
+        XLog.d("layout-diag: " + line);
+        // 设备上常常取不到 logcat，因此同时写入可从设置页读取的诊断缓冲区。
+        Diagnostics.record(line);
     }
 
     // ---------------------------------------------------------------- 翻译流程

@@ -67,6 +67,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private CheckBox verboseInput;
     private TextView statusText;
     private TextView resultText;
+    private Button diagRefreshButton;
+    private Button diagClearButton;
+    private TextView diagText;
     private EditText testTextInput;
     private Button saveButton;
     private Button configCheckButton;
@@ -168,6 +171,23 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         verboseInput.setText("详细诊断日志（消息正文与译文始终脱敏）");
         root.addView(verboseInput, matchWrap());
 
+        // 设备上常常取不到 logcat，因此把模块回写的诊断直接显示出来。
+        diagRefreshButton = new Button(this);
+        diagRefreshButton.setText("刷新布局诊断");
+        diagRefreshButton.setOnClickListener(v -> refreshDiagnostics());
+        root.addView(diagRefreshButton, matchWrap());
+
+        diagText = new TextView(this);
+        diagText.setTextSize(10f);
+        diagText.setPadding(0, dp(4), 0, dp(4));
+        diagText.setText("（暂无诊断数据）");
+        root.addView(diagText, matchWrap());
+
+        diagClearButton = new Button(this);
+        diagClearButton.setText("清空布局诊断");
+        diagClearButton.setOnClickListener(v -> clearDiagnostics());
+        root.addView(diagClearButton, matchWrap());
+
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
                 ApiTester.DEFAULT_TEST_TEXT,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
@@ -260,6 +280,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
         concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
         verboseInput.setChecked(snapshot.verboseLog);
+        // 连接成功后直接展示当前诊断，省去再点一次刷新。
+        refreshDiagnostics();
     }
 
     private void save() {
@@ -508,6 +530,50 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
         resultText.setText(message.toString());
         updateStatus(result.ok ? "测试通过。" : "测试失败，详见下方结果。");
+    }
+
+    // ------------------------------------------------------------ 布局诊断
+
+    /**
+     * 读取模块回写的诊断内容。
+     *
+     * <p>模块进程与设置页不在同一进程，配置文件由 LSPosed 的远程配置同步，
+     * 因此这里用 {@code getAll()} 现场读取，而不是使用缓存的快照。</p>
+     */
+    private void refreshDiagnostics() {
+        SharedPreferences currentPrefs = prefs;
+        if (currentPrefs == null) {
+            diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
+            return;
+        }
+        String text;
+        try {
+            text = currentPrefs.getString(Config.KEY_DIAGNOSTICS, "");
+        } catch (Throwable t) {
+            diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
+            return;
+        }
+        if (text == null || text.isEmpty()) {
+            diagText.setText("（模块还没有写入诊断。请确认已启用“详细诊断日志”，"
+                    + "并在 Discord 中复现一次翻译/切换。）");
+            return;
+        }
+        diagText.setText(text);
+    }
+
+    /** 清空诊断，便于下一次复现只观察新增记录。 */
+    private void clearDiagnostics() {
+        SharedPreferences currentPrefs = prefs;
+        if (currentPrefs == null) {
+            diagText.setText("未连接 LSPosed 服务，无法清空诊断。");
+            return;
+        }
+        try {
+            currentPrefs.edit().putString(Config.KEY_DIAGNOSTICS, "").apply();
+            diagText.setText("（已清空）");
+        } catch (Throwable t) {
+            diagText.setText("清空失败：" + t.getClass().getSimpleName());
+        }
     }
 
     private void updateStatus(String status) {
