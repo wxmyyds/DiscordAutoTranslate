@@ -77,6 +77,7 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
+        setLayoutDiagnostic(c.verboseLog);
 
         // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
         Scheduler.get().setMaxConcurrency(c.maxConcurrency);
@@ -220,18 +221,22 @@ public final class HookBridge {
         if (invocationTarget == null || method == null || args == null) {
             return;
         }
-        Runnable task = () -> {
-            if (contentView != null && messageId != null
-                    && !RerenderRegistry.stillBound(messageId, messageIdOf(contentView))) {
-                XLog.d("rerender skipped: view rebound to another message");
-                return;
+        String bound = messageIdOf(contentView);
+        if (contentView != null && messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
+            XLog.d("rerender skipped: view rebound to another message");
+            if (sLayoutDiagnostic) {
+                logRerender(messageId, contentView, bound, "rebound");
             }
-            invokeRerender(invocationTarget, contentView, method, args);
-        };
+            return;
+        }
+        Runnable task = () -> invokeRerender(invocationTarget, contentView, messageId, method, args);
         if (invocationTarget instanceof View) {
             View host = (View) invocationTarget;
-            // View.post 在未附着的视图上会排队到下一次 attach，仍能获得新布局。
+            // View.post 把执行移出当前布局遍历；视图未附着时排队到下一次 attach。
             if (!host.post(task)) {
+                if (sLayoutDiagnostic) {
+                    logRerender(messageId, host, bound, "post-rejected");
+                }
                 task.run();
             }
             return;
@@ -241,7 +246,7 @@ public final class HookBridge {
     }
 
     private void invokeRerender(Object invocationTarget, @Nullable View contentView,
-                                Method method, Object[] args) {
+                                @Nullable String messageId, Method method, Object[] args) {
         RERENDERING.set(Boolean.TRUE);
         try {
             method.invoke(invocationTarget, args);
@@ -251,8 +256,14 @@ public final class HookBridge {
         } finally {
             RERENDERING.remove();
         }
+        View view = contentView != null
+                ? contentView
+                : (invocationTarget instanceof View ? (View) invocationTarget : null);
         // 回复引用的调用目标是容器，真正需要重新测量的是内部正文视图。
-        requestRelayout(contentView != null ? contentView : invocationTarget);
+        requestRelayout(view);
+        if (sLayoutDiagnostic) {
+            logRerender(messageId, view, messageIdOf(view), "invoked");
+        }
     }
 
     /**
@@ -262,19 +273,17 @@ public final class HookBridge {
      * （{@code ChatListChildView$DefaultImpls.onMeasureConsiderFrozen$lambda$0}）：
      * 先 {@code forceLayout()} 清除测量的缓存标记，再 {@code requestLayout()}、
      * {@code invalidate()}。单纯 {@code requestLayout()} 在尺寸未变时可能不会
-     * 重新执行 {@code onMeasure}，行高就继续沿用旧值，直到列表回收重绑。
+     * 重新执行 {@code onMeasure}，行高就继续沿用旧值，直到列表回收重绑。</p>
      *
-     * <p>沿父链向上处理到列表行容器（通常包含正文视图的几层），
-     * 因为行高由父容器测量决定，而不是由 TextView 自己决定。</p>
+     * <p>沿父链向上处理列表行容器，因为行高由父容器测量决定，
+     * 而不是由 TextView 自己决定。</p>
      */
-    private static void requestRelayout(Object invocationTarget) {
-        View view = invocationTarget instanceof View ? (View) invocationTarget : null;
+    private static void requestRelayout(@Nullable View view) {
         if (view == null) {
             return;
         }
         try {
             forceRelayout(view);
-            // 行高由父容器测量决定，逐层向上刷新到列表行。
             android.view.ViewParent parent = view.getParent();
             for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
                 forceRelayout((View) parent);
@@ -288,10 +297,39 @@ public final class HookBridge {
     /** 重渲染后最多向上刷新的父层级数，避免触到整棵树。 */
     private static final int RELAYOUT_MAX_DEPTH = 3;
 
+    /** 诊断开关：只有排查“布局未刷新”时才打开。 */
+    private static volatile boolean sLayoutDiagnostic = false;
+
+    /** 由模块入口在解析配置后设置，与“详细诊断日志”共用同一个开关。 */
+    public static void setLayoutDiagnostic(boolean enabled) {
+        sLayoutDiagnostic = enabled;
+    }
+
     private static void forceRelayout(View view) {
         view.forceLayout();
         view.requestLayout();
         view.invalidate();
+    }
+
+    /**
+     * 诊断日志：记录重渲染是否真的执行、视图处于什么状态。
+     *
+     * <p>不记录消息正文与密钥；只含消息 ID、视图类型、attached/可见性、
+     * 重渲染时视图高度、当前绑定关系与结论标签。</p>
+     */
+    private static void logRerender(@Nullable String messageId, @Nullable View view,
+                                    @Nullable String bound, String outcome) {
+        if (view == null) {
+            XLog.d("layout-diag: msg=" + messageId + " view=null outcome=" + outcome);
+            return;
+        }
+        XLog.d("layout-diag: msg=" + messageId
+                + " view=" + view.getClass().getSimpleName()
+                + " attached=" + view.isAttachedToWindow()
+                + " visible=" + (view.getVisibility() == View.VISIBLE)
+                + " height=" + view.getHeight()
+                + " bound=" + (bound == null ? "null" : bound)
+                + " outcome=" + outcome);
     }
 
     // ---------------------------------------------------------------- 翻译流程
