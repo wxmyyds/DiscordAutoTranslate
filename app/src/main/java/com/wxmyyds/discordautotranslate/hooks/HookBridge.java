@@ -6,6 +6,7 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
 import com.wxmyyds.discordautotranslate.core.Diagnostics;
+import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.EnglishDetector;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
