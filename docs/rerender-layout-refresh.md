@@ -25,11 +25,21 @@
 - `HookBridge.requestRerender`
   - 改为通过调用目标视图的 `View.post(...)` 投递，把重渲染移出当前宿主布局遍历；`post` 失败时回退为原同步执行，不丢功能。
   - 新增带身份校验的重载：执行前再校验一次视图是否已绑定到其他消息；绑定未知不视为复用。
-  - 重渲染成功后对正文视图显式 `requestLayout()` + `invalidate()`；回复引用场景作用在其内部正文视图上。
+  - 重渲染成功后刷新布局：与宿主配方一致（`ChatListChildView$DefaultImpls.onMeasureConsiderFrozen$lambda$0` 就是 `forceLayout()` + `requestLayout()`），本模块改为 `forceLayout()` + `requestLayout()` + `invalidate()`，并从正文视图沿父链向上刷新最多 3 层 —— 行高由父容器测量决定，单纯对 TextView `requestLayout()` 不足以重新执行 `onMeasure`。
 - `RerenderRegistry`
   - 抽出 `stillBound(expected, actual)`：`expected == null`、`actual == null` 或相等都视为可渲染，**只有确认绑定到其他消息才移除**。
   - `rerender` 把正文视图与消息 ID 一起传给 `requestRerender`，把复用校验放到真正执行时刻。
 - 不改状态模型、缓存键、请求协议、Hook 安装时序；不修改宿主 smali。
+
+### 追加事实：宿主会沿用旧测量尺寸
+
+`ChatListRelativeLayout`（`MessageView` 的父类）的 `onMeasure` 调用
+`ChatListChildView$DefaultImpls.onMeasureConsiderFrozen`。当父视图宽度测量为
+EXACTLY 且 `ChatListView.getMeasuredWidth()==0` 时，该方法用
+`makeMeasureSpec(getMeasuredWidth(), EXACTLY)` 与
+`makeMeasureSpec(getMeasuredHeight(), EXACTLY)` **沿用旧尺寸**测量，然后 post 一次
+`forceLayout()+requestLayout()` 补偿。这说明“没有 `forceLayout` 的 `requestLayout`”
+在该列表里不保证重新测量，与“必须滚动才更新”的现象一致。
 
 ### 影响与风险
 
