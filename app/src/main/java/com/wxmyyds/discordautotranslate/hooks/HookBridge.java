@@ -1,6 +1,10 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
+import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
@@ -79,7 +83,9 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
-        setLayoutDiagnostic(c.verboseLog);
+        // 布局诊断始终开启：设备上既没有 logcat，也不保证用户勾选了详细日志，
+        // 若与 verboseLog 绑定，排查时就永远拿不到数据。
+        setLayoutDiagnostic(true);
 
         // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
         Scheduler.get().setMaxConcurrency(c.maxConcurrency);
@@ -226,9 +232,7 @@ public final class HookBridge {
         String bound = messageIdOf(contentView);
         if (contentView != null && messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
             XLog.d("rerender skipped: view rebound to another message");
-            if (sLayoutDiagnostic) {
-                logRerender(messageId, contentView, bound, "rebound");
-            }
+            logRerender(messageId, contentView, bound, "rebound");
             return;
         }
         Runnable task = () -> invokeRerender(invocationTarget, contentView, messageId, method, args);
@@ -236,9 +240,7 @@ public final class HookBridge {
             View host = (View) invocationTarget;
             // View.post 把执行移出当前布局遍历；视图未附着时排队到下一次 attach。
             if (!host.post(task)) {
-                if (sLayoutDiagnostic) {
-                    logRerender(messageId, host, bound, "post-rejected");
-                }
+                logRerender(messageId, host, bound, "post-rejected");
                 task.run();
             }
             return;
@@ -261,11 +263,11 @@ public final class HookBridge {
         View view = contentView != null
                 ? contentView
                 : (invocationTarget instanceof View ? (View) invocationTarget : null);
+        int heightBefore = view == null ? -1 : view.getHeight();
         // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
         postInvalidateRow(messageId, view);
-        if (sLayoutDiagnostic) {
-            logRerender(messageId, view, messageIdOf(view), "invoked");
-        }
+        logRerender(messageId, view, messageIdOf(view),
+                "invoked(before=" + heightBefore + ")");
     }
 
     /**
@@ -286,9 +288,13 @@ public final class HookBridge {
         if (!PENDING_ROW_REFRESH.add(key)) {
             return; // 同一帧内已经安排过，避免重复通知造成多次重绑。
         }
+        final int heightBefore = view.getHeight();
         boolean posted = view.post(() -> {
             PENDING_ROW_REFRESH.remove(key);
             invalidateRow(view);
+            // 刷新是否生效，只能靠执行后的高度说话。
+            logRerender(messageId, view, HookBridge.get().messageIdOf(view),
+                    "row-refresh(before=" + heightBefore + ",after=" + view.getHeight() + ")");
         });
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
@@ -406,6 +412,9 @@ public final class HookBridge {
      */
     private static void logRerender(@Nullable String messageId, @Nullable View view,
                                     @Nullable String bound, String outcome) {
+        if (!sLayoutDiagnostic) {
+            return;
+        }
         String line;
         if (view == null) {
             line = "msg=" + messageId + " view=null outcome=" + outcome;
@@ -421,6 +430,70 @@ public final class HookBridge {
         XLog.d("layout-diag: " + line);
         // 设备上常常取不到 logcat，因此同时写入可从设置页读取的诊断缓冲区。
         Diagnostics.record(line);
+        showDiagnosticToast(view, line);
+    }
+
+    /** 最近一次可用的 Context，供没有视图时的诊断展示使用。 */
+    private static volatile Context sDiagContext = null;
+
+    /** Toast 节流状态：相同内容 1.5 秒内不重复弹出。 */
+    private static volatile String sLastDiagToast = null;
+    private static volatile long sLastDiagToastAt = 0L;
+
+    /**
+     * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
+     *
+     * <p>与 {@link #logRerender} 共用同一套缓冲区与展示通道。</p>
+     */
+    public void logLayoutFact(@Nullable String messageId, String what) {
+        logRerender(messageId, null, null, what);
+    }
+
+    /**
+     * 把诊断行直接弹到屏幕上。
+     *
+     * <p>排查期间设备取不到 logcat，设置页也需要用户主动去翻，容易错过。
+     * Toast 由视图自身的 Context 发起，不需要额外持有 ContentProvider 或
+     * Application 引用；失败时静默忽略。</p>
+     */
+    private static void showDiagnosticToast(@Nullable View view, String line) {
+        if (line == null || line.isEmpty()) {
+            return;
+        }
+        try {
+            Context ctx = view != null ? view.getContext() : null;
+            if (ctx != null) {
+                // 记住任意一个可用 Context：后来的记录可能拿不到视图。
+                sDiagContext = ctx;
+            } else {
+                ctx = sDiagContext;
+            }
+            if (ctx == null) {
+                return;
+            }
+            final String text = line.length() > 220 ? line.substring(0, 220) + "…" : line;
+            // 节流：同一条诊断短时间内只弹一次，避免 Toast 互相覆盖看不到内容。
+            long now = android.os.SystemClock.uptimeMillis();
+            if (text.equals(sLastDiagToast) && now - sLastDiagToastAt < 1500L) {
+                return;
+            }
+            sLastDiagToast = text;
+            sLastDiagToastAt = now;
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                Toast.makeText(ctx, text, Toast.LENGTH_LONG).show();
+            } else {
+                Handler main = new Handler(Looper.getMainLooper());
+                main.post(() -> {
+                    try {
+                        Toast.makeText(ctx, text, Toast.LENGTH_LONG).show();
+                    } catch (Throwable ignored) {
+                        // 诊断展示失败不影响渲染。
+                    }
+                });
+            }
+        } catch (Throwable ignored) {
+            // 诊断展示失败不影响渲染。
+        }
     }
 
     // ---------------------------------------------------------------- 翻译流程

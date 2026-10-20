@@ -120,6 +120,9 @@ public final class RerenderRegistry {
         }
         List<Target> list = TARGETS.get(messageId);
         if (list == null) {
+            // 关键事实：译文已完成却找不到登记项，说明重渲染从未被安排，
+            // 行高自然只能等滚动重新 bind 才更新。
+            HookBridge.get().logLayoutFact(messageId, "no-target");
             return;
         }
         synchronized (list) {
@@ -141,6 +144,9 @@ public final class RerenderRegistry {
                     it.remove();
                     continue;
                 }
+                HookBridge.get().logLayoutFact(messageId,
+                        "target(h=" + contentView.getHeight() + ",attached="
+                                + contentView.isAttachedToWindow() + ")");
                 HookBridge.get().requestRerender(contentView, messageId,
                         invocationTarget, target.method, target.args);
             }
