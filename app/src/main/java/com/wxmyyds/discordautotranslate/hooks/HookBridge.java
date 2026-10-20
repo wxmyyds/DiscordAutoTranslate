@@ -461,13 +461,12 @@ public final class HookBridge {
             return;
         }
         try {
-            Context ctx = view != null ? view.getContext() : null;
-            if (ctx != null) {
+            Context fromView = view != null ? view.getContext() : null;
+            if (fromView != null) {
                 // 记住任意一个可用 Context：后来的记录可能拿不到视图。
-                sDiagContext = ctx;
-            } else {
-                ctx = sDiagContext;
+                sDiagContext = fromView;
             }
+            final Context ctx = fromView != null ? fromView : sDiagContext;
             if (ctx == null) {
                 return;
             }
