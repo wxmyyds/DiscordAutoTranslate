@@ -41,6 +41,22 @@ EXACTLY 且 `ChatListView.getMeasuredWidth()==0` 时，该方法用
 `forceLayout()+requestLayout()` 补偿。这说明“没有 `forceLayout` 的 `requestLayout`”
 在该列表里不保证重新测量，与“必须滚动才更新”的现象一致。
 
+### 关键事实：宿主刷新单行只走 notifyItemChanged
+
+`ChannelChatListAdapter` 处理 `ListOperation$Change` 时调用
+`notifyItemChanged(index)`；`ChatListManager` 在行内容变化时也是先
+`List.set(index, row)` 再生成 `ListOperation$Change`。宿主从不靠视图级
+`requestLayout` 刷新消息行。
+
+结合 `ChatListChildView$DefaultImpls.onMeasureConsiderFrozen` 会用旧尺寸测量的行为，
+可以解释前两版为何无效：只标记视图失效并不会让 RecyclerView 重新测量该行，
+而滚动之所以有效，正是因为它强制重新 bind 并重新测量。
+
+因此本模块改为：对承载该消息的 `RecyclerView` 调用
+`notifyItemChanged(bindingAdapterPosition)`。因为渲染漏斗本身运行在宿主布局过程内，
+直接通知会重入布局（RecyclerView 会抛异常），所以投递到下一轮消息队列，
+并按消息 ID 在同一帧内去重。
+
 ### 影响与风险
 
 - 重渲染延后到下一个消息队列周期（通常下一帧），视觉上最多一帧延迟；按钮/图标点击不再在宿主布局中重入渲染。

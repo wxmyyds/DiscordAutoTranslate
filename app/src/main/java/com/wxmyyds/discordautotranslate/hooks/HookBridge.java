@@ -260,43 +260,134 @@ public final class HookBridge {
         View view = contentView != null
                 ? contentView
                 : (invocationTarget instanceof View ? (View) invocationTarget : null);
-        // 回复引用的调用目标是容器，真正需要重新测量的是内部正文视图。
-        requestRelayout(view);
+        // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
+        postInvalidateRow(messageId, view);
         if (sLayoutDiagnostic) {
             logRerender(messageId, view, messageIdOf(view), "invoked");
         }
     }
 
     /**
-     * 重渲染后强制重新测量。
+     * 把行刷新投递到下一轮消息队列，并按消息去重。
      *
-     * <p>与宿主自己刷新列表行的配方一致
-     * （{@code ChatListChildView$DefaultImpls.onMeasureConsiderFrozen$lambda$0}）：
-     * 先 {@code forceLayout()} 清除测量的缓存标记，再 {@code requestLayout()}、
-     * {@code invalidate()}。单纯 {@code requestLayout()} 在尺寸未变时可能不会
-     * 重新执行 {@code onMeasure}，行高就继续沿用旧值，直到列表回收重绑。</p>
-     *
-     * <p>沿父链向上处理列表行容器，因为行高由父容器测量决定，
-     * 而不是由 TextView 自己决定。</p>
+     * <p>{@code notifyItemChanged} 会触发 RecyclerView 重新布局。渲染漏斗
+     * （{@code toSpannable}）本身就在宿主布局过程中被调用，此时直接通知会重入
+     * 布局并抛出 “Cannot call this method while RecyclerView is computing a layout”。
+     * 因此这里只标记，等当前遍历结束再提交，同一消息在一帧内只提交一次。</p>
      */
-    private static void requestRelayout(@Nullable View view) {
+    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view) {
+        if (view == null) {
+            return;
+        }
+        final String key = messageId != null
+                ? messageId
+                : Integer.toHexString(System.identityHashCode(view));
+        if (!PENDING_ROW_REFRESH.add(key)) {
+            return; // 同一帧内已经安排过，避免重复通知造成多次重绑。
+        }
+        boolean posted = view.post(() -> {
+            PENDING_ROW_REFRESH.remove(key);
+            invalidateRow(view);
+        });
+        if (!posted) {
+            PENDING_ROW_REFRESH.remove(key);
+            // 视图未附着：滚动重新绑定时仍会走正常渲染，无需强制刷新。
+            XLog.d("row refresh skipped: view not attached");
+        }
+    }
+
+    /** 已安排但尚未执行的行刷新；避免同一帧内重复 notifyItemChanged。 */
+    private static final java.util.Set<String> PENDING_ROW_REFRESH =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    /**
+     * 让承载该消息的列表重新绑定这一行。
+     *
+     * <p>只对视图调用 {@code requestLayout}/{@code forceLayout} 不足以刷新行高：
+     * 列表行高度由 RecyclerView 的布局过程决定，而
+     * {@code ChatListChildView$DefaultImpls.onMeasureConsiderFrozen} 在父视图宽度为
+     * EXACTLY 且 {@code ChatListView.getMeasuredWidth()==0} 时会用旧尺寸做测量。
+     * 宿主自己刷新单行内容走的也是 {@code notifyItemChanged(index)}
+     * （{@code ChannelChatListAdapter} 处理 {@code ListOperation$Change}），
+     * 滚动能恢复正是因为滚动重新 bind 了该行。</p>
+     *
+     * <p>位置无法解析时静默放弃：这只是刷新增强，不能影响已完成的翻译渲染。</p>
+     */
+    private static void invalidateRow(@Nullable View view) {
         if (view == null) {
             return;
         }
         try {
-            forceRelayout(view);
-            android.view.ViewParent parent = view.getParent();
-            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
-                forceRelayout((View) parent);
-                parent = parent.getParent();
+            android.view.ViewParent parent = findRecyclerView(view);
+            if (parent == null) {
+                return;
             }
+            // 不新增 androidx.recyclerview 依赖：宿主已提供这些类，按名反射即可，
+            // 也能容忍宿主内部 RecyclerView 版本差异。
+            Object adapter = Reflect.call(
+                    findInheritedMethod(parent.getClass(), "getAdapter", 0), parent);
+            if (adapter == null) {
+                return;
+            }
+            Object holder = Reflect.call(
+                    findInheritedMethod(parent.getClass(), "findContainingViewHolder", 1, View.class),
+                    parent, view);
+            if (holder == null) {
+                return;
+            }
+            Object positionValue = Reflect.call(
+                    findInheritedMethod(holder.getClass(), "getBindingAdapterPosition", 0), holder);
+            if (!(positionValue instanceof Integer)) {
+                return;
+            }
+            int position = (Integer) positionValue;
+            // RecyclerView.NO_POSITION 为 -1；行已回收时不能再通知。
+            if (position < 0) {
+                return;
+            }
+            Reflect.call(findInheritedMethod(
+                    adapter.getClass(), "notifyItemChanged", 1, int.class), adapter, position);
         } catch (Throwable t) {
-            XLog.d("requestLayout failed: " + t.getClass().getSimpleName());
+            XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
         }
     }
 
-    /** 重渲染后最多向上刷新的父层级数，避免触到整棵树。 */
-    private static final int RELAYOUT_MAX_DEPTH = 3;
+    /**
+     * 沿继承链查找方法：{@code getAdapter}/{@code notifyItemChanged} 等声明在
+     * {@code RecyclerView} 或其 {@code Adapter} 基类上，子类的
+     * {@code getDeclaredMethods()} 看不到它们。
+     */
+    @Nullable
+    private static Method findInheritedMethod(@Nullable Class<?> cls, String namePrefix,
+                                              int paramCount, Class<?>... firstParams) {
+        for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
+            Method m = Reflect.findMethod(c, namePrefix, paramCount, firstParams);
+            if (m != null) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 沿父链找到最近的 RecyclerView（按类名判断，避免编译期依赖）。
+     */
+    @Nullable
+    private static android.view.ViewParent findRecyclerView(View view) {
+        android.view.ViewParent parent = view.getParent();
+        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
+            if (Reflect.isInstanceOfName(parent, RECYCLER_VIEW_CLASS)) {
+                return parent;
+            }
+            parent = parent.getParent();
+        }
+        return null;
+    }
+
+    private static final String RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView";
+
+    /** 向上查找列表时的最大层数。 */
+    private static final int RELAYOUT_MAX_DEPTH = 12;
 
     /** 诊断开关：只有排查“布局未刷新”时才打开。 */
     private static volatile boolean sLayoutDiagnostic = false;
@@ -304,12 +395,6 @@ public final class HookBridge {
     /** 由模块入口在解析配置后设置，与“详细诊断日志”共用同一个开关。 */
     public static void setLayoutDiagnostic(boolean enabled) {
         sLayoutDiagnostic = enabled;
-    }
-
-    private static void forceRelayout(View view) {
-        view.forceLayout();
-        view.requestLayout();
-        view.invalidate();
     }
 
     /**
