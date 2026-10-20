@@ -184,23 +184,94 @@ public final class HookBridge {
     }
 
     /**
-     * 用保存的原始参数重新调用渲染入口；真正的文本替换发生在
-     * {@code TextUtilsKt.toSpannable}（它会按当前状态自行决定替换与否）。
+     * 投递重渲染：必须离开当前宿主布局过程再执行。
+     *
+     * <p>调用方（{@code onMessageBound}、点击回调）可能正处于 RecyclerView 的
+     * measure/layout 中，此时直接重渲染会让新的布局请求被本轮遍历丢掉，
+     * 表现为“文字变了但行高/空白行要等滚动才更新”。投递到视图消息队列后，
+     * 下一次遍历再测量，结果立即生效。</p>
+     *
+     * <p>视图是否已被复用的判定见 {@link RerenderRegistry}；投递执行时由
+     * {@code toSpannable} 按当前状态重新决定替换与否，因此不会把译文写错消息。</p>
+     *
+     * <p>真正的文本替换发生在 {@code TextUtilsKt.toSpannable}，
+     * 它会按当前状态自行决定是否替换。</p>
      *
      * @param invocationTarget 调用 {@code method} 的接收者（正文视图或回复预览容器）
      */
     public void requestRerender(@Nullable Object invocationTarget, @Nullable Method method,
                                 @Nullable Object[] args) {
+        requestRerender(null, null, invocationTarget, method, args);
+    }
+
+    /**
+     * 带身份校验的重渲染投递。
+     *
+     * <p>排队期间视图可能已被 RecyclerView 复用到其他消息，因此执行前必须
+     * 再校验一次：绑定已变成其他消息则跳过，不能把旧译文渲染到新消息上。
+     * 绑定未知（{@code null}，通常是映射表 LRU 淘汰）不视为复用。</p>
+     *
+     * @param contentView 用于校验复用的正文视图，可为 null（不校验）
+     * @param messageId   期望绑定的消息 ID，可为 null（不校验）
+     */
+    public void requestRerender(@Nullable View contentView, @Nullable String messageId,
+                                @Nullable Object invocationTarget, @Nullable Method method,
+                                @Nullable Object[] args) {
         if (invocationTarget == null || method == null || args == null) {
             return;
         }
+        Runnable task = () -> {
+            if (contentView != null && messageId != null
+                    && !RerenderRegistry.stillBound(messageId, messageIdOf(contentView))) {
+                XLog.d("rerender skipped: view rebound to another message");
+                return;
+            }
+            invokeRerender(invocationTarget, contentView, method, args);
+        };
+        if (invocationTarget instanceof View) {
+            View host = (View) invocationTarget;
+            // View.post 在未附着的视图上会排队到下一次 attach，仍能获得新布局。
+            if (!host.post(task)) {
+                task.run();
+            }
+            return;
+        }
+        // 非视图目标（理论上不出现）：没有可用的布局时机，保持原同步行为。
+        task.run();
+    }
+
+    private void invokeRerender(Object invocationTarget, @Nullable View contentView,
+                                Method method, Object[] args) {
         RERENDERING.set(Boolean.TRUE);
         try {
             method.invoke(invocationTarget, args);
         } catch (Throwable t) {
             XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
+            return;
         } finally {
             RERENDERING.remove();
+        }
+        // 回复引用的调用目标是容器，真正需要重新测量的是内部正文视图。
+        requestRelayout(contentView != null ? contentView : invocationTarget);
+    }
+
+    /**
+     * 重渲染后显式请求重新测量。
+     *
+     * <p>宿主通过 {@code TextView.setText} 换文本，理论上会自己 {@code requestLayout}；
+     * 但译文与原文行数相同、只有空白行变化时，文本长度变化的信号并不总是
+     * 触发一次完整测量。这里补一次明确的请求，保证行高按当前内容重算。</p>
+     */
+    private static void requestRelayout(Object invocationTarget) {
+        View view = invocationTarget instanceof View ? (View) invocationTarget : null;
+        if (view == null) {
+            return;
+        }
+        try {
+            view.requestLayout();
+            view.invalidate();
+        } catch (Throwable t) {
+            XLog.d("requestLayout failed: " + t.getClass().getSimpleName());
         }
     }
 
