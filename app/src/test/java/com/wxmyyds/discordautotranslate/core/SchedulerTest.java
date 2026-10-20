@@ -470,17 +470,21 @@ public class SchedulerTest {
         try {
             s.setMaxConcurrency(1);
             CountDownLatch release = new CountDownLatch(1);
+            // 第一个任务真正进入引擎后才说明它已持有唯一许可。
+            CountDownLatch holding = new CountDownLatch(1);
             AtomicInteger calls = new AtomicInteger();
             Scheduler.Engine engine = text -> {
                 calls.incrementAndGet();
+                holding.countDown();
                 release.await(5, TimeUnit.SECONDS);
                 return "t";
             };
             s.submit("hold", "h0", "text", engine, ALWAYS, new Collector());
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (!s.stats().contains("inFlight=1") && System.nanoTime() < deadline) {
-                Thread.sleep(20);
-            }
+            // 注意：不可用 stats() 的 inFlight 判断。submit() 在 permits.acquire()
+            // 之前就写入 inFlight，此时任务可能还没拿到许可；据此放行会让第二个
+            // 任务抢先拿到许可并调用引擎，造成用例随机失败。
+            assertTrue("first task must reach the engine and hold the permit",
+                    holding.await(5, TimeUnit.SECONDS));
 
             Collector stale = new Collector();
             s.submit("1", "h1", "text", engine, (gen, hash) -> false, stale);
