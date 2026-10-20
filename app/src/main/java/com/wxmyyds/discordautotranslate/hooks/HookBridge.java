@@ -256,11 +256,16 @@ public final class HookBridge {
     }
 
     /**
-     * 重渲染后显式请求重新测量。
+     * 重渲染后强制重新测量。
      *
-     * <p>宿主通过 {@code TextView.setText} 换文本，理论上会自己 {@code requestLayout}；
-     * 但译文与原文行数相同、只有空白行变化时，文本长度变化的信号并不总是
-     * 触发一次完整测量。这里补一次明确的请求，保证行高按当前内容重算。</p>
+     * <p>与宿主自己刷新列表行的配方一致
+     * （{@code ChatListChildView$DefaultImpls.onMeasureConsiderFrozen$lambda$0}）：
+     * 先 {@code forceLayout()} 清除测量的缓存标记，再 {@code requestLayout()}、
+     * {@code invalidate()}。单纯 {@code requestLayout()} 在尺寸未变时可能不会
+     * 重新执行 {@code onMeasure}，行高就继续沿用旧值，直到列表回收重绑。
+     *
+     * <p>沿父链向上处理到列表行容器（通常包含正文视图的几层），
+     * 因为行高由父容器测量决定，而不是由 TextView 自己决定。</p>
      */
     private static void requestRelayout(Object invocationTarget) {
         View view = invocationTarget instanceof View ? (View) invocationTarget : null;
@@ -268,11 +273,25 @@ public final class HookBridge {
             return;
         }
         try {
-            view.requestLayout();
-            view.invalidate();
+            forceRelayout(view);
+            // 行高由父容器测量决定，逐层向上刷新到列表行。
+            android.view.ViewParent parent = view.getParent();
+            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
+                forceRelayout((View) parent);
+                parent = parent.getParent();
+            }
         } catch (Throwable t) {
             XLog.d("requestLayout failed: " + t.getClass().getSimpleName());
         }
+    }
+
+    /** 重渲染后最多向上刷新的父层级数，避免触到整棵树。 */
+    private static final int RELAYOUT_MAX_DEPTH = 3;
+
+    private static void forceRelayout(View view) {
+        view.forceLayout();
+        view.requestLayout();
+        view.invalidate();
     }
 
     // ---------------------------------------------------------------- 翻译流程
