@@ -489,13 +489,16 @@ public final class HookBridge {
             PENDING_HOST_REBINDS.add(view);
             try {
                 notifyItemChanged.invoke(rowAdapter, notifyPosition);
-                // notifyItemChanged 只是把该行标记为 invalid，RecyclerView 会把它排入
-                // 下一次布局再重绑。实测日志里 hostBind 始终为 false，说明到
-                // onPreDraw 时那次重绑还没发生（该行可能不在可视区内或已被预取）。
-                // 因此这里直接同步调一次宿主的 onBindViewHolder，让内层
-                // MessageContentViewHolder.bind 真正执行（其缓存已在上面清掉）。
+                // notifyItemChanged 只把该行标记为 invalid，真正重绑被排到后续
+                // 布局/预取阶段。实测 hostBind 始终为 false，故这里同步重绑一次。
                 boolean rebound = rebindRowNow(rowAdapter, rowHolder, notifyPosition);
                 logRerender(messageId, view, bound, "row-refresh-rebind-now=" + rebound);
+                // 关键时序：以上重绑发生在宿主正在布局的帧内，此时
+                // setItems→notifyDataSetChanged() 会被 RecyclerView 抑制/延迟，
+                // 由此发起的 requestLayout() 也会被丢弃（已在 layout 中）。
+                // 所以必须把重新测量推迟到本帧布局结束之后，否则高度保持旧值
+                // 直到用户手动滚动。
+                scheduleRelayoutAfterLayout(view);
                 return true;
             } catch (Throwable t) {
                 PENDING_HOST_REBINDS.remove(view);
@@ -507,6 +510,48 @@ public final class HookBridge {
         } catch (Throwable t) {
             XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
             return false;
+        }
+    }
+
+    /**
+     * 把一次强制重新测量推到当前帧布局结束之后。
+     *
+     * <p>在宿主布局进行中调用 {@code requestLayout()} 会被直接丢弃，这是
+     * “重绑已发生但高度不变、必须手动滚动才恢复”的成因。因此先通过
+     * {@code doOnPreDraw} 的下一帧回调与 {@code post} 双重兜底：任何一个
+     * 在布局结束后真正执行，都会把新高度应用到该行。</p>
+     */
+    private static void scheduleRelayoutAfterLayout(@Nullable final View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            view.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (!view.isAttachedToWindow()) {
+                            return;
+                        }
+                        // 布局已结束，此时 requestLayout 不会被丢弃。
+                        for (View v = view; v != null; ) {
+                            v.forceLayout();
+                            android.view.ViewParent parent = v.getParent();
+                            v = parent instanceof View ? (View) parent : null;
+                        }
+                        requestLayoutChain(view);
+                        view.invalidate();
+                        logRerender(null, view, messageIdOf(view),
+                                "row-refresh-relayout-posted(after="
+                                        + view.getHeight() + ",metrics="
+                                        + textLayoutMetrics(view) + ")");
+                    } catch (Throwable t) {
+                        XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            XLog.d("schedule relayout failed: " + t.getClass().getSimpleName());
         }
     }
 
