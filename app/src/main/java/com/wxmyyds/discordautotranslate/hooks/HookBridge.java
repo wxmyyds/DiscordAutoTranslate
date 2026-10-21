@@ -336,7 +336,7 @@ public final class HookBridge {
                 return;
             }
             PENDING_ROW_REFRESH.remove(key);
-            boolean notified = invalidateRow(view);
+            boolean notified = invalidateRow(messageId, view);
             final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
             if (!observer.isAlive()) {
                 logRerender(messageId, view, currentBound,
@@ -392,8 +392,13 @@ public final class HookBridge {
      *
      * <p>位置无法解析时静默放弃：这只是刷新增强，不能影响已完成的翻译渲染。</p>
      */
-    private static boolean invalidateRow(@Nullable View view) {
+    private static boolean invalidateRow(@Nullable String messageId, @Nullable View view) {
         if (view == null) {
+            return false;
+        }
+        String bound = HookBridge.get().messageIdOf(view);
+        if (messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
+            logRerender(messageId, view, bound, "row-refresh-skipped-rebound-before-notify");
             return false;
         }
         try {
@@ -414,6 +419,10 @@ public final class HookBridge {
             if (holder == null) {
                 return false;
             }
+            if (Reflect.getField(holder, "messageContentView") != view) {
+                logRerender(messageId, view, bound, "row-refresh-holder-view-mismatch");
+                return false;
+            }
             Object positionValue = Reflect.call(
                     findInheritedMethod(holder.getClass(), "getBindingAdapterPosition", 0), holder);
             if (!(positionValue instanceof Integer)) {
@@ -424,6 +433,9 @@ public final class HookBridge {
             if (position < 0) {
                 return false;
             }
+            boolean cacheInvalidated = invalidateMessageContentBindCache(holder);
+            logRerender(messageId, view, bound,
+                    "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
             Reflect.call(findInheritedMethod(
                     adapter.getClass(), "notifyItemChanged", 1, int.class), adapter, position);
             return true;
@@ -431,6 +443,25 @@ public final class HookBridge {
             XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
             return false;
         }
+    }
+
+    private static boolean invalidateMessageContentBindCache(Object holder) {
+        for (Class<?> cls = holder.getClass(); cls != null; cls = cls.getSuperclass()) {
+            try {
+                java.lang.reflect.Field field = cls.getDeclaredField("lastMessageContent");
+                field.setAccessible(true);
+                field.set(holder, null);
+                return true;
+            } catch (NoSuchFieldException ignored) {
+                // Keep searching the holder's superclass chain.
+            } catch (Throwable t) {
+                XLog.w("cannot invalidate message bind cache: "
+                        + t.getClass().getSimpleName(), t);
+                return false;
+            }
+        }
+        XLog.w("lastMessageContent field not found; row rebind may be skipped");
+        return false;
     }
 
     /**
