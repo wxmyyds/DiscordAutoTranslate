@@ -167,16 +167,14 @@ public final class MessageHooks {
                         // 到底有没有被重新调用」。上面那条 frozen+sameKey 分支在本
                         // 场景下不成立，所以此前从未输出过测量信息。这里对每次进入
                         // 都记一行，用于判定 requestLayout 是否真的走到了测量。
-                        HookBridge.get().logRerender(null, child,
-                                HookBridge.get().messageIdOf(child),
+                        HookBridge.get().logMeasurePass(child,
                                 "measure-enter(frozen=" + frozen
                                         + ",sameKey=" + sameKey
                                         + ",specW=" + View.MeasureSpec.getSize(widthSpec)
                                         + ",specH=" + View.MeasureSpec.getSize(heightSpec)
                                         + ",before=" + oldWidth + "x" + oldHeight + ")");
                         Object result = chain.proceed();
-                        HookBridge.get().logRerender(null, child,
-                                HookBridge.get().messageIdOf(child),
+                        HookBridge.get().logMeasurePass(child,
                                 "measure-exit(frozen=" + frozen
                                         + ",after=" + child.getMeasuredWidth() + "x"
                                         + child.getMeasuredHeight() + ")");

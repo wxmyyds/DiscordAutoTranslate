@@ -736,6 +736,11 @@ public final class HookBridge {
      * <p>不记录消息正文与密钥；只含消息 ID、视图类型、attached/可见性、
      * 重渲染时视图高度、当前绑定关系与结论标签。</p>
      */
+    /** 供宿主测量钩子等旁路调用的诊断入口；仅转发到 logRerender。 */
+    public void logMeasurePass(@Nullable View view, String outcome) {
+        logRerender(null, view, messageIdOf(view), outcome);
+    }
+
     private static void logRerender(@Nullable String messageId, @Nullable View view,
                                     @Nullable String bound, String outcome) {
         String line;
