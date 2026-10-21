@@ -22,6 +22,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
