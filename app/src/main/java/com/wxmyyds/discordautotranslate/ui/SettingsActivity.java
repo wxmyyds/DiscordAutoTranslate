@@ -20,10 +20,12 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.DiagnosticsLog;
 import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
 
+import java.io.File;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -65,6 +67,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private EditText concurrencyInput;
     private CheckBox enabledInput;
     private CheckBox verboseInput;
+    private CheckBox diagnosticsForwardInput;
     private TextView statusText;
     private TextView resultText;
     private EditText testTextInput;
@@ -72,6 +75,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private Button configCheckButton;
     private Button testConnectionButton;
     private Button testTranslationButton;
+    private TextView diagnosticsText;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -80,6 +84,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         setContentView(buildContentView());
         updateStatus("正在连接 LSPosed 服务…");
         XposedServiceConnectionHolder.bind(this);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 用户多半是切回本页查看刚产生的诊断，重新进入即刷新一次。
+        refreshDiagnostics();
     }
 
     @Override
@@ -168,9 +179,15 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         verboseInput.setText("详细诊断日志（消息正文与译文始终脱敏）");
         root.addView(verboseInput, matchWrap());
 
+        diagnosticsForwardInput = new CheckBox(this);
+        diagnosticsForwardInput.setText("把布局诊断回传到本应用（便于复制）");
+        root.addView(diagnosticsForwardInput, matchWrap());
+
         TextView diagnosticsInfo = new TextView(this);
         diagnosticsInfo.setTextSize(12f);
-        diagnosticsInfo.setText("布局诊断写入 LSPosed 日志与 Android logcat，过滤标签：DiscordAutoTranslate");
+        diagnosticsInfo.setText("布局诊断由 Discord 进程（模块 Hook 运行处）推送回本应用，"
+                + "同时也写入 LSPosed 日志与 Android logcat，过滤标签：DiscordAutoTranslate。"
+                + "诊断不含消息正文与 API 密钥。");
         root.addView(diagnosticsInfo, matchWrap());
 
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
@@ -217,6 +234,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         resultText.setPadding(0, dp(8), 0, 0);
         root.addView(resultText, matchWrap());
 
+        addDiagnosticsSection(root);
+
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -234,6 +253,100 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         et.setInputType(inputType);
         parent.addView(et, matchWrap());
         return et;
+    }
+
+    /**
+     * 诊断日志区：日志框 + 刷新 / 复制全部 / 清空。
+     *
+     * <p>不做定时轮询：日志是 Discord 进程推送过来的，打开页面时读一次即可；
+     * 需要看最新内容时用户点“刷新”。这样可以避免无意义的跨进程/磁盘读取。</p>
+     */
+    private void addDiagnosticsSection(LinearLayout parent) {
+        TextView title = new TextView(this);
+        title.setText("布局诊断日志");
+        title.setPadding(0, dp(20), 0, 0);
+        parent.addView(title, matchWrap());
+
+        diagnosticsText = new TextView(this);
+        diagnosticsText.setTextSize(11f);
+        // 等宽字体：诊断行含大量数字字段，对齐后才能快速看出 before/after 差异。
+        diagnosticsText.setTypeface(android.graphics.Typeface.MONOSPACE);
+        diagnosticsText.setTextIsSelectable(true);
+        diagnosticsText.setPadding(dp(8), dp(8), dp(8), dp(8));
+        diagnosticsText.setText("（暂无记录）");
+        parent.addView(diagnosticsText, matchWrap());
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button refresh = new Button(this);
+        refresh.setText("刷新");
+        refresh.setOnClickListener(v -> refreshDiagnostics());
+        row.addView(refresh, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button copy = new Button(this);
+        copy.setText("复制全部");
+        copy.setOnClickListener(v -> copyDiagnostics());
+        row.addView(copy, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button clear = new Button(this);
+        clear.setText("清空");
+        clear.setOnClickListener(v -> clearDiagnostics());
+        row.addView(clear, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        parent.addView(row, matchWrap());
+    }
+
+    // ------------------------------------------------------------ 诊断日志
+
+    /** 读取 Discord 进程推送的日志文件并展示尾部内容。 */
+    private void refreshDiagnostics() {
+        if (destroyed || diagnosticsText == null) {
+            return;
+        }
+        File file = DiagnosticsLog.file(getFilesDir());
+        String raw = DiagnosticsLog.read(file);
+        String formatted = DiagnosticsLog.format(raw, DiagnosticsLog.MAX_DISPLAY_LINES);
+        diagnosticsText.setText(formatted.isEmpty() ? "（暂无记录）" : formatted);
+    }
+
+    /** 把完整（未截断）日志写入剪贴板，便于用户粘贴到聊天工具或工单。 */
+    private void copyDiagnostics() {
+        File file = DiagnosticsLog.file(getFilesDir());
+        String raw = DiagnosticsLog.read(file);
+        String formatted = DiagnosticsLog.format(raw, 0);
+        if (formatted.isEmpty()) {
+            toast("暂无诊断记录可复制。");
+            return;
+        }
+        try {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard == null) {
+                toast("剪贴板不可用。");
+                return;
+            }
+            clipboard.setPrimaryClip(
+                    android.content.ClipData.newPlainText("diagnostics", formatted));
+            toast("诊断日志已复制到剪贴板。");
+        } catch (Throwable t) {
+            toast("复制失败：" + t.getClass().getSimpleName());
+        }
+    }
+
+    private void clearDiagnostics() {
+        File file = DiagnosticsLog.file(getFilesDir());
+        if (!DiagnosticsLog.clear(file)) {
+            toast("清空失败。");
+            return;
+        }
+        if (diagnosticsText != null) {
+            diagnosticsText.setText("（暂无记录）");
+        }
+        toast("诊断日志已清空。");
     }
 
     private static LinearLayout.LayoutParams matchWrap() {
@@ -265,6 +378,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
         concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
         verboseInput.setChecked(snapshot.verboseLog);
+        diagnosticsForwardInput.setChecked(snapshot.diagnosticsForward);
     }
 
     private void save() {
@@ -327,6 +441,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             editor.putInt(Config.KEY_TIMEOUT_MS, snapshot.timeoutMs);
             editor.putInt(Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency);
             editor.putBoolean(Config.KEY_VERBOSE_LOG, snapshot.verboseLog);
+            editor.putBoolean(Config.KEY_DIAGNOSTICS_FORWARD, snapshot.diagnosticsForward);
         } catch (Throwable t) {
             updateStatus("保存失败：" + t.getClass().getSimpleName());
             return;
@@ -403,6 +518,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         memoryPrefs.put(Config.KEY_MAX_CONCURRENCY,
                 parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
         memoryPrefs.put(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
+        memoryPrefs.put(Config.KEY_DIAGNOSTICS_FORWARD, diagnosticsForwardInput.isChecked());
         return Config.read(memoryPrefs);
     }
 

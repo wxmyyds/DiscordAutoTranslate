@@ -26,6 +26,8 @@ public class ConfigTest {
     public void emptyPrefsUseAllDefaults() {
         Config.Snapshot s = Config.read(new MemoryPrefs());
         assertFalse(s.verboseLog);
+        // 诊断回传默认开启：不开就看不到 Discord 进程产生的记录。
+        assertTrue(s.diagnosticsForward);
         assertEquals(Config.DEF_ENABLED, s.enabled);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
         assertEquals(Config.DEF_MODEL, s.model);

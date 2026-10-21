@@ -3,8 +3,20 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- android:forceQueryable 是诊断回传通道成立的前提。
+         Android 11+ 的包可见性会按【调用方】UID 过滤：ContentProviderHelper
+         调用 resolveContentProvider(name, 0, userId)，最终走到
+         ComputerEngine.resolveContentProvider -> shouldFilterApplication；
+         返回 null 就直接 return null，调用方看到的是 “Unknown URL”。
+         调用方是 Discord（com.discord），我们无法给它加 <queries>，
+         只能用 <application android:forceQueryable="true"> 声明本模块对
+         所有应用可见（AOSP AppsFilterBase: isForceQueryable(targetAppId)
+         时直接 return false，即不参与过滤）。
+         该属性仅 API 30+ 存在，编译期由 compileSdk 37 提供，低于 30 的设备
+         会忽略它，不影响安装。 -->
     <application
         android:allowBackup="false"
+        android:forceQueryable="true"
         android:hasCode="true"
         android:label="@string/module_name"
         android:description="@string/module_description"
@@ -26,6 +38,19 @@
         <!-- 注意：io.github.libxposed.service.XposedProvider 由
              io.github.libxposed:service 这个 AAR 自带的 manifest 声明并合并进来，
              此处不要重复声明，否则会因 authority 重复而构建失败。 -->
+
+        <!-- 诊断回传通道。
+             为什么必须导出：诊断产生在 Discord 进程（模块 Hook 运行处），而
+             libxposed 的远程配置在目标进程内只读，模块私有目录又因跨 UID 写入
+             被 SELinux 拒绝（已实测失败），因此只能由模块 App 提供一个接收端。
+             权限校验在 DiagnosticsProvider 内按 UID 完成：写入仅限模块自身与
+             com.discord，读取仅限模块自身。 -->
+        <provider
+            android:name=".core.DiagnosticsProvider"
+            android:authorities="com.wxmyyds.discordautotranslate.diagnostics"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:directBootAware="false" />
 
     </application>
 </manifest>

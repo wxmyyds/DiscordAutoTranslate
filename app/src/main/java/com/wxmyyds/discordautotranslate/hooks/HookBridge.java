@@ -80,6 +80,8 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
+        // 开关关闭时，Diagnostics 不再尝试跨进程回传（诊断仍写 logcat/框架日志）。
+        Diagnostics.setForwardEnabled(c.diagnosticsForward);
         // 布局诊断始终开启：设备上既没有 logcat，也不保证用户勾选了详细日志，
         // 若与 verboseLog 绑定，排查时就永远拿不到数据。
         setLayoutDiagnostic(true);
@@ -608,6 +610,23 @@ public final class HookBridge {
     }
 
     /**
+     * 把宿主 {@link View} 的 Context 交给诊断通道。
+     *
+     * <p>只在首次调用时真正获取 {@link android.content.ContentResolver}，
+     * 后续调用为一次 null 检查；渲染漏斗每次重绑都会走这条路径，必须足够廉价。</p>
+     */
+    private static void captureHostContext(@Nullable View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            Diagnostics.captureHostContext(view.getContext());
+        } catch (Throwable ignored) {
+            // 取 Context 失败不影响翻译主流程。
+        }
+    }
+
+    /**
      * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
      *
      * <p>与 {@link #logRerender} 共用同一套日志输出通道。</p>
@@ -626,6 +645,9 @@ public final class HookBridge {
         if (messageId == null || structurableText == null) {
             return;
         }
+        // 诊断回传需要宿主的 ContentResolver；模块自身在 Discord 进程里没有 Context，
+        // 只能从宿主视图取。缓存成功后不会重复执行。
+        captureHostContext(contentView);
         TextExtractor.Result ex = TextExtractor.extract(structurableText);
         if (ex == null || ex.text.trim().isEmpty()) {
             return;
