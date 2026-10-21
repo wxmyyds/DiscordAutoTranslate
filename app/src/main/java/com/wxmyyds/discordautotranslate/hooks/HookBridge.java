@@ -540,7 +540,7 @@ public final class HookBridge {
                         }
                         requestLayoutChain(view);
                         view.invalidate();
-                        logRerender(null, view, messageIdOf(view),
+                        logRerender(null, view, HookBridge.get().messageIdOf(view),
                                 "row-refresh-relayout-posted(after="
                                         + view.getHeight() + ",metrics="
                                         + textLayoutMetrics(view) + ")");
