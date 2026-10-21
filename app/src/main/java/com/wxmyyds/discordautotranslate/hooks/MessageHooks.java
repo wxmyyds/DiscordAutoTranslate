@@ -27,7 +27,7 @@ import io.github.libxposed.api.XposedModule;
  * 回复引用  MessageViewReplyPreview → TextUtilsKt.toSpannable   (不经 setMessageContent)
  * </pre>
  *
- * <p>因此本类安装四个 Hook：</p>
+ * <p>因此本类安装四个渲染 Hook，并额外安装一个可选的测量冻结诊断 Hook：</p>
  * <ol>
  *   <li><b>bind</b>：{@code MessageContentViewHolder.bind} —— 唯一可靠的
  *       「视图 → 消息 ID」来源（{@code MessageContentAccessory.getMessageId}）。</li>
@@ -41,6 +41,8 @@ import io.github.libxposed.api.XposedModule;
  *       接收的 {@code StructurableText} 与 bind 阶段是同一实例，可用身份映射反查消息 ID。</li>
  *   <li><b>回复引用</b>：{@code MessageViewReplyPreview.configureReply} ——
  *       把引用内的正文视图关联到被引用消息 ID，使引用内译文也能更新。</li>
+ *   <li><b>测量诊断</b>：观察 {@code onMeasureConsiderFrozen} 的 same-key 冻结分支，
+ *       只记录父级宽度、子视图尺寸与 key 状态，不改变宿主测量参数。</li>
  * </ol>
  *
  * <p>所有 Hook 均以 {@code ExceptionMode.PROTECTIVE} 安装，保证模块自身异常不会
@@ -65,6 +67,12 @@ public final class MessageHooks {
             "com.discord.chat.presentation.message.MessageViewReplyPreview";
     private static final String CLS_TEXT_UTILS =
             "com.discord.chat.presentation.textutils.TextUtilsKt";
+    private static final String CLS_CHAT_LIST_CHILD_VIEW =
+            "com.discord.chat.presentation.list.ChatListChildView";
+    private static final String CLS_CHAT_LIST_CHILD_VIEW_DEFAULT_IMPLS =
+            "com.discord.chat.presentation.list.ChatListChildView$DefaultImpls";
+    private static final String CLS_CHAT_LIST_VIEW =
+            "com.discord.chat.presentation.list.ChatListView";
     private static final String CLS_STRUCTURABLE =
             "com.discord.chat.bridge.structurabletext.StructurableText";
 
@@ -91,6 +99,7 @@ public final class MessageHooks {
             installExpandedRenderHook(module, cl, handles);
             installToSpannableHook(module, cl, handles);
             installReplyHook(module, cl, handles);
+            installMeasureFreezeDiagnosticHook(module, cl, handles);
         } catch (Throwable t) {
             XLog.e("hook installation aborted, rolling back " + handles.size() + " hooks", t);
             for (XposedInterface.HookHandle handle : handles) {
@@ -104,14 +113,68 @@ public final class MessageHooks {
             return handles;
         }
 
-        // 单行启动摘要：排障时一眼看出关键 Hook 是否都就位。
-        // 期望看到 4；少任何一个都能看出是哪一项失败（上方已有具体原因日志）。
-        XLog.i("hook pipeline armed: " + handles.size() + "/4 "
-                + "(bind, expandedRender, toSpannable, configureReply)");
+        // Four renderer hooks are required; the freeze-measure observer is optional.
+        XLog.i("hook pipeline armed: " + handles.size() + " hook handles (4 required)");
         if (handles.size() < MIN_REQUIRED_HOOKS) {
             XLog.w("too few hooks installed; module will not function on this Discord version");
         }
         return handles;
+    }
+
+    /** Observe only the host's same-key frozen-measure branch; never alter its arguments. */
+    private static void installMeasureFreezeDiagnosticHook(
+            XposedModule module, ClassLoader cl, List<XposedInterface.HookHandle> out) {
+        Class<?> childInterface = Reflect.loadClass(cl, CLS_CHAT_LIST_CHILD_VIEW);
+        Class<?> defaultImpls = Reflect.loadClass(cl, CLS_CHAT_LIST_CHILD_VIEW_DEFAULT_IMPLS);
+        Method measure = Reflect.findMethod(defaultImpls, "onMeasureConsiderFrozen", 3,
+                childInterface, int.class, int.class);
+        Method currentKeyGetter = Reflect.findMethod(childInterface, "getCurrentKey", 0);
+        Method lastKeyGetter = Reflect.findMethod(childInterface, "getLastKey", 0);
+        if (measure == null || currentKeyGetter == null || lastKeyGetter == null) {
+            XLog.w("same-key frozen-measure diagnostic hook unavailable");
+            return;
+        }
+        try {
+            out.add(module.hook(measure)
+                    .setId("dat.measureFrozen")
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        Object arg = chain.getArg(0);
+                        if (!(arg instanceof View)) {
+                            return chain.proceed();
+                        }
+                        View child = (View) arg;
+                        int widthSpec = (Integer) chain.getArg(1);
+                        android.view.ViewParent parent = child.getParent();
+                        boolean frozen = Reflect.isInstanceOfName(parent, CLS_CHAT_LIST_VIEW)
+                                && parent instanceof View
+                                && View.MeasureSpec.getMode(widthSpec) == View.MeasureSpec.EXACTLY
+                                && ((View) parent).getMeasuredWidth() == 0;
+                        Object currentKey = Reflect.call(currentKeyGetter, child);
+                        Object lastKey = Reflect.call(lastKeyGetter, child);
+                        boolean sameKey = currentKey != null
+                                && java.util.Objects.equals(currentKey, lastKey);
+                        boolean report = frozen && sameKey;
+                        int oldWidth = child.getMeasuredWidth();
+                        int oldHeight = child.getMeasuredHeight();
+                        if (report) {
+                            XLog.i("measure-freeze enter key=" + currentKey
+                                    + " widthSize=" + View.MeasureSpec.getSize(widthSpec)
+                                    + " child=" + oldWidth + "x" + oldHeight);
+                        }
+                        Object result = chain.proceed();
+                        if (report) {
+                            XLog.i("measure-freeze exit key=" + currentKey
+                                    + " child=" + child.getMeasuredWidth() + "x"
+                                    + child.getMeasuredHeight());
+                        }
+                        return result;
+                    }));
+            XLog.i("hooked same-key frozen-measure diagnostic");
+        } catch (Throwable t) {
+            XLog.w("cannot install same-key frozen-measure diagnostic: "
+                    + t.getClass().getSimpleName(), t);
+        }
     }
 
     // ------------------------------------------------------------------ Hook 1: bind
