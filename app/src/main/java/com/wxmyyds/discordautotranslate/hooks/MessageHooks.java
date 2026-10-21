@@ -232,6 +232,9 @@ public final class MessageHooks {
             return;
         }
         HookBridge.get().bindView(contentView, messageId);
+        if (HookBridge.consumePendingHostRebind(contentView)) {
+            HookBridge.get().logHostBindObserved(messageId, contentView);
+        }
         XLog.d("bind " + messageId + " -> " + contentView.getClass().getSimpleName()
                 + "@" + Integer.toHexString(System.identityHashCode(contentView)));
     }

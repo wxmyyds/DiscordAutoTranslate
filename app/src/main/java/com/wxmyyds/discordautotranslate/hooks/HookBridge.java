@@ -339,6 +339,7 @@ public final class HookBridge {
             boolean notified = invalidateRow(messageId, view);
             final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
             if (!observer.isAlive()) {
+                PENDING_HOST_REBINDS.remove(view);
                 logRerender(messageId, view, currentBound,
                         "row-refresh-no-predraw(notified=" + notified + ",before="
                                 + heightBefore + ",current=" + view.getHeight() + ")");
@@ -358,8 +359,10 @@ public final class HookBridge {
                                         "row-refresh-skipped-rebound-before-draw");
                                 return true;
                             }
+                            boolean hostBindObserved = !PENDING_HOST_REBINDS.remove(view);
                             logRerender(messageId, view, drawnBound,
                                     "row-refresh-after-layout(notified=" + notified
+                                            + ",hostBind=" + hostBindObserved
                                             + ",before=" + heightBefore
                                             + ",after=" + view.getHeight()
                                             + ",metrics=" + textLayoutMetrics(view) + ")");
@@ -378,6 +381,17 @@ public final class HookBridge {
     /** 已安排但尚未执行的行刷新；避免同一帧内重复 notifyItemChanged。 */
     private static final java.util.Set<String> PENDING_ROW_REFRESH =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    private static final java.util.Set<View> PENDING_HOST_REBINDS =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    static boolean consumePendingHostRebind(View view) {
+        return view != null && PENDING_HOST_REBINDS.remove(view);
+    }
+
+    void logHostBindObserved(String messageId, View view) {
+        logRerender(messageId, view, messageIdOf(view), "host-bind-enter-after-row-refresh");
+    }
 
     /**
      * 让承载该消息的列表重新绑定这一行。
@@ -436,6 +450,7 @@ public final class HookBridge {
             boolean cacheInvalidated = invalidateMessageContentBindCache(holder);
             logRerender(messageId, view, bound,
                     "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
+            PENDING_HOST_REBINDS.add(view);
             Reflect.call(findInheritedMethod(
                     adapter.getClass(), "notifyItemChanged", 1, int.class), adapter, position);
             return true;
