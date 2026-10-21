@@ -432,6 +432,15 @@ public final class HookBridge {
         Diagnostics.record(line);
     }
 
+    /**
+     * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
+     *
+     * <p>与 {@link #logRerender} 共用同一套缓冲区与输出通道。</p>
+     */
+    public void logLayoutFact(@Nullable String messageId, String what) {
+        logRerender(messageId, null, null, what);
+    }
+
     // ---------------------------------------------------------------- 翻译流程
 
     /**
