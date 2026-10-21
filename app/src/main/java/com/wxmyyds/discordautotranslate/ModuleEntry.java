@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -246,6 +247,7 @@ public class ModuleEntry extends XposedModule {
         TranslationCache.reset();
         RerenderRegistry.clear();
         ModuleResources.reset();
+        Diagnostics.reset();
         XLog.detach();
         installed = false;
     }

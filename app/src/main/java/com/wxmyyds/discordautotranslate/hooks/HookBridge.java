@@ -80,6 +80,7 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
+        sVerboseDiagnostics = c.verboseLog;
         // 布局诊断始终开启：设备上既没有 logcat，也不保证用户勾选了详细日志，
         // 若与 verboseLog 绑定，排查时就永远拿不到数据。
         setLayoutDiagnostic(true);
@@ -573,6 +574,19 @@ public final class HookBridge {
 
     /** 诊断开关：只有排查“布局未刷新”时才打开。 */
     private static volatile boolean sLayoutDiagnostic = false;
+
+    /**
+     * 「详细诊断日志」开关的进程内快照。
+     *
+     * <p>长按行内图标弹出诊断日志复用它：默认关闭时不抢宿主的长按菜单，
+     * 保证普通用户的行为与未安装模块时一致。</p>
+     */
+    private static volatile boolean sVerboseDiagnostics = false;
+
+    /** 是否已开启详细诊断（决定长按图标是否弹出诊断日志）。 */
+    static boolean isVerboseDiagnostics() {
+        return sVerboseDiagnostics;
+    }
 
     /** 由模块入口在解析配置后设置，与“详细诊断日志”共用同一个开关。 */
     public static void setLayoutDiagnostic(boolean enabled) {
