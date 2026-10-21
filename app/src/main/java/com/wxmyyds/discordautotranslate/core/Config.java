@@ -103,17 +103,6 @@ public final class Config {
     // 详细日志默认关闭；正文日志始终脱敏，不允许 verbose 解除脱敏。
     public static final boolean DEF_VERBOSE_LOG = false;
 
-    /**
-     * 诊断是否回传模块 App。
-     *
-     * <p>默认开启，但可关闭：回传要跨进程调用模块 App 的一个导出 ContentProvider，
-     * 在调用方（Discord）受 Android 11+ 包可见性限制、而本模块的 manifest 又设置了
-     * {@code android:forceQueryable="true"} 的情况下才能成功。若该通道在特定设备上
-     * 不可用，用户可关闭此开关以彻底停止跨进程尝试（诊断仍写入 logcat）。</p>
-     */
-    public static final String KEY_DIAGNOSTICS_FORWARD = "diagnostics_forward";
-    public static final boolean DEF_DIAGNOSTICS_FORWARD = true;
-
     private Config() {
     }
 
@@ -131,7 +120,6 @@ public final class Config {
         public final int timeoutMs;
         public final int maxConcurrency;
         public final boolean verboseLog;
-        public final boolean diagnosticsForward;
 
         Snapshot(SharedPreferences p) {
             enabled = readBoolean(p, KEY_ENABLED, DEF_ENABLED);
@@ -146,8 +134,6 @@ public final class Config {
             timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
             verboseLog = readBoolean(p, KEY_VERBOSE_LOG, DEF_VERBOSE_LOG);
-            diagnosticsForward = readBoolean(p, KEY_DIAGNOSTICS_FORWARD,
-                    DEF_DIAGNOSTICS_FORWARD);
         }
 
         /**

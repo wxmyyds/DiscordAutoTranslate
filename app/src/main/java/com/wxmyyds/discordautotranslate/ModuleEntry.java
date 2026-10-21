@@ -6,7 +6,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -247,8 +246,6 @@ public class ModuleEntry extends XposedModule {
         TranslationCache.reset();
         RerenderRegistry.clear();
         ModuleResources.reset();
-        // 丢弃未推送的诊断队列与宿主 ContentResolver 引用，避免旧代次残留。
-        Diagnostics.reset();
         XLog.detach();
         installed = false;
     }

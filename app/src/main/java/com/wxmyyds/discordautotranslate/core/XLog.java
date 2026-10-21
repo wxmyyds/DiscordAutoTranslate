@@ -40,16 +40,6 @@ public final class XLog {
         sVerbose = verbose;
     }
 
-    /**
-     * 当前进程是否运行在 Xposed 框架内（即被 Hook 的目标进程）。
-     *
-     * <p>用来区分“模块 Hook 进程”与“模块 App 进程”：同一个 APK 的代码会在
-     * 两边都执行，但只有目标进程需要把诊断回传给模块 App。</p>
-     */
-    public static boolean hasFramework() {
-        return sXposed != null;
-    }
-
     public static void d(String msg) {
         if (sVerbose) {
             log(3 /* Log.DEBUG */, msg, null);
