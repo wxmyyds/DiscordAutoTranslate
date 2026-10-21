@@ -412,9 +412,6 @@ public final class HookBridge {
      */
     private static void logRerender(@Nullable String messageId, @Nullable View view,
                                     @Nullable String bound, String outcome) {
-        if (!sLayoutDiagnostic) {
-            return;
-        }
         String line;
         if (view == null) {
             line = "msg=" + messageId + " view=null outcome=" + outcome;
@@ -430,6 +427,15 @@ public final class HookBridge {
         XLog.d("layout-diag: " + line);
         // 设备上常常取不到 logcat，因此同时写入可从设置页读取的诊断缓冲区。
         Diagnostics.record(line);
+    }
+
+    /**
+     * 通道心跳：模块装载完成后写一行，用来验证诊断通道本身是否可用。
+     *
+     * <p>若设置页连这一行都看不到，说明问题在传输通道，而不是“没有事件发生”。</p>
+     */
+    public static void logDiagnosticHeartbeat(String detail) {
+        Diagnostics.record("diag-channel-ok " + detail);
     }
 
     /**

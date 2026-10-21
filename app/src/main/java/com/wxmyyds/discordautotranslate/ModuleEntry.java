@@ -254,9 +254,24 @@ public class ModuleEntry extends XposedModule {
         try {
             final SharedPreferences prefs = getRemotePreferences(Config.GROUP);
             Config.Snapshot snapshot = Config.read(prefs);
-            // 没有 logcat 时诊断只能靠回写：把结果写进远程配置，由设置页显示。
-            Diagnostics.install(text -> writeDiagnosticsFile(text));
+            // 没有 logcat 时诊断只能靠回写。两条通道同时写：
+            //   1) 远程配置 —— 已被设备证实可读（设置页显示过诊断内容）；
+            //   2) 模块私有目录 —— 部分机型上跨应用 dataDir 写入会被 SELinux 拒绝，
+            //      因此它只是补充，失败不影响通道 1。
+            Diagnostics.install(text -> {
+                try {
+                    // 必须 commit()：apply() 是异步落盘，目标进程被切后台或
+                    // 被杀时这次写入可能根本不执行，设置页读到的就是空值。
+                    prefs.edit().putString(Config.KEY_DIAGNOSTICS, text).commit();
+                } catch (Throwable ignored) {
+                    // 诊断写盘失败不影响渲染。
+                }
+                writeDiagnosticsFile(text);
+            });
             HookBridge.get().updateConfig(snapshot);
+            // 心跳：证明诊断通道可用。看到这一行才说明“没事件”是真实结论。
+            HookBridge.logDiagnosticHeartbeat(
+                    "target=" + TARGET_PACKAGE + " enabled=" + snapshot.enabled);
             XLog.i("config loaded: enabled=" + snapshot.enabled
                     + " url=" + XLog.safeUrl(snapshot.apiUrl)
                     + " key=" + XLog.redact(snapshot.apiKey));
