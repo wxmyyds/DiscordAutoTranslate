@@ -602,33 +602,36 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
     }
 
-    /**
-     * 读取模块回写的诊断内容。
-     *
-     * <p>模块进程与设置页不在同一进程，配置文件由 LSPosed 的远程配置同步，
-     * 因此这里用 {@code getAll()} 现场读取，而不是使用缓存的快照。</p>
-     */
+    /** 读取远程配置优先，文件作为远程配置不可用时的回退。 */
+    private String loadDiagnostics(SharedPreferences currentPrefs) {
+        String remoteText = currentPrefs.getString(Config.KEY_DIAGNOSTICS, "");
+        if (remoteText != null && !remoteText.isEmpty()) {
+            return remoteText;
+        }
+        String fileText = readDiagnosticsFile();
+        return fileText == null ? "" : fileText;
+    }
+
     private void refreshDiagnostics() {
         SharedPreferences currentPrefs = freshPrefs();
         if (currentPrefs == null) {
             diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
             return;
         }
-        String text;
+        final String text;
         try {
-            text = currentPrefs.getString(Config.KEY_DIAGNOSTICS, "");
+            text = loadDiagnostics(currentPrefs);
         } catch (Throwable t) {
             diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
             return;
         }
-        String fileText = readDiagnosticsFile();
-        if (fileText == null || fileText.isEmpty()) {
+        if (text.isEmpty()) {
             diagText.setText("（暂无诊断）请在 Discord 中复现一次翻译/切换后刷新。");
             return;
         }
         // 带行数，便于判断记录是否被截断。
-        int lines = fileText.split("\n", -1).length;
-        diagText.setText("共 " + lines + " 条：\n" + fileText);
+        int lines = text.split("\n", -1).length;
+        diagText.setText("共 " + lines + " 条：\n" + text);
     }
 
     /** 把诊断内容复制到剪贴板，避免手动抄写长文本。 */
@@ -638,8 +641,14 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
             return;
         }
-        String fileText = readDiagnosticsFile();
-        if (fileText == null || fileText.isEmpty()) {
+        final String text;
+        try {
+            text = loadDiagnostics(currentPrefs);
+        } catch (Throwable t) {
+            diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
+            return;
+        }
+        if (text.isEmpty()) {
             diagText.setText("（暂无诊断可复制）");
             return;
         }
@@ -650,8 +659,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 return;
             }
             ((ClipboardManager) service).setPrimaryClip(
-                    ClipData.newPlainText("DiscordAutoTranslate 布局诊断", fileText));
-            diagText.setText("已复制 " + fileText.split("\n", -1).length + " 条诊断到剪贴板。");
+                    ClipData.newPlainText("DiscordAutoTranslate 布局诊断", text));
+            diagText.setText("已复制 " + text.split("\n", -1).length + " 条诊断到剪贴板。");
         } catch (Throwable t) {
             diagText.setText("复制失败：" + t.getClass().getSimpleName());
         }
@@ -659,14 +668,21 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     /** 清空诊断，便于下一次复现只观察新增记录。 */
     private void clearDiagnostics() {
-        SharedPreferences currentPrefs = prefs;
+        SharedPreferences currentPrefs = freshPrefs();
         if (currentPrefs == null) {
             diagText.setText("未连接 LSPosed 服务，无法清空诊断。");
             return;
         }
         try {
-            currentPrefs.edit().putString(Config.KEY_DIAGNOSTICS, "").apply();
-            diagText.setText("（已清空）");
+            boolean prefsCleared = currentPrefs.edit()
+                    .putString(Config.KEY_DIAGNOSTICS, "").commit();
+            java.io.File file = new java.io.File(getFilesDir(), Diagnostics.FILE_NAME);
+            boolean fileCleared = !file.exists() || file.delete();
+            if (prefsCleared && fileCleared) {
+                diagText.setText("（已清空）");
+            } else {
+                diagText.setText("清空不完整：远程诊断或本地文件未能清除。");
+            }
         } catch (Throwable t) {
             diagText.setText("清空失败：" + t.getClass().getSimpleName());
         }

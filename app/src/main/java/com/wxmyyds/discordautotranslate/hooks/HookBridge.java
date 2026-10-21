@@ -232,7 +232,15 @@ public final class HookBridge {
             return;
         }
         logRerender(messageId, null, bound, "dispatch");
-        Runnable task = () -> invokeRerender(invocationTarget, contentView, messageId, method, args);
+        Runnable task = () -> {
+            String currentBound = messageIdOf(contentView);
+            if (contentView != null && messageId != null
+                    && !RerenderRegistry.stillBound(messageId, currentBound)) {
+                logRerender(messageId, contentView, currentBound, "rebound-before-invoke");
+                return;
+            }
+            invokeRerender(invocationTarget, contentView, messageId, method, args);
+        };
         if (invocationTarget instanceof View) {
             View host = (View) invocationTarget;
             // View.post 把执行移出当前布局遍历；视图未附着时排队到下一次 attach。
@@ -248,6 +256,10 @@ public final class HookBridge {
 
     private void invokeRerender(Object invocationTarget, @Nullable View contentView,
                                 @Nullable String messageId, Method method, Object[] args) {
+        View view = contentView != null
+                ? contentView
+                : (invocationTarget instanceof View ? (View) invocationTarget : null);
+        int heightBefore = view == null ? -1 : view.getHeight();
         RERENDERING.set(Boolean.TRUE);
         try {
             method.invoke(invocationTarget, args);
@@ -260,14 +272,11 @@ public final class HookBridge {
         } finally {
             RERENDERING.remove();
         }
-        View view = contentView != null
-                ? contentView
-                : (invocationTarget instanceof View ? (View) invocationTarget : null);
-        int heightBefore = view == null ? -1 : view.getHeight();
         // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
-        postInvalidateRow(messageId, view);
+        postInvalidateRow(messageId, view, heightBefore);
         logRerender(messageId, view, messageIdOf(view),
-                "invoked(before=" + heightBefore + ")");
+                "invoked(before=" + heightBefore + ",afterInvoke="
+                        + (view == null ? -1 : view.getHeight()) + ")");
     }
 
     /**
@@ -276,9 +285,10 @@ public final class HookBridge {
      * <p>{@code notifyItemChanged} 会触发 RecyclerView 重新布局。渲染漏斗
      * （{@code toSpannable}）本身就在宿主布局过程中被调用，此时直接通知会重入
      * 布局并抛出 “Cannot call this method while RecyclerView is computing a layout”。
-     * 因此这里只标记，等当前遍历结束再提交，同一消息在一帧内只提交一次。</p>
+     * 高度在下一次 pre-draw 读取，避免把通知刚发出时的旧高度误当成布局结果。</p>
      */
-    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view) {
+    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view,
+                                          int heightBefore) {
         if (view == null) {
             return;
         }
@@ -288,13 +298,45 @@ public final class HookBridge {
         if (!PENDING_ROW_REFRESH.add(key)) {
             return; // 同一帧内已经安排过，避免重复通知造成多次重绑。
         }
-        final int heightBefore = view.getHeight();
         boolean posted = view.post(() -> {
+            String currentBound = HookBridge.get().messageIdOf(view);
+            if (messageId != null
+                    && !RerenderRegistry.stillBound(messageId, currentBound)) {
+                PENDING_ROW_REFRESH.remove(key);
+                logRerender(messageId, view, currentBound, "row-refresh-skipped-rebound");
+                return;
+            }
             PENDING_ROW_REFRESH.remove(key);
-            invalidateRow(view);
-            // 刷新是否生效，只能靠执行后的高度说话。
-            logRerender(messageId, view, HookBridge.get().messageIdOf(view),
-                    "row-refresh(before=" + heightBefore + ",after=" + view.getHeight() + ")");
+            boolean notified = invalidateRow(view);
+            final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
+            if (!observer.isAlive()) {
+                logRerender(messageId, view, currentBound,
+                        "row-refresh-no-predraw(notified=" + notified + ",before="
+                                + heightBefore + ",current=" + view.getHeight() + ")");
+                return;
+            }
+            observer.addOnPreDrawListener(
+                    new android.view.ViewTreeObserver.OnPreDrawListener() {
+                        @Override
+                        public boolean onPreDraw() {
+                            if (observer.isAlive()) {
+                                observer.removeOnPreDrawListener(this);
+                            }
+                            String drawnBound = HookBridge.get().messageIdOf(view);
+                            if (messageId != null
+                                    && !RerenderRegistry.stillBound(messageId, drawnBound)) {
+                                logRerender(messageId, view, drawnBound,
+                                        "row-refresh-skipped-rebound-before-draw");
+                                return true;
+                            }
+                            logRerender(messageId, view, drawnBound,
+                                    "row-refresh-after-layout(notified=" + notified
+                                            + ",before=" + heightBefore
+                                            + ",after=" + view.getHeight() + ")");
+                            return true;
+                        }
+                    });
+            view.invalidate();
         });
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
@@ -320,42 +362,44 @@ public final class HookBridge {
      *
      * <p>位置无法解析时静默放弃：这只是刷新增强，不能影响已完成的翻译渲染。</p>
      */
-    private static void invalidateRow(@Nullable View view) {
+    private static boolean invalidateRow(@Nullable View view) {
         if (view == null) {
-            return;
+            return false;
         }
         try {
             android.view.ViewParent parent = findRecyclerView(view);
             if (parent == null) {
-                return;
+                return false;
             }
             // 不新增 androidx.recyclerview 依赖：宿主已提供这些类，按名反射即可，
             // 也能容忍宿主内部 RecyclerView 版本差异。
             Object adapter = Reflect.call(
                     findInheritedMethod(parent.getClass(), "getAdapter", 0), parent);
             if (adapter == null) {
-                return;
+                return false;
             }
             Object holder = Reflect.call(
                     findInheritedMethod(parent.getClass(), "findContainingViewHolder", 1, View.class),
                     parent, view);
             if (holder == null) {
-                return;
+                return false;
             }
             Object positionValue = Reflect.call(
                     findInheritedMethod(holder.getClass(), "getBindingAdapterPosition", 0), holder);
             if (!(positionValue instanceof Integer)) {
-                return;
+                return false;
             }
             int position = (Integer) positionValue;
             // RecyclerView.NO_POSITION 为 -1；行已回收时不能再通知。
             if (position < 0) {
-                return;
+                return false;
             }
             Reflect.call(findInheritedMethod(
                     adapter.getClass(), "notifyItemChanged", 1, int.class), adapter, position);
+            return true;
         } catch (Throwable t) {
             XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
+            return false;
         }
     }
 
