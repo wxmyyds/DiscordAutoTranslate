@@ -394,17 +394,9 @@ public final class HookBridge {
     }
 
     /**
-     * 让承载该消息的列表重新绑定这一行。
-     *
-     * <p>只对视图调用 {@code requestLayout}/{@code forceLayout} 不足以刷新行高：
-     * 列表行高度由 RecyclerView 的布局过程决定，而
-     * {@code ChatListChildView$DefaultImpls.onMeasureConsiderFrozen} 在父视图宽度为
-     * EXACTLY 且 {@code ChatListView.getMeasuredWidth()==0} 时会用旧尺寸做测量。
-     * 宿主自己刷新单行内容走的也是 {@code notifyItemChanged(index)}
-     * （{@code ChannelChatListAdapter} 处理 {@code ListOperation$Change}），
-     * 滚动能恢复正是因为滚动重新 bind 了该行。</p>
-     *
-     * <p>位置无法解析时静默放弃：这只是刷新增强，不能影响已完成的翻译渲染。</p>
+     * Refresh the outer chat row containing a content item in the nested accessories list.
+     * The nested adapter can rebind the text holder, but only the outer ChatListView row
+     * rebind refreshes MessageView's height in the chat list.
      */
     private static boolean invalidateRow(@Nullable String messageId, @Nullable View view) {
         if (view == null) {
@@ -416,59 +408,90 @@ public final class HookBridge {
             return false;
         }
         try {
-            android.view.ViewParent parent = findRecyclerView(view);
-            if (parent == null) {
+            android.view.ViewParent contentRecycler = findRecyclerView(view);
+            if (contentRecycler == null) {
+                logRerender(messageId, view, bound, "row-refresh-no-content-list");
                 return false;
             }
-            // 不新增 androidx.recyclerview 依赖：宿主已提供这些类，按名反射即可，
-            // 也能容忍宿主内部 RecyclerView 版本差异。
-            Object adapter = Reflect.call(
-                    findInheritedMethod(parent.getClass(), "getAdapter", 0), parent);
-            if (adapter == null) {
+            Object contentHolder = Reflect.call(
+                    findInheritedMethod(contentRecycler.getClass(), "findContainingViewHolder",
+                            1, View.class), contentRecycler, view);
+            if (contentHolder == null
+                    || Reflect.getField(contentHolder, "messageContentView") != view) {
+                logRerender(messageId, view, bound, "row-refresh-content-holder-mismatch");
                 return false;
             }
-            Object holder = Reflect.call(
-                    findInheritedMethod(parent.getClass(), "findContainingViewHolder", 1, View.class),
-                    parent, view);
-            if (holder == null) {
+            Object contentAdapter = Reflect.call(
+                    findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
+            android.view.ViewParent rowRecycler = findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS);
+            if (contentAdapter == null || rowRecycler == null) {
+                logRerender(messageId, view, bound, "row-refresh-no-chat-list");
                 return false;
             }
-            if (Reflect.getField(holder, "messageContentView") != view) {
-                logRerender(messageId, view, bound, "row-refresh-holder-view-mismatch");
+            Object rowAdapter = Reflect.call(
+                    findInheritedMethod(rowRecycler.getClass(), "getAdapter", 0), rowRecycler);
+            Object rowHolder = Reflect.call(
+                    findInheritedMethod(rowRecycler.getClass(), "findContainingViewHolder",
+                            1, View.class), rowRecycler, view);
+            if (rowAdapter == null || rowHolder == null) {
+                logRerender(messageId, view, bound, "row-refresh-no-message-row-holder");
                 return false;
             }
-            Object positionValue = Reflect.call(
-                    findInheritedMethod(holder.getClass(), "getBindingAdapterPosition", 0), holder);
-            if (!(positionValue instanceof Integer)) {
+            Object itemView = Reflect.getField(rowHolder, "itemView");
+            if (!Reflect.isInstanceOfName(itemView, MESSAGE_VIEW_CLASS)) {
+                logRerender(messageId, view, bound,
+                        "row-refresh-unexpected-item-view=" + (itemView == null
+                                ? "null" : itemView.getClass().getName()));
                 return false;
             }
-            int position = (Integer) positionValue;
-            // RecyclerView.NO_POSITION 为 -1；行已回收时不能再通知。
-            if (position < 0) {
-                return false;
-            }
-            Object bindingAdapter = Reflect.call(
-                    findInheritedMethod(holder.getClass(), "getBindingAdapter", 0), holder);
+            Object bindingPositionValue = Reflect.call(
+                    findInheritedMethod(rowHolder.getClass(), "getBindingAdapterPosition", 0),
+                    rowHolder);
             Object absolutePositionValue = Reflect.call(
-                    findInheritedMethod(holder.getClass(), "getAbsoluteAdapterPosition", 0), holder);
+                    findInheritedMethod(rowHolder.getClass(), "getAbsoluteAdapterPosition", 0),
+                    rowHolder);
+            Object bindingAdapter = Reflect.call(
+                    findInheritedMethod(rowHolder.getClass(), "getBindingAdapter", 0), rowHolder);
+            int bindingPosition = bindingPositionValue instanceof Integer
+                    ? (Integer) bindingPositionValue : -1;
             int absolutePosition = absolutePositionValue instanceof Integer
                     ? (Integer) absolutePositionValue : -1;
-            Method notifyItemChanged = findInheritedMethod(
-                    adapter.getClass(), "notifyItemChanged", 1, int.class);
-            logRerender(messageId, view, bound,
-                    "row-refresh-target(adapter=" + adapter.getClass().getName()
-                            + ",bindingAdapter=" + (bindingAdapter == null
-                            ? "unavailable" : bindingAdapter.getClass().getName())
-                            + ",bindingPosition=" + position
-                            + ",absolutePosition=" + absolutePosition
-                            + ",notifyMethod=" + (notifyItemChanged != null)
-                            + ",notifyPosition=" + position + ")");
-            boolean cacheInvalidated = invalidateMessageContentBindCache(holder);
+            int notifyPosition = absolutePosition >= 0 ? absolutePosition
+                    : (bindingAdapter == rowAdapter ? bindingPosition : -1);
+            if (notifyPosition < 0) {
+                logRerender(messageId, view, bound,
+                        "row-refresh-no-outer-position(binding=" + bindingPosition
+                                + ",absolute=" + absolutePosition + ")");
+                return false;
+            }
+            boolean cacheInvalidated = invalidateMessageContentBindCache(contentHolder);
             logRerender(messageId, view, bound,
                     "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
+            Method notifyItemChanged = findInheritedMethod(
+                    rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
+            logRerender(messageId, view, bound,
+                    "row-refresh-target(outerAdapter=" + rowAdapter.getClass().getName()
+                            + ",contentAdapter=" + contentAdapter.getClass().getName()
+                            + ",bindingAdapter=" + (bindingAdapter == null
+                            ? "unavailable" : bindingAdapter.getClass().getName())
+                            + ",bindingPosition=" + bindingPosition
+                            + ",absolutePosition=" + absolutePosition
+                            + ",notifyMethod=" + (notifyItemChanged != null)
+                            + ",notifyPosition=" + notifyPosition + ")");
+            if (notifyItemChanged == null) {
+                return false;
+            }
             PENDING_HOST_REBINDS.add(view);
-            Reflect.call(notifyItemChanged, adapter, position);
-            return true;
+            try {
+                notifyItemChanged.invoke(rowAdapter, notifyPosition);
+                return true;
+            } catch (Throwable t) {
+                PENDING_HOST_REBINDS.remove(view);
+                Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
+                        && t.getCause() != null ? t.getCause() : t;
+                XLog.d("notify outer row failed: " + cause.getClass().getSimpleName());
+                return false;
+            }
         } catch (Throwable t) {
             XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
             return false;
@@ -526,7 +549,24 @@ public final class HookBridge {
         return null;
     }
 
+    /** Finds an ancestor RecyclerView by its concrete host class name. */
+    @Nullable
+    private static android.view.ViewParent findAncestorByClassName(View view, String className) {
+        android.view.ViewParent parent = view.getParent();
+        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
+            if (Reflect.isInstanceOfName(parent, className)) {
+                return parent;
+            }
+            parent = parent.getParent();
+        }
+        return null;
+    }
+
     private static final String RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView";
+    private static final String CHAT_LIST_VIEW_CLASS =
+            "com.discord.chat.presentation.list.ChatListView";
+    private static final String MESSAGE_VIEW_CLASS =
+            "com.discord.chat.presentation.message.MessageView";
 
     /** 向上查找列表时的最大层数。 */
     private static final int RELAYOUT_MAX_DEPTH = 12;
