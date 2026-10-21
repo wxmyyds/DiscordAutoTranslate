@@ -26,6 +26,15 @@ public final class Diagnostics {
         void write(String text);
     }
 
+    /**
+     * 诊断文件名。
+     *
+     * <p>写到模块自己的私有目录，设置页直接读文件。不走跨进程的远程配置：
+     * 目标进程写远程配置这条路在设备上多次表现为“设置页读到空”，
+     * 而私有目录的读写不依赖任何跨进程同步机制。</p>
+     */
+    public static final String FILE_NAME = "layout-diagnostics.txt";
+
     private static final Object LOCK = new Object();
     private static final Deque<String> LINES = new ArrayDeque<>();
     private static volatile Sink sSink;

@@ -550,6 +550,40 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
      * {@link SharedPreferences} 实例只在创建时读取一次内存快照，之后不会因为
      * 其他进程写入而更新，因此这里每次读取都重新取实例。</p>
      */
+    /**
+     * 读取模块私有目录里的诊断文件。
+     *
+     * <p>设置页与模块不在同一进程，但模块把诊断写进<b>模块自身</b>的
+     * {@code dataDir/files}，设置页读的是同一份文件，不依赖跨进程配置同步。</p>
+     */
+    @Nullable
+    private String readDiagnosticsFile() {
+        try {
+            java.io.File dir = getFilesDir();
+            if (dir == null) {
+                return null;
+            }
+            java.io.File file = new java.io.File(dir, Diagnostics.FILE_NAME);
+            if (!file.isFile()) {
+                return null;
+            }
+            byte[] buf = new byte[(int) Math.min(file.length(), 64 * 1024)];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+                int read = 0;
+                while (read < buf.length) {
+                    int n = in.read(buf, read, buf.length - read);
+                    if (n <= 0) {
+                        break;
+                    }
+                    read += n;
+                }
+                return new String(buf, 0, read, java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     @Nullable
     private SharedPreferences freshPrefs() {
         XposedService currentService = service;
@@ -586,13 +620,14 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
             return;
         }
-        if (text == null || text.isEmpty()) {
+        String fileText = readDiagnosticsFile();
+        if (fileText == null || fileText.isEmpty()) {
             diagText.setText("（暂无诊断）请在 Discord 中复现一次翻译/切换后刷新。");
             return;
         }
         // 带行数，便于判断记录是否被截断。
-        int lines = text.split("\n", -1).length;
-        diagText.setText("共 " + lines + " 条：\n" + text);
+        int lines = fileText.split("\n", -1).length;
+        diagText.setText("共 " + lines + " 条：\n" + fileText);
     }
 
     /** 把诊断内容复制到剪贴板，避免手动抄写长文本。 */
@@ -602,14 +637,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
             return;
         }
-        String text;
-        try {
-            text = currentPrefs.getString(Config.KEY_DIAGNOSTICS, "");
-        } catch (Throwable t) {
-            diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
-            return;
-        }
-        if (text == null || text.isEmpty()) {
+        String fileText = readDiagnosticsFile();
+        if (fileText == null || fileText.isEmpty()) {
             diagText.setText("（暂无诊断可复制）");
             return;
         }
@@ -620,8 +649,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 return;
             }
             ((ClipboardManager) service).setPrimaryClip(
-                    ClipData.newPlainText("DiscordAutoTranslate 布局诊断", text));
-            diagText.setText("已复制 " + text.split("\n", -1).length + " 条诊断到剪贴板。");
+                    ClipData.newPlainText("DiscordAutoTranslate 布局诊断", fileText));
+            diagText.setText("已复制 " + fileText.split("\n", -1).length + " 条诊断到剪贴板。");
         } catch (Throwable t) {
             diagText.setText("复制失败：" + t.getClass().getSimpleName());
         }
