@@ -1,6 +1,7 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
 import android.view.View;
+import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
@@ -259,6 +260,7 @@ public final class HookBridge {
         View view = contentView != null
                 ? contentView
                 : (invocationTarget instanceof View ? (View) invocationTarget : null);
+        String metricsBefore = textLayoutMetrics(view);
         int heightBefore = view == null ? -1 : view.getHeight();
         RERENDERING.set(Boolean.TRUE);
         try {
@@ -276,7 +278,34 @@ public final class HookBridge {
         postInvalidateRow(messageId, view, heightBefore);
         logRerender(messageId, view, messageIdOf(view),
                 "invoked(before=" + heightBefore + ",afterInvoke="
-                        + (view == null ? -1 : view.getHeight()) + ")");
+                        + (view == null ? -1 : view.getHeight())
+                        + ",metricsBefore=" + metricsBefore
+                        + ",metricsAfterInvoke=" + textLayoutMetrics(view) + ")");
+    }
+
+    private static String textLayoutMetrics(@Nullable View view) {
+        if (!(view instanceof TextView)) {
+            return "main=unavailable";
+        }
+        try {
+            String main = oneTextViewMetrics((TextView) view);
+            Object shadow = Reflect.call(
+                    Reflect.findMethod(view.getClass(), "getShadowView", 0), view);
+            return "main{" + main + "} shadow{"
+                    + (shadow instanceof TextView
+                    ? oneTextViewMetrics((TextView) shadow) : "unavailable") + "}";
+        } catch (Throwable t) {
+            return "metrics-error=" + t.getClass().getSimpleName();
+        }
+    }
+
+    private static String oneTextViewMetrics(TextView view) {
+        CharSequence text = view.getText();
+        android.text.Layout layout = view.getLayout();
+        return "len=" + (text == null ? -1 : text.length())
+                + ",lines=" + view.getLineCount()
+                + ",layoutLines=" + (layout == null ? -1 : layout.getLineCount())
+                + ",layoutH=" + (layout == null ? -1 : layout.getHeight());
     }
 
     /**
@@ -332,7 +361,8 @@ public final class HookBridge {
                             logRerender(messageId, view, drawnBound,
                                     "row-refresh-after-layout(notified=" + notified
                                             + ",before=" + heightBefore
-                                            + ",after=" + view.getHeight() + ")");
+                                            + ",after=" + view.getHeight()
+                                            + ",metrics=" + textLayoutMetrics(view) + ")");
                             return true;
                         }
                     });
