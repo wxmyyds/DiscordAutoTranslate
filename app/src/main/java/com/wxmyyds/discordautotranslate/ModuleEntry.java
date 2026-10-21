@@ -6,7 +6,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -180,6 +179,7 @@ public class ModuleEntry extends XposedModule {
     private void install(ClassLoader cl) {
         // 记录目标 Discord 版本，便于诊断（需求 §9.1）。
         logTargetVersion(cl);
+        HookBridge.logModuleReady("target=" + TARGET_PACKAGE);
 
         StructurableTextFactory.init(cl);
         Scheduler.MainThread.install();
@@ -254,73 +254,12 @@ public class ModuleEntry extends XposedModule {
         try {
             final SharedPreferences prefs = getRemotePreferences(Config.GROUP);
             Config.Snapshot snapshot = Config.read(prefs);
-            // 没有 logcat 时诊断只能靠回写。两条通道同时写：
-            //   1) 远程配置 —— 已被设备证实可读（设置页显示过诊断内容）；
-            //   2) 模块私有目录 —— 部分机型上跨应用 dataDir 写入会被 SELinux 拒绝，
-            //      因此它只是补充，失败不影响通道 1。
-            Diagnostics.install(text -> {
-                try {
-                    // 必须 commit()：apply() 是异步落盘，目标进程被切后台或
-                    // 被杀时这次写入可能根本不执行，设置页读到的就是空值。
-                    prefs.edit().putString(Config.KEY_DIAGNOSTICS, text).commit();
-                } catch (Throwable ignored) {
-                    // 诊断写盘失败不影响渲染。
-                }
-                writeDiagnosticsFile(text);
-            });
             HookBridge.get().updateConfig(snapshot);
-            // 心跳：证明诊断通道可用。看到这一行才说明“没事件”是真实结论。
-            HookBridge.logDiagnosticHeartbeat(
-                    "target=" + TARGET_PACKAGE + " enabled=" + snapshot.enabled);
             XLog.i("config loaded: enabled=" + snapshot.enabled
                     + " url=" + XLog.safeUrl(snapshot.apiUrl)
                     + " key=" + XLog.redact(snapshot.apiKey));
         } catch (Throwable t) {
             XLog.w("getRemotePreferences failed, using defaults", t);
-        }
-    }
-
-    /**
-     * 把诊断写到模块自己的私有目录。
-     *
-     * <p>不用远程配置：目标进程写远程配置曾在设备上反复表现为设置页读到空值。
-     * 私有目录由模块进程自己写、设置页自己读，不依赖跨进程同步。</p>
-     */
-    private void writeDiagnosticsFile(String text) {
-        try {
-            java.io.File dir = diagnosticsDir();
-            if (dir == null) {
-                return;
-            }
-            java.io.File file = new java.io.File(dir, Diagnostics.FILE_NAME);
-            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
-                out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                out.flush();
-                out.getFD().sync();
-            }
-        } catch (Throwable ignored) {
-            // 诊断写盘失败不影响渲染。
-        }
-    }
-
-    /**
-     * 模块私有目录。模块运行在目标进程内，不能用自身进程的 files 目录，
-     * 因此通过模块的 {@code ApplicationInfo.dataDir} 定位。
-     */
-    @Nullable
-    private java.io.File diagnosticsDir() {
-        try {
-            android.content.pm.ApplicationInfo info = getModuleApplicationInfo();
-            if (info == null || info.dataDir == null) {
-                return null;
-            }
-            java.io.File dir = new java.io.File(info.dataDir, "files");
-            if (!dir.exists() && !dir.mkdirs()) {
-                return null;
-            }
-            return dir;
-        } catch (Throwable t) {
-            return null;
         }
     }
 

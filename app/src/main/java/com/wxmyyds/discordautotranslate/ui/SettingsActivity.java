@@ -1,8 +1,6 @@
 package com.wxmyyds.discordautotranslate.ui;
 
 import android.app.Activity;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
@@ -22,7 +20,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
@@ -70,10 +67,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private CheckBox verboseInput;
     private TextView statusText;
     private TextView resultText;
-    private Button diagRefreshButton;
-    private Button diagClearButton;
-    private Button diagCopyButton;
-    private TextView diagText;
     private EditText testTextInput;
     private Button saveButton;
     private Button configCheckButton;
@@ -175,28 +168,10 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         verboseInput.setText("详细诊断日志（消息正文与译文始终脱敏）");
         root.addView(verboseInput, matchWrap());
 
-        // 设备上常常取不到 logcat，因此把模块回写的诊断直接显示出来。
-        diagRefreshButton = new Button(this);
-        diagRefreshButton.setText("刷新布局诊断");
-        diagRefreshButton.setOnClickListener(v -> refreshDiagnostics());
-        root.addView(diagRefreshButton, matchWrap());
-
-        diagText = new TextView(this);
-        diagText.setTextSize(10f);
-        diagText.setPadding(0, dp(4), 0, dp(4));
-        diagText.setText("（暂无诊断数据）");
-        root.addView(diagText, matchWrap());
-
-        diagClearButton = new Button(this);
-        diagClearButton.setText("清空布局诊断");
-        diagClearButton.setOnClickListener(v -> clearDiagnostics());
-        root.addView(diagClearButton, matchWrap());
-
-        // 诊断行较多时手动抄不现实，直接复制到剪贴板。
-        diagCopyButton = new Button(this);
-        diagCopyButton.setText("复制布局诊断");
-        diagCopyButton.setOnClickListener(v -> copyDiagnostics());
-        root.addView(diagCopyButton, matchWrap());
+        TextView diagnosticsInfo = new TextView(this);
+        diagnosticsInfo.setTextSize(12f);
+        diagnosticsInfo.setText("布局诊断写入 LSPosed 日志与 Android logcat，过滤标签：DiscordAutoTranslate");
+        root.addView(diagnosticsInfo, matchWrap());
 
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
                 ApiTester.DEFAULT_TEST_TEXT,
@@ -290,8 +265,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
         concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
         verboseInput.setChecked(snapshot.verboseLog);
-        // 连接成功后直接展示当前诊断，省去再点一次刷新。
-        refreshDiagnostics();
     }
 
     private void save() {
@@ -540,152 +513,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
         resultText.setText(message.toString());
         updateStatus(result.ok ? "测试通过。" : "测试失败，详见下方结果。");
-    }
-
-    // ------------------------------------------------------------ 布局诊断
-
-    /**
-     * 重新向服务要一份偏好设置实例。
-     *
-     * <p>诊断由目标进程（Discord）写入，设置页是另一个进程。缓存的
-     * {@link SharedPreferences} 实例只在创建时读取一次内存快照，之后不会因为
-     * 其他进程写入而更新，因此这里每次读取都重新取实例。</p>
-     */
-    /**
-     * 读取模块私有目录里的诊断文件。
-     *
-     * <p>设置页与模块不在同一进程，但模块把诊断写进<b>模块自身</b>的
-     * {@code dataDir/files}，设置页读的是同一份文件，不依赖跨进程配置同步。</p>
-     */
-    @Nullable
-    private String readDiagnosticsFile() {
-        try {
-            java.io.File dir = getFilesDir();
-            if (dir == null) {
-                return null;
-            }
-            java.io.File file = new java.io.File(dir, Diagnostics.FILE_NAME);
-            if (!file.isFile()) {
-                return null;
-            }
-            byte[] buf = new byte[(int) Math.min(file.length(), 64 * 1024)];
-            try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
-                int read = 0;
-                while (read < buf.length) {
-                    int n = in.read(buf, read, buf.length - read);
-                    if (n <= 0) {
-                        break;
-                    }
-                    read += n;
-                }
-                return new String(buf, 0, read, java.nio.charset.StandardCharsets.UTF_8);
-            }
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    @Nullable
-    private SharedPreferences freshPrefs() {
-        XposedService currentService = service;
-        if (currentService == null) {
-            return null;
-        }
-        try {
-            SharedPreferences p = currentService.getRemotePreferences(Config.GROUP);
-            if (p != null) {
-                prefs = p;
-            }
-            return p != null ? p : prefs;
-        } catch (Throwable t) {
-            return prefs;
-        }
-    }
-
-    /** 读取远程配置优先，文件作为远程配置不可用时的回退。 */
-    private String loadDiagnostics(SharedPreferences currentPrefs) {
-        String remoteText = currentPrefs.getString(Config.KEY_DIAGNOSTICS, "");
-        if (remoteText != null && !remoteText.isEmpty()) {
-            return remoteText;
-        }
-        String fileText = readDiagnosticsFile();
-        return fileText == null ? "" : fileText;
-    }
-
-    private void refreshDiagnostics() {
-        SharedPreferences currentPrefs = freshPrefs();
-        if (currentPrefs == null) {
-            diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
-            return;
-        }
-        final String text;
-        try {
-            text = loadDiagnostics(currentPrefs);
-        } catch (Throwable t) {
-            diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
-            return;
-        }
-        if (text.isEmpty()) {
-            diagText.setText("（暂无诊断）请在 Discord 中复现一次翻译/切换后刷新。");
-            return;
-        }
-        // 带行数，便于判断记录是否被截断。
-        int lines = text.split("\n", -1).length;
-        diagText.setText("共 " + lines + " 条：\n" + text);
-    }
-
-    /** 把诊断内容复制到剪贴板，避免手动抄写长文本。 */
-    private void copyDiagnostics() {
-        SharedPreferences currentPrefs = freshPrefs();
-        if (currentPrefs == null) {
-            diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
-            return;
-        }
-        final String text;
-        try {
-            text = loadDiagnostics(currentPrefs);
-        } catch (Throwable t) {
-            diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
-            return;
-        }
-        if (text.isEmpty()) {
-            diagText.setText("（暂无诊断可复制）");
-            return;
-        }
-        try {
-            Object service = getSystemService(CLIPBOARD_SERVICE);
-            if (!(service instanceof ClipboardManager)) {
-                diagText.setText("剪贴板不可用，请手动长按选择文本。");
-                return;
-            }
-            ((ClipboardManager) service).setPrimaryClip(
-                    ClipData.newPlainText("DiscordAutoTranslate 布局诊断", text));
-            diagText.setText("已复制 " + text.split("\n", -1).length + " 条诊断到剪贴板。");
-        } catch (Throwable t) {
-            diagText.setText("复制失败：" + t.getClass().getSimpleName());
-        }
-    }
-
-    /** 清空诊断，便于下一次复现只观察新增记录。 */
-    private void clearDiagnostics() {
-        SharedPreferences currentPrefs = freshPrefs();
-        if (currentPrefs == null) {
-            diagText.setText("未连接 LSPosed 服务，无法清空诊断。");
-            return;
-        }
-        try {
-            boolean prefsCleared = currentPrefs.edit()
-                    .putString(Config.KEY_DIAGNOSTICS, "").commit();
-            java.io.File file = new java.io.File(getFilesDir(), Diagnostics.FILE_NAME);
-            boolean fileCleared = !file.exists() || file.delete();
-            if (prefsCleared && fileCleared) {
-                diagText.setText("（已清空）");
-            } else {
-                diagText.setText("清空不完整：远程诊断或本地文件未能清除。");
-            }
-        } catch (Throwable t) {
-            diagText.setText("清空失败：" + t.getClass().getSimpleName());
-        }
     }
 
     private void updateStatus(String status) {

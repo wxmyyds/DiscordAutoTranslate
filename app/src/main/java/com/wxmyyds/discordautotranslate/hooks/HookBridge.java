@@ -468,24 +468,18 @@ public final class HookBridge {
                     + " bound=" + (bound == null ? "null" : bound)
                     + " outcome=" + outcome;
         }
-        XLog.d("layout-diag: " + line);
-        // 设备上常常取不到 logcat，因此同时写入可从设置页读取的诊断缓冲区。
-        Diagnostics.record(line);
+        Diagnostics.record("layout-diag: " + line);
     }
 
-    /**
-     * 通道心跳：模块装载完成后写一行，用来验证诊断通道本身是否可用。
-     *
-     * <p>若设置页连这一行都看不到，说明问题在传输通道，而不是“没有事件发生”。</p>
-     */
-    public static void logDiagnosticHeartbeat(String detail) {
-        Diagnostics.record("diag-channel-ok " + detail);
+    /** 记录模块进入 Discord 目标进程的事实，不依赖远程配置写入。 */
+    public static void logModuleReady(String detail) {
+        XLog.i("module-ready " + detail);
     }
 
     /**
      * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
      *
-     * <p>与 {@link #logRerender} 共用同一套缓冲区与输出通道。</p>
+     * <p>与 {@link #logRerender} 共用同一套日志输出通道。</p>
      */
     public void logLayoutFact(@Nullable String messageId, String what) {
         logRerender(messageId, null, null, what);
