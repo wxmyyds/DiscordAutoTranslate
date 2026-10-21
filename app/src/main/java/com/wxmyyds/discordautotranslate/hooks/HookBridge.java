@@ -1,10 +1,6 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
-import android.content.Context;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.View;
-import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
@@ -434,77 +430,6 @@ public final class HookBridge {
         XLog.d("layout-diag: " + line);
         // 设备上常常取不到 logcat，因此同时写入可从设置页读取的诊断缓冲区。
         Diagnostics.record(line);
-        showDiagnosticToast(view, line);
-    }
-
-    /** 最近一次可用的 Context，供没有视图时的诊断展示使用。 */
-    private static volatile Context sDiagContext = null;
-
-    /** 诊断序号：Toast 里显示，用于判断是否有记录被跳过。 */
-    private static final java.util.concurrent.atomic.AtomicInteger DIAG_SEQ =
-            new java.util.concurrent.atomic.AtomicInteger();
-
-    /** 把完整诊断行压成一行短文本，供 Toast 显示。 */
-    private static String compactDiag(String line) {
-        String out = line
-                .replace(" view=null", "")
-                .replace(" attached=true", "")
-                .replace(" visible=true", "");
-        if (out.length() > 110) {
-            out = out.substring(0, 110) + "…";
-        }
-        return out;
-    }
-
-    /**
-     * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
-     *
-     * <p>与 {@link #logRerender} 共用同一套缓冲区与展示通道。</p>
-     */
-    public void logLayoutFact(@Nullable String messageId, String what) {
-        logRerender(messageId, null, null, what);
-    }
-
-    /**
-     * 把诊断行直接弹到屏幕上。
-     *
-     * <p>排查期间设备取不到 logcat，设置页也需要用户主动去翻，容易错过。
-     * Toast 由视图自身的 Context 发起，不需要额外持有 ContentProvider 或
-     * Application 引用；失败时静默忽略。</p>
-     */
-    private static void showDiagnosticToast(@Nullable View view, String line) {
-        if (line == null || line.isEmpty()) {
-            return;
-        }
-        try {
-            Context fromView = view != null ? view.getContext() : null;
-            if (fromView != null) {
-                // 记住任意一个可用 Context：后来的记录可能拿不到视图。
-                sDiagContext = fromView;
-            }
-            final Context ctx = fromView != null ? fromView : sDiagContext;
-            if (ctx == null) {
-                return;
-            }
-            // 带序号的短文案：序号能看出是否有记录被跳过，
-            // 短 Toast 也不会把后面的记录挤出队列（LENGTH_LONG 每条要占 3.5 秒）。
-            final int seq = DIAG_SEQ.incrementAndGet();
-            final String text = "#" + seq + " " + compactDiag(line);
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                Toast.makeText(ctx, text, Toast.LENGTH_SHORT).show();
-            } else {
-                Handler main = new Handler(Looper.getMainLooper());
-                main.post(() -> {
-                    try {
-                        Toast.makeText(ctx, text, Toast.LENGTH_SHORT).show();
-                    } catch (Throwable ignored) {
-                        // 诊断展示失败不影响渲染。
-                    }
-                });
-            }
-        } catch (Throwable ignored) {
-            // 诊断展示失败不影响渲染。
-        }
     }
 
     // ---------------------------------------------------------------- 翻译流程

@@ -35,8 +35,14 @@
 - 行刷新执行前后各记一次 `height`：
   - `invoked(before=…)`、`row-refresh(before=…,after=…)`。
 - 记录 `rebound`（绑定已被换成别的消息）与 `post-rejected`（`View.post` 失败）。
-- 输出三条通道同时生效：`XLog`、`Diagnostics` 缓冲区（设置页“刷新布局诊断”）、
-  **屏幕 Toast**（节流 1.5 秒，相同内容不重复）。
+- 投递环节记录 `dispatch`；`setMessageContent` 抛异常时记录
+  `invoke-failed:异常类名`（此前该分支只写 `XLog`，导致“有 target 但没有
+  invoked”无从判断）。
+- 输出两条通道：`XLog` 与 `Diagnostics` 缓冲区。缓冲区内容在设置页
+  「刷新布局诊断」可查看、「复制布局诊断」可复制到剪贴板。
+
+> 曾短暂用屏幕 Toast 展示，但一次渲染会连续产生多条记录，
+> 一秒内弹出数个 Toast 完全无法使用，因此已移除，改为设置页查看/复制。
 
 ## 判读
 

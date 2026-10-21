@@ -1,6 +1,8 @@
 package com.wxmyyds.discordautotranslate.ui;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
@@ -69,6 +71,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private TextView resultText;
     private Button diagRefreshButton;
     private Button diagClearButton;
+    private Button diagCopyButton;
     private TextView diagText;
     private EditText testTextInput;
     private Button saveButton;
@@ -187,6 +190,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         diagClearButton.setText("清空布局诊断");
         diagClearButton.setOnClickListener(v -> clearDiagnostics());
         root.addView(diagClearButton, matchWrap());
+
+        // 诊断行较多时手动抄不现实，直接复制到剪贴板。
+        diagCopyButton = new Button(this);
+        diagCopyButton.setText("复制布局诊断");
+        diagCopyButton.setOnClickListener(v -> copyDiagnostics());
+        root.addView(diagCopyButton, matchWrap());
 
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
                 ApiTester.DEFAULT_TEST_TEXT,
@@ -554,11 +563,44 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             return;
         }
         if (text == null || text.isEmpty()) {
-            diagText.setText("（模块还没有写入诊断。请确认已启用“详细诊断日志”，"
-                    + "并在 Discord 中复现一次翻译/切换。）");
+            diagText.setText("（暂无诊断）请在 Discord 中复现一次翻译/切换后刷新。");
             return;
         }
-        diagText.setText(text);
+        // 带行数，便于判断记录是否被截断。
+        int lines = text.split("\n", -1).length;
+        diagText.setText("共 " + lines + " 条：\n" + text);
+    }
+
+    /** 把诊断内容复制到剪贴板，避免手动抄写长文本。 */
+    private void copyDiagnostics() {
+        SharedPreferences currentPrefs = prefs;
+        if (currentPrefs == null) {
+            diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
+            return;
+        }
+        String text;
+        try {
+            text = currentPrefs.getString(Config.KEY_DIAGNOSTICS, "");
+        } catch (Throwable t) {
+            diagText.setText("读取诊断失败：" + t.getClass().getSimpleName());
+            return;
+        }
+        if (text == null || text.isEmpty()) {
+            diagText.setText("（暂无诊断可复制）");
+            return;
+        }
+        try {
+            Object service = getSystemService(CLIPBOARD_SERVICE);
+            if (!(service instanceof ClipboardManager)) {
+                diagText.setText("剪贴板不可用，请手动长按选择文本。");
+                return;
+            }
+            ((ClipboardManager) service).setPrimaryClip(
+                    ClipData.newPlainText("DiscordAutoTranslate 布局诊断", text));
+            diagText.setText("已复制 " + text.split("\n", -1).length + " 条诊断到剪贴板。");
+        } catch (Throwable t) {
+            diagText.setText("复制失败：" + t.getClass().getSimpleName());
+        }
     }
 
     /** 清空诊断，便于下一次复现只观察新增记录。 */
