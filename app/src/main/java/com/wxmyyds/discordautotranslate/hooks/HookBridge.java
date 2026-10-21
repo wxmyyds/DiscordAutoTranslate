@@ -370,7 +370,11 @@ public final class HookBridge {
                             return true;
                         }
                     });
-            view.invalidate();
+            // 关键：invalidate() 只触发重绘，不会重新测量。
+            // TextView.setText 会重建 Layout（因此 layoutH 已变成新值），
+            // 但 View.getHeight() 必须经过 measure/layout 才更新。
+            // 只用 invalidate() 会导致 "layoutH=391 而 height=549" 长期共存。
+            requestLayoutChain(view);
         });
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
@@ -485,6 +489,9 @@ public final class HookBridge {
             PENDING_HOST_REBINDS.add(view);
             try {
                 notifyItemChanged.invoke(rowAdapter, notifyPosition);
+                // 通知只让 RecyclerView 重算该行；TextView 自身高度仍需一次
+                // measure 才会从旧值（如 549）变成新文本的自然高度（如 391）。
+                requestLayoutChain(view);
                 return true;
             } catch (Throwable t) {
                 PENDING_HOST_REBINDS.remove(view);
@@ -561,6 +568,49 @@ public final class HookBridge {
             parent = parent.getParent();
         }
         return null;
+    }
+
+    /**
+     * 对视图及其父链请求重新布局。
+     *
+     * <p><b>为什么必须显式请求</b>：{@code View.invalidate()} 只触发重绘，
+     * 不会重新测量。{@code TextView.setText} 会重建 {@code Layout}，所以
+     * {@code getLayout().getHeight()} 立即变成新值，但 {@code View.getHeight()}
+     * 要经过 measure/layout 才更新。实测日志里同时出现
+     * {@code height=549} 与 {@code layoutH=391}，正是因为测量从未发生。</p>
+     *
+     * <p><b>为什么先 forceLayout()</b>：仅调 {@code requestLayout()} 时，
+     * 若该 View 的 {@code PFLAG_FORCE_LAYOUT} 未置位且测量参数未变，
+     * 父级会在 {@code measureChildWithMargins} 中直接用缓存尺寸而不再下探。
+     * {@code forceLayout()} 会置位该标记并清掉测量缓存，使下一次 measure
+     * 真正跑到这个 View。</p>
+     *
+     * <p>沿父链向上传播的原因：中文正文高度变化后，承载它的
+     * {@code MessageAccessoriesView}（一个 RecyclerView）与最外层
+     * {@code MessageView} 的测量结果都需要重新计算，只刷单层不足以让
+     * 宿主行高更新。</p>
+     *
+     * <p>深度上有界（{@link #RELAYOUT_MAX_DEPTH}），避免无界传播。</p>
+     */
+    private static void requestLayoutChain(@Nullable View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            view.forceLayout();
+            view.requestLayout();
+            android.view.ViewParent parent = view.getParent();
+            for (int depth = 0;
+                 depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
+                View parentView = (View) parent;
+                parentView.forceLayout();
+                parentView.requestLayout();
+                parent = parent.getParent();
+            }
+        } catch (Throwable t) {
+            // 布局请求失败不影响主流程：下一次滚动仍会正确重绑。
+            XLog.d("requestLayoutChain failed: " + t.getClass().getSimpleName());
+        }
     }
 
     private static final String RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView";
