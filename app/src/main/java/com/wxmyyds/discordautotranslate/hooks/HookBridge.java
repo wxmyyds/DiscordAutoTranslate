@@ -517,9 +517,8 @@ public final class HookBridge {
      * 把一次强制重新测量推到当前帧布局结束之后。
      *
      * <p>在宿主布局进行中调用 {@code requestLayout()} 会被直接丢弃，这是
-     * “重绑已发生但高度不变、必须手动滚动才恢复”的成因。因此先通过
-     * {@code doOnPreDraw} 的下一帧回调与 {@code post} 双重兜底：任何一个
-     * 在布局结束后真正执行，都会把新高度应用到该行。</p>
+     * “重绑已发生但高度不变、必须手动滚动才恢复”的成因。因此用
+     * {@code view.post()} 把强制测量推到本帧布局结束之后执行。</p>
      */
     private static void scheduleRelayoutAfterLayout(@Nullable final View view) {
         if (view == null) {
