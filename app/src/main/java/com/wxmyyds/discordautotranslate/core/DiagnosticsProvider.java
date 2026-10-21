@@ -113,7 +113,7 @@ public class DiagnosticsProvider extends ContentProvider {
         }
         if (isWriteMode(mode)) {
             requireWriter();
-            File file = logFile(requireContext());
+            File file = logFile(contextOrThrow());
             rotateIfNeeded(file);
             return android.os.ParcelFileDescriptor.open(file,
                     android.os.ParcelFileDescriptor.MODE_CREATE
@@ -121,7 +121,7 @@ public class DiagnosticsProvider extends ContentProvider {
                             | android.os.ParcelFileDescriptor.MODE_WRITE_ONLY);
         }
         requireSelf();
-        return android.os.ParcelFileDescriptor.open(logFile(requireContext()),
+        return android.os.ParcelFileDescriptor.open(logFile(contextOrThrow()),
                 android.os.ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
@@ -130,7 +130,14 @@ public class DiagnosticsProvider extends ContentProvider {
                 && (mode.contains("w") || mode.contains("a") || mode.contains("t"));
     }
 
-    private android.content.Context requireContext() {
+    /**
+     * 取 Context 并判空。
+     *
+     * <p>不能命名为 {@code requireContext}：{@link ContentProvider#requireContext()}
+     * 是 API 30 加入的 final 方法，同签名会编译失败；且本项目 minSdk 为 26，
+     * 直接调用它也只在 API 30+ 可用。</p>
+     */
+    private android.content.Context contextOrThrow() {
         android.content.Context ctx = getContext();
         if (ctx == null) {
             throw new IllegalStateException("provider not attached");
