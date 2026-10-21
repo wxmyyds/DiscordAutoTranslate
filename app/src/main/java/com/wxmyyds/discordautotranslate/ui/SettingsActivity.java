@@ -544,13 +544,37 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     // ------------------------------------------------------------ 布局诊断
 
     /**
+     * 重新向服务要一份偏好设置实例。
+     *
+     * <p>诊断由目标进程（Discord）写入，设置页是另一个进程。缓存的
+     * {@link SharedPreferences} 实例只在创建时读取一次内存快照，之后不会因为
+     * 其他进程写入而更新，因此这里每次读取都重新取实例。</p>
+     */
+    @Nullable
+    private SharedPreferences freshPrefs() {
+        XposedService currentService = service;
+        if (currentService == null) {
+            return null;
+        }
+        try {
+            SharedPreferences p = currentService.getRemotePreferences(Config.GROUP);
+            if (p != null) {
+                prefs = p;
+            }
+            return p != null ? p : prefs;
+        } catch (Throwable t) {
+            return prefs;
+        }
+    }
+
+    /**
      * 读取模块回写的诊断内容。
      *
      * <p>模块进程与设置页不在同一进程，配置文件由 LSPosed 的远程配置同步，
      * 因此这里用 {@code getAll()} 现场读取，而不是使用缓存的快照。</p>
      */
     private void refreshDiagnostics() {
-        SharedPreferences currentPrefs = prefs;
+        SharedPreferences currentPrefs = freshPrefs();
         if (currentPrefs == null) {
             diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
             return;
@@ -573,7 +597,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     /** 把诊断内容复制到剪贴板，避免手动抄写长文本。 */
     private void copyDiagnostics() {
-        SharedPreferences currentPrefs = prefs;
+        SharedPreferences currentPrefs = freshPrefs();
         if (currentPrefs == null) {
             diagText.setText("未连接 LSPosed 服务，无法读取诊断。");
             return;

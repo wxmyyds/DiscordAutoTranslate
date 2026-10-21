@@ -257,7 +257,9 @@ public class ModuleEntry extends XposedModule {
             // 没有 logcat 时诊断只能靠回写：把结果写进远程配置，由设置页显示。
             Diagnostics.install(text -> {
                 try {
-                    prefs.edit().putString(Config.KEY_DIAGNOSTICS, text).apply();
+                    // 必须用 commit()：apply() 是异步落盘，目标进程被切到后台或
+                    // 被杀死时这次写入可能根本不会执行，设置页读到的就是空值。
+                    prefs.edit().putString(Config.KEY_DIAGNOSTICS, text).commit();
                 } catch (Throwable ignored) {
                     // 诊断写盘失败不影响渲染。
                 }
