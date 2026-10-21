@@ -447,12 +447,27 @@ public final class HookBridge {
             if (position < 0) {
                 return false;
             }
+            Object bindingAdapter = Reflect.call(
+                    findInheritedMethod(holder.getClass(), "getBindingAdapter", 0), holder);
+            Object absolutePositionValue = Reflect.call(
+                    findInheritedMethod(holder.getClass(), "getAbsoluteAdapterPosition", 0), holder);
+            int absolutePosition = absolutePositionValue instanceof Integer
+                    ? (Integer) absolutePositionValue : -1;
+            Method notifyItemChanged = findInheritedMethod(
+                    adapter.getClass(), "notifyItemChanged", 1, int.class);
+            logRerender(messageId, view, bound,
+                    "row-refresh-target(adapter=" + adapter.getClass().getName()
+                            + ",bindingAdapter=" + (bindingAdapter == null
+                            ? "unavailable" : bindingAdapter.getClass().getName())
+                            + ",bindingPosition=" + position
+                            + ",absolutePosition=" + absolutePosition
+                            + ",notifyMethod=" + (notifyItemChanged != null)
+                            + ",notifyPosition=" + position + ")");
             boolean cacheInvalidated = invalidateMessageContentBindCache(holder);
             logRerender(messageId, view, bound,
                     "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
             PENDING_HOST_REBINDS.add(view);
-            Reflect.call(findInheritedMethod(
-                    adapter.getClass(), "notifyItemChanged", 1, int.class), adapter, position);
+            Reflect.call(notifyItemChanged, adapter, position);
             return true;
         } catch (Throwable t) {
             XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
