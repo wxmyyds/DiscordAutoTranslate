@@ -235,6 +235,7 @@ public final class HookBridge {
             logRerender(messageId, contentView, bound, "rebound");
             return;
         }
+        logRerender(messageId, null, bound, "dispatch");
         Runnable task = () -> invokeRerender(invocationTarget, contentView, messageId, method, args);
         if (invocationTarget instanceof View) {
             View host = (View) invocationTarget;
@@ -256,6 +257,9 @@ public final class HookBridge {
             method.invoke(invocationTarget, args);
         } catch (Throwable t) {
             XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
+            // 这里以前只写 XLog，导致“有 target 但没有 invoked”无从判断。
+            logRerender(messageId, null, null,
+                    "invoke-failed:" + t.getClass().getSimpleName());
             return;
         } finally {
             RERENDERING.remove();
@@ -436,9 +440,21 @@ public final class HookBridge {
     /** 最近一次可用的 Context，供没有视图时的诊断展示使用。 */
     private static volatile Context sDiagContext = null;
 
-    /** Toast 节流状态：相同内容 1.5 秒内不重复弹出。 */
-    private static volatile String sLastDiagToast = null;
-    private static volatile long sLastDiagToastAt = 0L;
+    /** 诊断序号：Toast 里显示，用于判断是否有记录被跳过。 */
+    private static final java.util.concurrent.atomic.AtomicInteger DIAG_SEQ =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 把完整诊断行压成一行短文本，供 Toast 显示。 */
+    private static String compactDiag(String line) {
+        String out = line
+                .replace(" view=null", "")
+                .replace(" attached=true", "")
+                .replace(" visible=true", "");
+        if (out.length() > 110) {
+            out = out.substring(0, 110) + "…";
+        }
+        return out;
+    }
 
     /**
      * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
@@ -470,21 +486,17 @@ public final class HookBridge {
             if (ctx == null) {
                 return;
             }
-            final String text = line.length() > 220 ? line.substring(0, 220) + "…" : line;
-            // 节流：同一条诊断短时间内只弹一次，避免 Toast 互相覆盖看不到内容。
-            long now = android.os.SystemClock.uptimeMillis();
-            if (text.equals(sLastDiagToast) && now - sLastDiagToastAt < 1500L) {
-                return;
-            }
-            sLastDiagToast = text;
-            sLastDiagToastAt = now;
+            // 带序号的短文案：序号能看出是否有记录被跳过，
+            // 短 Toast 也不会把后面的记录挤出队列（LENGTH_LONG 每条要占 3.5 秒）。
+            final int seq = DIAG_SEQ.incrementAndGet();
+            final String text = "#" + seq + " " + compactDiag(line);
             if (Looper.myLooper() == Looper.getMainLooper()) {
-                Toast.makeText(ctx, text, Toast.LENGTH_LONG).show();
+                Toast.makeText(ctx, text, Toast.LENGTH_SHORT).show();
             } else {
                 Handler main = new Handler(Looper.getMainLooper());
                 main.post(() -> {
                     try {
-                        Toast.makeText(ctx, text, Toast.LENGTH_LONG).show();
+                        Toast.makeText(ctx, text, Toast.LENGTH_SHORT).show();
                     } catch (Throwable ignored) {
                         // 诊断展示失败不影响渲染。
                     }
