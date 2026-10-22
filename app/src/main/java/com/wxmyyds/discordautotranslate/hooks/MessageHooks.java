@@ -167,15 +167,24 @@ public final class MessageHooks {
                         // 到底有没有被重新调用」。上面那条 frozen+sameKey 分支在本
                         // 场景下不成立，所以此前从未输出过测量信息。这里对每次进入
                         // 都记一行，用于判定 requestLayout 是否真的走到了测量。
+                        //
+                        // MessageView 自带 messageId 字段（smali 196 行），直接读它
+                        // 才能把测量记录归到具体行；否则所有记录都是 msg=null，
+                        // 无法判断到底哪一行被重新测量。
+                        Object childMsgId = Reflect.getField(child, "messageId");
+                        String measureId = childMsgId instanceof String
+                                ? (String) childMsgId : null;
                         HookBridge.get().logMeasurePass(child,
-                                "measure-enter(frozen=" + frozen
+                                "measure-enter(id=" + measureId
+                                        + ",frozen=" + frozen
                                         + ",sameKey=" + sameKey
                                         + ",specW=" + View.MeasureSpec.getSize(widthSpec)
                                         + ",specH=" + View.MeasureSpec.getSize(heightSpec)
                                         + ",before=" + oldWidth + "x" + oldHeight + ")");
                         Object result = chain.proceed();
                         HookBridge.get().logMeasurePass(child,
-                                "measure-exit(frozen=" + frozen
+                                "measure-exit(id=" + measureId
+                                        + ",frozen=" + frozen
                                         + ",after=" + child.getMeasuredWidth() + "x"
                                         + child.getMeasuredHeight() + ")");
                         if (report) {
