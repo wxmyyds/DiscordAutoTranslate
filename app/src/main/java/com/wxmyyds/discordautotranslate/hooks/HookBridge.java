@@ -361,12 +361,15 @@ public final class HookBridge {
                                 return true;
                             }
                             boolean hostBindObserved = !PENDING_HOST_REBINDS.remove(view);
+                            String layoutState = layoutStateSummary(view);
                             logRerender(messageId, view, drawnBound,
                                     "row-refresh-after-layout(notified=" + notified
                                             + ",hostBind=" + hostBindObserved
                                             + ",before=" + heightBefore
                                             + ",after=" + view.getHeight()
-                                            + ",metrics=" + textLayoutMetrics(view) + ")");
+                                            + ",metrics=" + textLayoutMetrics(view)
+                                            + ",layoutState=" + layoutState
+                                            + ")");
                             return true;
                         }
                     });
@@ -829,6 +832,69 @@ public final class HookBridge {
         } catch (Throwable t) {
             XLog.d("schedule next-frame diag failed: " + t.getClass().getSimpleName());
         }
+    }
+
+    private static String layoutStateSummary(@Nullable View content) {
+        try {
+            android.view.ViewParent contentRecycler = findRecyclerView(content);
+            android.view.ViewParent chatList = findAncestorByClassName(
+                    content, CHAT_LIST_VIEW_CLASS);
+            View row = findAncestorViewByClassName(content, MESSAGE_VIEW_CLASS);
+            return "content=" + describeLayoutState(content)
+                    + ",contentList=" + describeLayoutState(asView(contentRecycler))
+                    + ",row=" + describeLayoutState(row)
+                    + ",chatList=" + describeLayoutState(asView(chatList))
+                    + ",chatComputing=" + isComputingLayout(chatList);
+        } catch (Throwable t) {
+            XLog.d("layout state diagnostic failed: " + t.getClass().getSimpleName());
+            return "unavailable";
+        }
+    }
+
+    @Nullable
+    private static View asView(@Nullable android.view.ViewParent parent) {
+        return parent instanceof View ? (View) parent : null;
+    }
+
+    private static String describeLayoutState(@Nullable View view) {
+        if (view == null) {
+            return "null";
+        }
+        return view.getClass().getSimpleName()
+                + "(measured=" + view.getMeasuredWidth() + "x" + view.getMeasuredHeight()
+                + ",bounds=" + view.getWidth() + "x" + view.getHeight()
+                + "@" + view.getLeft() + "," + view.getTop()
+                + "-" + view.getRight() + "," + view.getBottom() + ")";
+    }
+
+    private static boolean isComputingLayout(@Nullable android.view.ViewParent view) {
+        if (view == null) {
+            return false;
+        }
+        try {
+            Object result = Reflect.call(
+                    findInheritedMethod(view.getClass(), "isComputingLayout", 0), view);
+            return Boolean.TRUE.equals(result);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    @Nullable
+    private static View findAncestorViewByClassName(View view, String className) {
+        try {
+            android.view.ViewParent parent = view.getParent();
+            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
+                View parentView = (View) parent;
+                if (Reflect.isInstanceOfName(parentView, className)) {
+                    return parentView;
+                }
+                parent = parent.getParent();
+            }
+        } catch (Throwable t) {
+            XLog.d("find layout ancestor failed: " + t.getClass().getSimpleName());
+        }
+        return null;
     }
 
     /**
