@@ -581,6 +581,7 @@ public final class HookBridge {
                                         + chatListFound + ",metrics="
                                         + textLayoutMetrics(view) + ",rowKids="
                                         + rowChildrenSummary(view) + ")");
+                        logSecondFrame(view);
                     } catch (Throwable t) {
                         XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
                     }
@@ -704,6 +705,60 @@ public final class HookBridge {
             XLog.d("force relayout ancestor failed: " + t.getClass().getSimpleName());
         }
         return false;
+    }
+
+    /**
+     * 在下一帧再记录一次状态，用于判断布局结果是否真的已应用到屏幕。
+     *
+     * <p>上一行日志（relayout-posted）打在强制测量之前，只能反映修正前的值。
+     * 这里再等一帧，记录 MessageView 的实际 getHeight()/getTop()/getBottom()
+     * 以及内层 MessageAccessoriesView 的高度，用来区分：</p>
+     * <ul>
+     *   <li>测量/布局都跑了，但下次滚动才重排 —— 说明布局被推迟；</li>
+     *   <li>布局跑了，但 RecyclerView 仍按旧 offset 摆放子项 —— 说明需要
+     *       同时修正滚动位置或子项偏移。</li>
+     * </ul>
+     */
+    private static void logSecondFrame(@Nullable final View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            view.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (!view.isAttachedToWindow()) {
+                            return;
+                        }
+                        View row = null;
+                        android.view.ViewParent parent = view.getParent();
+                        for (int depth = 0;
+                             depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
+                            View v = (View) parent;
+                            if (Reflect.isInstanceOfName(v, MESSAGE_VIEW_CLASS)) {
+                                row = v;
+                                break;
+                            }
+                            parent = v.getParent();
+                        }
+                        String rowInfo = row == null ? "no-row"
+                                : (row.getHeight() + "@" + row.getTop()
+                                        + "-" + row.getBottom());
+                        logRerender(null, view, HookBridge.get().messageIdOf(view),
+                                "row-refresh-next-frame(content=" + view.getHeight()
+                                        + "@" + view.getTop() + "-" + view.getBottom()
+                                        + ",row=" + rowInfo
+                                        + ",metrics=" + textLayoutMetrics(view)
+                                        + ")");
+                    } catch (Throwable t) {
+                        XLog.d("next-frame diag failed: " + t.getClass().getSimpleName());
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            XLog.d("schedule next-frame diag failed: " + t.getClass().getSimpleName());
+        }
     }
 
     /**
