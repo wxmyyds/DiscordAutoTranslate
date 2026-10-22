@@ -489,15 +489,15 @@ public final class HookBridge {
             PENDING_HOST_REBINDS.add(view);
             try {
                 notifyItemChanged.invoke(rowAdapter, notifyPosition);
-                // notifyItemChanged 只把该行标记为 invalid，真正重绑被排到后续
-                // 布局/预取阶段。实测 hostBind 始终为 false，故这里同步重绑一次。
-                boolean rebound = rebindRowNow(rowAdapter, rowHolder, notifyPosition);
-                logRerender(messageId, view, bound, "row-refresh-rebind-now=" + rebound);
-                // 关键时序：以上重绑发生在宿主正在布局的帧内，此时
-                // setItems→notifyDataSetChanged() 会被 RecyclerView 抑制/延迟，
-                // 由此发起的 requestLayout() 也会被丢弃（已在 layout 中）。
-                // 所以必须把重新测量推迟到本帧布局结束之后，否则高度保持旧值
-                // 直到用户手动滚动。
+                // 注意：这里刻意不做同步重绑。曾尝试直接调用宿主
+                // onBindViewHolder(holder, position, payloads) 强制重绑，实测
+                // 会重跑整条绑定管线并再次触发翻译注入（同一行译文长度在
+                // 317/150/147 之间反复变化，invoked 连续出现三次），
+                // 因此回退为仅靠 notifyItemChanged 标记 invalid。
+                //
+                // 真正让高度更新的是下面这次推迟到布局结束后的强制测量：
+                // 实测 MessageView 由 1272x1026 → 1272x868，恰好等于内容层
+                // layoutH 549→391 的差值。
                 scheduleRelayoutAfterLayout(view);
                 return true;
             } catch (Throwable t) {
@@ -571,45 +571,6 @@ public final class HookBridge {
         }
         XLog.w("lastMessageContent field not found; row rebind may be skipped");
         return false;
-    }
-
-    /**
-     * 同步执行一次宿主行重绑。
-     *
-     * <p><b>为什么不能只靠 notifyItemChanged</b>：实测日志里所有失败样本的
-     * {@code hostBind} 都是 {@code false}，即 {@code MessageContentViewHolder.bind}
-     * 从未执行。RecyclerView 收到 {@code notifyItemChanged} 后只把该行标记为
-     * invalid，真正的重绑被排到之后的布局/预取阶段；若该行不在当前可视区或
-     * 正被预取，到 {@code onPreDraw} 时仍未重绑，高度自然还是旧值。</p>
-     *
-     * <p>因此这里直接调用宿主自己的
-     * {@code onBindViewHolder(holder, position, payloads)}，把重绑
-     * 变成当前帧内的同步动作。内层 {@code lastMessageContent} 缓存已在调用前
-     * 清除，所以 {@code MessageContentViewHolder.bind} 不会在入口处提前返回。</p>
-     */
-    private static boolean rebindRowNow(@Nullable Object rowAdapter,
-                                        @Nullable Object rowHolder, int position) {
-        if (rowAdapter == null || rowHolder == null || position < 0) {
-            return false;
-        }
-        try {
-            // 宿主 ChannelChatListAdapter 重写的是 3 参版
-            // onBindViewHolder(ViewHolder, int, List)（adapterdelegates4 的钩子），
-            // 标准的 2 参版在基类里，直接调 3 参版才等价于宿主自己的重绑。
-            Method onBind = findInheritedMethod(rowAdapter.getClass(), "onBindViewHolder", 3);
-            if (onBind == null) {
-                XLog.d("onBindViewHolder(payloads) not found on "
-                        + rowAdapter.getClass().getName());
-                return false;
-            }
-            onBind.invoke(rowAdapter, rowHolder, position, java.util.Collections.emptyList());
-            return true;
-        } catch (Throwable t) {
-            Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
-                    && t.getCause() != null ? t.getCause() : t;
-            XLog.d("rebind row now failed: " + cause.getClass().getSimpleName());
-            return false;
-        }
     }
 
     /**
