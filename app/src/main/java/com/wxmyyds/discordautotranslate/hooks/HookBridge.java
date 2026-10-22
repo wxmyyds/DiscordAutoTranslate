@@ -594,6 +594,7 @@ public final class HookBridge {
                         // “不能变高”的约束（宿主 measureAndLayout 正是这么错的）。
                         relayoutContentSelf(view);
                         view.invalidate();
+                        logAfterRequestedLayout(view);
                         logRerender(null, view, HookBridge.get().messageIdOf(view),
                                 "row-refresh-relayout-posted(after="
                                         + view.getHeight() + ",chatListForced="
@@ -777,6 +778,40 @@ public final class HookBridge {
             }
         } catch (Throwable t) {
             XLog.d("content self relayout failed: " + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void logAfterRequestedLayout(@Nullable final View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
+            if (!observer.isAlive()) {
+                return;
+            }
+            observer.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    try {
+                        if (observer.isAlive()) {
+                            observer.removeOnPreDrawListener(this);
+                        }
+                        if (view.isAttachedToWindow()) {
+                            logRerender(null, view, HookBridge.get().messageIdOf(view),
+                                    "row-refresh-after-request-layout(layoutState="
+                                            + layoutStateSummary(view) + ")");
+                        }
+                    } catch (Throwable t) {
+                        XLog.d("post-layout snapshot failed: "
+                                + t.getClass().getSimpleName());
+                    }
+                    return true;
+                }
+            });
+        } catch (Throwable t) {
+            XLog.d("schedule post-layout snapshot failed: "
+                    + t.getClass().getSimpleName());
         }
     }
 
