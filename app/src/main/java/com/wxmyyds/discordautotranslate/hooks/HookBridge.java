@@ -539,10 +539,16 @@ public final class HookBridge {
                             v = parent instanceof View ? (View) parent : null;
                         }
                         requestLayoutChain(view);
+                        // 只靠父链 requestLayout() 存在一个实测存在的缺口：它会
+                        // 被登记，但若 RecyclerView 自己在下一帧判定无需重新布局，
+                        // 测量就会被推到下一次滚动，表现为“高度不变，滑动一下才恢复”。
+                        // 因此对真正负责布局的 ChatListView 单独再发一次强布局请求。
+                        boolean chatListFound = forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
                         view.invalidate();
                         logRerender(null, view, HookBridge.get().messageIdOf(view),
                                 "row-refresh-relayout-posted(after="
-                                        + view.getHeight() + ",metrics="
+                                        + view.getHeight() + ",chatListForced="
+                                        + chatListFound + ",metrics="
                                         + textLayoutMetrics(view) + ")");
                     } catch (Throwable t) {
                         XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
@@ -640,6 +646,35 @@ public final class HookBridge {
      *
      * <p>深度上有界（{@link #RELAYOUT_MAX_DEPTH}），避免无界传播。</p>
      */
+    /**
+     * 找到指定类名的祖先并对它发出强布局请求，返回是否找到。
+     *
+     * <p>父链上的 {@code requestLayout()} 是逐级冒泡的，但只要有一层
+     * 处于“不需要重新布局”状态（例如 RecyclerView 的重布局抑制），请求就会止步。
+     * 直接对真正的布局宿主 {@code ChatListView} 调用 {@code forceLayout()} +
+     * {@code requestLayout()}，能让它自己在下一帧参与测量。</p>
+     */
+    private static boolean forceRelayoutAncestor(@Nullable View view, String className) {
+        if (view == null) {
+            return false;
+        }
+        try {
+            android.view.ViewParent parent = view.getParent();
+            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
+                View parentView = (View) parent;
+                if (Reflect.isInstanceOfName(parentView, className)) {
+                    parentView.forceLayout();
+                    parentView.requestLayout();
+                    return true;
+                }
+                parent = parent.getParent();
+            }
+        } catch (Throwable t) {
+            XLog.d("force relayout ancestor failed: " + t.getClass().getSimpleName());
+        }
+        return false;
+    }
+
     private static void requestLayoutChain(@Nullable View view) {
         if (view == null) {
             return;
@@ -668,7 +703,15 @@ public final class HookBridge {
             "com.discord.chat.presentation.message.MessageView";
 
     /** 向上查找列表时的最大层数。 */
-    private static final int RELAYOUT_MAX_DEPTH = 12;
+    /**
+     * 父链传播的最大深度。
+     *
+     * <p>实测消息正文视图到外层 ChatListView 的层级较深，原先 12 层的
+     * 上限可能在到达 ChatListView 之前就截断，导致 requestLayout 没有传到
+     * 真正负责布局的那一层——表现为“高度不更新，滚动一次才恢复”。
+     * 这里放宽到 32（仍为有界值，避免异常情况下的无界传播）。</p>
+     */
+    private static final int RELAYOUT_MAX_DEPTH = 32;
 
     /** 诊断开关：只有排查“布局未刷新”时才打开。 */
     private static volatile boolean sLayoutDiagnostic = false;
