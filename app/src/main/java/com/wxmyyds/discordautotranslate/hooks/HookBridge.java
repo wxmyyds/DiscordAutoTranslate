@@ -549,7 +549,8 @@ public final class HookBridge {
                                 "row-refresh-relayout-posted(after="
                                         + view.getHeight() + ",chatListForced="
                                         + chatListFound + ",metrics="
-                                        + textLayoutMetrics(view) + ")");
+                                        + textLayoutMetrics(view) + ",rowKids="
+                                        + rowChildrenSummary(view) + ")");
                     } catch (Throwable t) {
                         XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
                     }
@@ -673,6 +674,54 @@ public final class HookBridge {
             XLog.d("force relayout ancestor failed: " + t.getClass().getSimpleName());
         }
         return false;
+    }
+
+    /**
+     * 汇总某个 View 自身及其直接子 View 的类名与高度，用于定位多余空白。
+     *
+     * <p>仅输出类名与高度像素值，不包含任何消息正文或译文内容。</p>
+     */
+    private static String rowChildrenSummary(@Nullable View view) {
+        if (view == null) {
+            return "none";
+        }
+        try {
+            android.view.ViewParent parent = view.getParent();
+            if (parent instanceof View) {
+                return "ascend=" + view.getHeight() + ":"
+                        + describeViewTree((View) parent, 2);
+            }
+            if (view instanceof android.view.ViewGroup) {
+                return describeViewTree(view, 2);
+            }
+            return "no-parent";
+        } catch (Throwable t) {
+            return "error=" + t.getClass().getSimpleName();
+        }
+    }
+
+    /** 描述 view 及其往下 depth 层子视图的 类名@高度。 */
+    private static String describeViewTree(View view, int depth) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(view.getClass().getSimpleName())
+                .append('@').append(view.getHeight())
+                .append(view.getVisibility() == View.VISIBLE ? "" : "(hidden)");
+        if (depth > 0 && view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            int n = group.getChildCount();
+            sb.append('[');
+            for (int i = 0; i < n && i < 6; i++) {
+                if (i > 0) {
+                    sb.append('+');
+                }
+                sb.append(describeViewTree(group.getChildAt(i), depth - 1));
+            }
+            if (n > 6) {
+                sb.append("+...").append(n - 6);
+            }
+            sb.append(']');
+        }
+        return sb.toString();
     }
 
     private static void requestLayoutChain(@Nullable View view) {
