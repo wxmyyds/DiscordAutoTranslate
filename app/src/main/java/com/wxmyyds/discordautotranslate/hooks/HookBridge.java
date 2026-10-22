@@ -472,6 +472,36 @@ public final class HookBridge {
             boolean cacheInvalidated = invalidateMessageContentBindCache(contentHolder);
             logRerender(messageId, view, bound,
                     "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
+            // 内层通知：MessageContentView 本身是内层 MessageAccessoriesView
+            // （一个 RecyclerView）的 item。日志里出现过
+            // metrics.layoutH=391 而 MessageContentView@549 共存，说明内层
+            // item 没有被重新测量，多出的 158px 就是文本下方的空白。
+            // 外层通知只让 MessageView 重算，不能单独修好这一层。
+            int contentPosition = -1;
+            Object contentPosValue = Reflect.call(
+                    findInheritedMethod(contentHolder.getClass(), "getBindingAdapterPosition", 0),
+                    contentHolder);
+            if (contentPosValue instanceof Integer) {
+                contentPosition = (Integer) contentPosValue;
+            }
+            if (contentPosition >= 0) {
+                Method notifyContent = findInheritedMethod(
+                        contentAdapter.getClass(), "notifyItemChanged", 1, int.class);
+                if (notifyContent != null) {
+                    try {
+                        notifyContent.invoke(contentAdapter, contentPosition);
+                        logRerender(messageId, view, bound,
+                                "row-refresh-content-notified(pos=" + contentPosition + ")");
+                    } catch (Throwable t) {
+                        logRerender(messageId, view, bound,
+                                "row-refresh-content-notify-failed="
+                                        + t.getClass().getSimpleName());
+                    }
+                }
+            } else {
+                logRerender(messageId, view, bound,
+                        "row-refresh-content-no-position=" + contentPosValue);
+            }
             Method notifyItemChanged = findInheritedMethod(
                     rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
             logRerender(messageId, view, bound,
