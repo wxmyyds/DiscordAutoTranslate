@@ -595,6 +595,9 @@ public final class HookBridge {
                         // “不能变高”的约束（宿主 measureAndLayout 正是这么错的）。
                         relayoutContentSelf(view);
                         view.invalidate();
+                        dispatchRecyclerLayout(view, "contentList", findRecyclerView(view));
+                        dispatchRecyclerLayout(view, "chatList",
+                                findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
                         logAfterRequestedLayout(view);
                         logRerender(null, view, HookBridge.get().messageIdOf(view),
                                 "row-refresh-relayout-posted(after="
@@ -853,6 +856,59 @@ public final class HookBridge {
         } catch (Throwable t) {
             XLog.d("start layout bounds watch failed: "
                     + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void dispatchRecyclerLayout(@Nullable View content, String label,
+                                               @Nullable android.view.ViewParent recycler) {
+        if (content == null || recycler == null) {
+            logRerender(null, content, HookBridge.get().messageIdOf(content),
+                    "dispatch-layout(" + label + ",skipped=no-recycler)");
+            return;
+        }
+        try {
+            Object suppressed = Reflect.getField(recycler, "mLayoutSuppressed");
+            Object interceptDepth = Reflect.getField(recycler, "mInterceptRequestLayoutDepth");
+            Object deferred = Reflect.getField(recycler, "mLayoutWasDefered");
+            Object computing = Reflect.call(findInheritedMethod(
+                    recycler.getClass(), "isComputingLayout", 0), recycler);
+            boolean fieldsAvailable = suppressed instanceof Boolean
+                    && interceptDepth instanceof Integer && deferred instanceof Boolean;
+            if (!fieldsAvailable) {
+                logRerender(null, content, HookBridge.get().messageIdOf(content),
+                        "dispatch-layout(" + label + ",skipped=state-unavailable)");
+                return;
+            }
+            if (Boolean.TRUE.equals(suppressed)
+                    || ((Integer) interceptDepth) != 0
+                    || Boolean.TRUE.equals(computing)) {
+                logRerender(null, content, HookBridge.get().messageIdOf(content),
+                        "dispatch-layout(" + label + ",skipped=busy,suppressed="
+                                + suppressed + ",interceptDepth=" + interceptDepth
+                                + ",computing=" + computing + ")");
+                return;
+            }
+            Method dispatchLayout = findInheritedMethod(
+                    recycler.getClass(), "dispatchLayout", 0);
+            if (dispatchLayout == null) {
+                logRerender(null, content, HookBridge.get().messageIdOf(content),
+                        "dispatch-layout(" + label + ",skipped=no-method)");
+                return;
+            }
+            String before = describeLayoutState(asView(recycler));
+            dispatchLayout.invoke(recycler);
+            String after = describeLayoutState(asView(recycler));
+            logRerender(null, content, HookBridge.get().messageIdOf(content),
+                    "dispatch-layout(" + label + ",called=true,deferred=" + deferred
+                            + ",before=" + before + ",after=" + after + ")");
+        } catch (Throwable t) {
+            Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
+                    && t.getCause() != null ? t.getCause() : t;
+            XLog.d("dispatchLayout " + label + " failed: "
+                    + cause.getClass().getSimpleName());
+            logRerender(null, content, HookBridge.get().messageIdOf(content),
+                    "dispatch-layout(" + label + ",failed="
+                            + cause.getClass().getSimpleName() + ")");
         }
     }
 
