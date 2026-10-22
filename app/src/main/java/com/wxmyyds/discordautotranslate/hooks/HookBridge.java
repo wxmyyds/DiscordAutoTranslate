@@ -565,6 +565,7 @@ public final class HookBridge {
                         if (!view.isAttachedToWindow()) {
                             return;
                         }
+                        watchRelayoutBounds(view);
                         // 布局已结束，此时 requestLayout 不会被丢弃。
                         for (View v = view; v != null; ) {
                             v.forceLayout();
@@ -778,6 +779,80 @@ public final class HookBridge {
             }
         } catch (Throwable t) {
             XLog.d("content self relayout failed: " + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void watchRelayoutBounds(@Nullable final View content) {
+        if (content == null) {
+            return;
+        }
+        try {
+            final View[] targets = new View[3];
+            final String[] labels = {"content", "contentList", "row"};
+            final boolean[] changed = new boolean[targets.length];
+            targets[0] = content;
+            targets[1] = asView(findRecyclerView(content));
+            targets[2] = findAncestorViewByClassName(content, MESSAGE_VIEW_CLASS);
+            final android.view.View.OnLayoutChangeListener[] listeners =
+                    new android.view.View.OnLayoutChangeListener[targets.length];
+            final String id = HookBridge.get().messageIdOf(content);
+            for (int i = 0; i < targets.length; i++) {
+                final int index = i;
+                View target = targets[i];
+                if (target == null) {
+                    continue;
+                }
+                listeners[i] = new android.view.View.OnLayoutChangeListener() {
+                    @Override
+                    public void onLayoutChange(View changedView, int left, int top,
+                                              int right, int bottom, int oldLeft, int oldTop,
+                                              int oldRight, int oldBottom) {
+                        try {
+                            if (changed[index]) {
+                                return;
+                            }
+                            changed[index] = true;
+                            logRerender(id, content, HookBridge.get().messageIdOf(content),
+                                    "layout-watch-change(target=" + labels[index]
+                                            + ",from=" + oldLeft + "," + oldTop + "-"
+                                            + oldRight + "," + oldBottom
+                                            + ",to=" + left + "," + top + "-"
+                                            + right + "," + bottom + ")");
+                        } catch (Throwable t) {
+                            XLog.d("layout change diagnostic failed: "
+                                    + t.getClass().getSimpleName());
+                        }
+                    }
+                };
+                target.addOnLayoutChangeListener(listeners[i]);
+            }
+            Runnable cleanup = new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        for (int i = 0; i < targets.length; i++) {
+                            if (targets[i] != null && listeners[i] != null) {
+                                targets[i].removeOnLayoutChangeListener(listeners[i]);
+                            }
+                        }
+                        if (content.isAttachedToWindow()) {
+                            logRerender(id, content, HookBridge.get().messageIdOf(content),
+                                    "layout-watch-summary(changes=" + changed[0] + ","
+                                            + changed[1] + "," + changed[2]
+                                            + ",state=" + layoutStateSummary(content) + ")");
+                        }
+                    } catch (Throwable t) {
+                        XLog.d("layout bounds watch failed: "
+                                + t.getClass().getSimpleName());
+                    }
+                }
+            };
+            if (!content.postDelayed(cleanup, 200L)) {
+                cleanup.run();
+            }
+        } catch (Throwable t) {
+            XLog.d("start layout bounds watch failed: "
+                    + t.getClass().getSimpleName());
         }
     }
 
