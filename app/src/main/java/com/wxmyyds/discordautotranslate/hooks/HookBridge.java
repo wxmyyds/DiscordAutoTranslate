@@ -895,11 +895,27 @@ public final class HookBridge {
         if (view == null) {
             return "null";
         }
+        String rvGate = Reflect.isInstanceOfName(view, RECYCLER_VIEW_CLASS)
+                ? recyclerLayoutGate(view) : "";
         return view.getClass().getSimpleName()
                 + "(measured=" + view.getMeasuredWidth() + "x" + view.getMeasuredHeight()
                 + ",bounds=" + view.getWidth() + "x" + view.getHeight()
                 + "@" + view.getLeft() + "," + view.getTop()
-                + "-" + view.getRight() + "," + view.getBottom() + ")";
+                + "-" + view.getRight() + "," + view.getBottom()
+                + rvGate + ")";
+    }
+
+    private static String recyclerLayoutGate(View view) {
+        Object suppressed = Reflect.getField(view, "mLayoutSuppressed");
+        Object interceptDepth = Reflect.getField(view, "mInterceptRequestLayoutDepth");
+        Object deferred = Reflect.getField(view, "mLayoutWasDefered");
+        return ",rvGate(suppressed=" + diagnosticValue(suppressed)
+                + ",interceptDepth=" + diagnosticValue(interceptDepth)
+                + ",deferred=" + diagnosticValue(deferred) + ")";
+    }
+
+    private static String diagnosticValue(@Nullable Object value) {
+        return value == null ? "?" : String.valueOf(value);
     }
 
     private static boolean isComputingLayout(@Nullable android.view.ViewParent view) {
