@@ -574,6 +574,22 @@ public final class HookBridge {
                         // 测量就会被推到下一次滚动，表现为“高度不变，滑动一下才恢复”。
                         // 因此对真正负责布局的 ChatListView 单独再发一次强布局请求。
                         boolean chatListFound = forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
+                        // 直接给内容视图重新测量并布局。
+                        //
+                        // 依据：next-frame 日志里出现过
+                        //   content=549@0-549 而 metrics.layoutH=391
+                        // 即隔了一整帧内容视图仍未重测；而内层
+                        // MessageAccessoriesView 本身能正确跟随
+                        // （937=549+360+28 / 779=391+360+28）。
+                        // 说明 RecyclerView 收到了 notifyItemChanged，却没有
+                        // 重新测量这个子项。滚动能修好，是因为滚动会触发
+                        // RecyclerView 自己的完整 dispatchLayout。
+                        //
+                        // 这里不再依赖 RecyclerView，用 TextView 自己的 Layout
+                        // 把内容视图量到正确高度。宽度用当前实测宽度（EXACTLY），
+                        // 高度用 UNSPECIFIED（AT_MOST=0），否则会得到一个
+                        // “不能变高”的约束（宿主 measureAndLayout 正是这么错的）。
+                        relayoutContentSelf(view);
                         view.invalidate();
                         logRerender(null, view, HookBridge.get().messageIdOf(view),
                                 "row-refresh-relayout-posted(after="
@@ -705,6 +721,60 @@ public final class HookBridge {
             XLog.d("force relayout ancestor failed: " + t.getClass().getSimpleName());
         }
         return false;
+    }
+
+    /**
+     * 让内容视图按自身当前文本重新测量并布局，不依赖父级 RecyclerView。
+     *
+     * <p><b>为什么需要它</b>：实测 next-frame 日志里 {@code content=549} 与
+     * {@code metrics.layoutH=391} 可以共存整整一帧，而滚动一次就能修好。
+     * 说明内层 RecyclerView 收到 {@code notifyItemChanged} 后并没有重新
+     * 测量该子项；滚动之所以有效，是因为它会触发完整的 dispatchLayout。</p>
+     *
+     * <p><b>约束的选择</b>：宽度用当前实测宽度的 EXACTLY，高度用
+     * {@link View.MeasureSpec#UNSPECIFIED}。不能用 {@code getHeight()} 构造
+     * EXACTLY 高度——那会把当前高度锁死，永远不可能变高或变矮（宿主自带的
+     * {@code ChatListView.measureAndLayout} 就是这个问题）。</p>
+     *
+     * <p>只改这个子视图自身的尺寸，不改任何数据或文本内容。</p>
+     */
+    private static void relayoutContentSelf(@Nullable View view) {
+        if (view == null || !view.isAttachedToWindow()) {
+            return;
+        }
+        try {
+            int width = view.getWidth();
+            if (width <= 0) {
+                width = view.getMeasuredWidth();
+            }
+            if (width <= 0) {
+                return;
+            }
+            int widthSpec = View.MeasureSpec.makeMeasureSpec(
+                    width, View.MeasureSpec.EXACTLY);
+            int heightSpec = View.MeasureSpec.makeMeasureSpec(
+                    0, View.MeasureSpec.UNSPECIFIED);
+            view.forceLayout();
+            view.measure(widthSpec, heightSpec);
+            int newHeight = view.getMeasuredHeight();
+            int oldHeight = view.getHeight();
+            if (newHeight > 0 && newHeight != oldHeight) {
+                view.layout(view.getLeft(), view.getTop(),
+                        view.getLeft() + width, view.getTop() + newHeight);
+            }
+            logRerender(null, view, HookBridge.get().messageIdOf(view),
+                    "content-self-relayout(oldH=" + oldHeight + ",newH="
+                            + newHeight + ",width=" + width + ")");
+            // 父级（内层 RecyclerView）自身高度也需跟着收缩，否则空白还在。
+            android.view.ViewParent parent = view.getParent();
+            if (parent instanceof View) {
+                View parentView = (View) parent;
+                parentView.forceLayout();
+                parentView.requestLayout();
+            }
+        } catch (Throwable t) {
+            XLog.d("content self relayout failed: " + t.getClass().getSimpleName());
+        }
     }
 
     /**
