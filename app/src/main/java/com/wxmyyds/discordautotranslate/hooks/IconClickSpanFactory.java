@@ -21,6 +21,8 @@ import java.lang.reflect.Proxy;
  *
  * <p>该接口位于目标 APK 内、编译期不可见，因此用 {@link Proxy} 按接口名动态实现，
  * 避免编译期依赖 Discord 类。</p>
+ *
+ * <p><b>长按</b>：始终返回 {@code false}，将长按交给宿主消息菜单。</p>
  */
 public final class IconClickSpanFactory {
 
@@ -60,7 +62,6 @@ public final class IconClickSpanFactory {
                         HookBridge.get().onIconClicked(messageId);
                         return null;
                     case "onLongClick":
-                        // 不消费长按，放行给消息行自己的长按菜单。
                         return Boolean.FALSE;
                     case "enableHighlight":
                         return null;

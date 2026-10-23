@@ -179,7 +179,6 @@ public class ModuleEntry extends XposedModule {
     private void install(ClassLoader cl) {
         // 记录目标 Discord 版本，便于诊断（需求 §9.1）。
         logTargetVersion(cl);
-        HookBridge.logModuleReady("target=" + TARGET_PACKAGE);
 
         StructurableTextFactory.init(cl);
         Scheduler.MainThread.install();
