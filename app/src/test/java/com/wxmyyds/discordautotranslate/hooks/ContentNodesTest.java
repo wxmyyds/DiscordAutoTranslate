@@ -413,8 +413,9 @@ public class ContentNodesTest {
         assertSame("结构化节点必须原样复用", inner.get(1), para.getContent().get(1));
         assertTrue(para.getContent().get(1) instanceof EmojiContentNode);
 
-        // 不变量：替换后所有文本节点的拼接应等于译文（含原节点的首尾空白）。
-        // "Hello " 的尾随空格属于原节点结构，会保留在译文之后。
+        // 不变量：替换后所有文本节点的拼接应等于译文，并保留原节点的尾随空格。
+        // 本用例译文无换行，走回退路径：整段塞进首节点，第二个文本节点被裁掉，
+        // 但 "Hello " 的尾随空格属于原节点结构，仍在译文之后。
         StringBuilder joined = new StringBuilder();
         for (Object o : para.getContent()) {
             if (o instanceof TextContentNode) {
@@ -422,7 +423,7 @@ public class ContentNodesTest {
             }
         }
         assertEquals("译文内容必须完整保留（含原节点尾部空格）",
-                "你好 世界", joined.toString());
+                "你好世界 ", joined.toString());
     }
 
     @Test
