@@ -95,6 +95,31 @@ public class SegmentsTest {
     }
 
     @Test
+    public void stripRemovesTagsAndKeepsContentInOrder() {
+        assertEquals("你好\n世界", Segments.strip("<s1>你好</s1>\n<s2>世界</s2>"));
+        // 只译了一段：剩下的标记被剥离，内容仍保留，不能把标签当文字显示。
+        assertEquals("你好", Segments.strip("<s1>你好</s1>"));
+    }
+
+    @Test
+    public void stripKeepsTextOutsideTags() {
+        assertEquals("前 x", Segments.strip("前 <s1>x</s1>"));
+        assertEquals("a你好b", Segments.strip("a<s1>你好</s1>b"));
+    }
+
+    @Test
+    public void stripHandlesMissingCloseTagGracefully() {
+        // 闭合标记缺失：只丢掉开标记，其后文字不得丢失。
+        assertEquals("你好", Segments.strip("<s1>你好"));
+    }
+
+    @Test
+    public void stripReturnsEmptyForNullOrEmpty() {
+        assertEquals("", Segments.strip(null));
+        assertEquals("", Segments.strip(""));
+    }
+
+    @Test
     public void parseAllowsEmptySegmentContent() {
         // 某个片段本身可以为空（例如用户留白），但编号必须齐全。
         List<String> parts = Segments.parse("<s1></s1><s2>世界</s2>", 2);

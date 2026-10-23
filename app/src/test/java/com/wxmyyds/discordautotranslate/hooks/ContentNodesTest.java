@@ -800,7 +800,8 @@ public class ContentNodesTest {
 
     @Test
     public void incompleteSegmentMarkersFallBackToLineSplit() {
-        // 模型漏写第二段：不能把第二行留空或错位，必须整体回退到旧逻辑。
+        // 模型漏写第二段：不能把第二行留空或错位，必须整体回退到旧逻辑，
+        // 且标记本身绝不能被当作文字渲染出来。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
 
@@ -809,7 +810,8 @@ public class ContentNodesTest {
         assertNotNull(out);
         // 回退后按换行切分：译文无换行 → 首节点承载全部，其余为空被裁剪。
         assertEquals(1, out.size());
-        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("标记必须被剔除，不得显示为字面量",
+                "你好", ((TextContentNode) out.get(0)).getContent());
     }
 
     @Test

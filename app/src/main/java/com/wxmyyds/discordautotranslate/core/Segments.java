@@ -60,6 +60,54 @@ public final class Segments {
     }
 
     /**
+     * 去掉文本中所有分段标记，只保留译文内容。
+     *
+     * <p>用于解析失败后的回退：此时标记不会被回填消费，若原样送去渲染，
+     * {@code <s1>} 会作为字面量直接显示在消息里。标记之间的内容按顺序拼接，
+     * 保留标记外的字符（换行等），使回退结果与无标记请求基本一致。</p>
+     */
+    public static String strip(@Nullable String text) {
+        if (text == null || text.isEmpty()) {
+            return text == null ? "" : text;
+        }
+        StringBuilder out = new StringBuilder(text.length());
+        int i = 0;
+        while (i < text.length()) {
+            Matcher open = OPEN.matcher(text);
+            open.region(i, text.length());
+            if (!open.find()) {
+                out.append(text, i, text.length());
+                break;
+            }
+            out.append(text, i, open.start());
+            int index;
+            try {
+                index = Integer.parseInt(open.group(1));
+            } catch (NumberFormatException e) {
+                i = open.end();
+                continue;
+            }
+            int contentStart = open.end();
+            int close = findClose(text, index, contentStart);
+            if (close < 0) {
+                // 闭合标记缺失：丢弃这个开标记，其余内容照常保留。
+                i = contentStart;
+                continue;
+            }
+            out.append(text, contentStart, close);
+            i = skipClose(text, index, close);
+        }
+        return out.toString();
+    }
+
+    /** 返回闭合标记之后的起始下标。 */
+    private static int skipClose(String text, int index, int closeStart) {
+        Matcher m = Pattern.compile("</s\\s*" + index + "\\s*>").matcher(text);
+        m.region(closeStart, text.length());
+        return m.lookingAt() ? m.end() : closeStart;
+    }
+
+    /**
      * 从译文里解析出 {@code parts} 个片段。
      *
      * @param translated 模型返回的带标记译文

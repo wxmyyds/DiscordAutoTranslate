@@ -113,10 +113,16 @@ public final class ContentNodes {
         // 解析失败（模型漏写/改写/合并标记）则回退到按换行切分的旧逻辑。
         List<String> parts = Segments.parse(translated, targetCount);
         if (parts == null) {
+            // 解析失败时先剔除标记：否则 <s1> 会被当作普通文字渲染到消息里。
+            String plain = Segments.isSegmented(translated)
+                    ? Segments.strip(translated) : translated;
+            if (plain == null) {
+                plain = "";
+            }
             if (Segments.isSegmented(translated)) {
                 XLog.d("segment markers incomplete; falling back to line split");
             }
-            parts = splitTranslation(normalize(translated), targetCount);
+            parts = splitTranslation(normalize(plain), targetCount);
         }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
         // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
