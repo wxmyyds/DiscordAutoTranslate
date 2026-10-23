@@ -96,9 +96,10 @@ public class StructurableTextFactoryTest {
 
         assertTrue(out instanceof AnnotatedStructurableText);
         List<Object> nodes = ((AnnotatedStructurableText) out).getContent();
+        // 末尾共享节点的空片段属于尾部空白，已被裁剪。
+        assertEquals(2, nodes.size());
         assertEquals("你好", ((TextContentNode) nodes.get(0)).getContent());
         assertSame(emoji, nodes.get(1));
-        assertEquals("", ((TextContentNode) nodes.get(2)).getContent());
         assertEquals("hello", shared.getContent());
     }
 

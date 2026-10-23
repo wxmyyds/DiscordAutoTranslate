@@ -1,10 +1,13 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
 import android.view.View;
+import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
+import com.wxmyyds.discordautotranslate.core.Diagnostics;
+import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.EnglishDetector;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -77,6 +80,9 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
+        // 布局诊断始终开启：设备上既没有 logcat，也不保证用户勾选了详细日志，
+        // 若与 verboseLog 绑定，排查时就永远拿不到数据。
+        setLayoutDiagnostic(true);
 
         // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
         Scheduler.get().setMaxConcurrency(c.maxConcurrency);
@@ -184,24 +190,390 @@ public final class HookBridge {
     }
 
     /**
-     * 用保存的原始参数重新调用渲染入口；真正的文本替换发生在
-     * {@code TextUtilsKt.toSpannable}（它会按当前状态自行决定替换与否）。
+     * 投递重渲染：必须离开当前宿主布局过程再执行。
+     *
+     * <p>调用方（{@code onMessageBound}、点击回调）可能正处于 RecyclerView 的
+     * measure/layout 中，此时直接重渲染会让新的布局请求被本轮遍历丢掉，
+     * 表现为“文字变了但行高/空白行要等滚动才更新”。投递到视图消息队列后，
+     * 下一次遍历再测量，结果立即生效。</p>
+     *
+     * <p>视图是否已被复用的判定见 {@link RerenderRegistry}；投递执行时由
+     * {@code toSpannable} 按当前状态重新决定替换与否，因此不会把译文写错消息。</p>
+     *
+     * <p>真正的文本替换发生在 {@code TextUtilsKt.toSpannable}，
+     * 它会按当前状态自行决定是否替换。</p>
      *
      * @param invocationTarget 调用 {@code method} 的接收者（正文视图或回复预览容器）
      */
     public void requestRerender(@Nullable Object invocationTarget, @Nullable Method method,
                                 @Nullable Object[] args) {
+        requestRerender(null, null, invocationTarget, method, args);
+    }
+
+    /**
+     * 带身份校验的重渲染投递。
+     *
+     * <p>排队期间视图可能已被 RecyclerView 复用到其他消息，因此执行前必须
+     * 再校验一次：绑定已变成其他消息则跳过，不能把旧译文渲染到新消息上。
+     * 绑定未知（{@code null}，通常是映射表 LRU 淘汰）不视为复用。</p>
+     *
+     * @param contentView 用于校验复用的正文视图，可为 null（不校验）
+     * @param messageId   期望绑定的消息 ID，可为 null（不校验）
+     */
+    public void requestRerender(@Nullable View contentView, @Nullable String messageId,
+                                @Nullable Object invocationTarget, @Nullable Method method,
+                                @Nullable Object[] args) {
         if (invocationTarget == null || method == null || args == null) {
             return;
         }
+        String bound = messageIdOf(contentView);
+        if (contentView != null && messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
+            XLog.d("rerender skipped: view rebound to another message");
+            logRerender(messageId, contentView, bound, "rebound");
+            return;
+        }
+        logRerender(messageId, null, bound, "dispatch");
+        Runnable task = () -> {
+            String currentBound = messageIdOf(contentView);
+            if (contentView != null && messageId != null
+                    && !RerenderRegistry.stillBound(messageId, currentBound)) {
+                logRerender(messageId, contentView, currentBound, "rebound-before-invoke");
+                return;
+            }
+            invokeRerender(invocationTarget, contentView, messageId, method, args);
+        };
+        if (invocationTarget instanceof View) {
+            View host = (View) invocationTarget;
+            // View.post 把执行移出当前布局遍历；视图未附着时排队到下一次 attach。
+            if (!host.post(task)) {
+                logRerender(messageId, host, bound, "post-rejected");
+                task.run();
+            }
+            return;
+        }
+        // 非视图目标（理论上不出现）：没有可用的布局时机，保持原同步行为。
+        task.run();
+    }
+
+    private void invokeRerender(Object invocationTarget, @Nullable View contentView,
+                                @Nullable String messageId, Method method, Object[] args) {
+        View view = contentView != null
+                ? contentView
+                : (invocationTarget instanceof View ? (View) invocationTarget : null);
+        String metricsBefore = textLayoutMetrics(view);
+        int heightBefore = view == null ? -1 : view.getHeight();
         RERENDERING.set(Boolean.TRUE);
         try {
             method.invoke(invocationTarget, args);
         } catch (Throwable t) {
             XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
+            // 这里以前只写 XLog，导致“有 target 但没有 invoked”无从判断。
+            logRerender(messageId, null, null,
+                    "invoke-failed:" + t.getClass().getSimpleName());
+            return;
         } finally {
             RERENDERING.remove();
         }
+        // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
+        postInvalidateRow(messageId, view, heightBefore);
+        logRerender(messageId, view, messageIdOf(view),
+                "invoked(before=" + heightBefore + ",afterInvoke="
+                        + (view == null ? -1 : view.getHeight())
+                        + ",metricsBefore=" + metricsBefore
+                        + ",metricsAfterInvoke=" + textLayoutMetrics(view) + ")");
+    }
+
+    private static String textLayoutMetrics(@Nullable View view) {
+        if (!(view instanceof TextView)) {
+            return "main=unavailable";
+        }
+        try {
+            String main = oneTextViewMetrics((TextView) view);
+            Object shadow = Reflect.call(
+                    Reflect.findMethod(view.getClass(), "getShadowView", 0), view);
+            return "main{" + main + "} shadow{"
+                    + (shadow instanceof TextView
+                    ? oneTextViewMetrics((TextView) shadow) : "unavailable") + "}";
+        } catch (Throwable t) {
+            return "metrics-error=" + t.getClass().getSimpleName();
+        }
+    }
+
+    private static String oneTextViewMetrics(TextView view) {
+        CharSequence text = view.getText();
+        android.text.Layout layout = view.getLayout();
+        return "len=" + (text == null ? -1 : text.length())
+                + ",lines=" + view.getLineCount()
+                + ",layoutLines=" + (layout == null ? -1 : layout.getLineCount())
+                + ",layoutH=" + (layout == null ? -1 : layout.getHeight());
+    }
+
+    /**
+     * 把行刷新投递到下一轮消息队列，并按消息去重。
+     *
+     * <p>{@code notifyItemChanged} 会触发 RecyclerView 重新布局。渲染漏斗
+     * （{@code toSpannable}）本身就在宿主布局过程中被调用，此时直接通知会重入
+     * 布局并抛出 “Cannot call this method while RecyclerView is computing a layout”。
+     * 高度在下一次 pre-draw 读取，避免把通知刚发出时的旧高度误当成布局结果。</p>
+     */
+    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view,
+                                          int heightBefore) {
+        if (view == null) {
+            return;
+        }
+        final String key = messageId != null
+                ? messageId
+                : Integer.toHexString(System.identityHashCode(view));
+        if (!PENDING_ROW_REFRESH.add(key)) {
+            return; // 同一帧内已经安排过，避免重复通知造成多次重绑。
+        }
+        boolean posted = view.post(() -> {
+            String currentBound = HookBridge.get().messageIdOf(view);
+            if (messageId != null
+                    && !RerenderRegistry.stillBound(messageId, currentBound)) {
+                PENDING_ROW_REFRESH.remove(key);
+                logRerender(messageId, view, currentBound, "row-refresh-skipped-rebound");
+                return;
+            }
+            PENDING_ROW_REFRESH.remove(key);
+            boolean notified = invalidateRow(messageId, view);
+            final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
+            if (!observer.isAlive()) {
+                PENDING_HOST_REBINDS.remove(view);
+                logRerender(messageId, view, currentBound,
+                        "row-refresh-no-predraw(notified=" + notified + ",before="
+                                + heightBefore + ",current=" + view.getHeight() + ")");
+                return;
+            }
+            observer.addOnPreDrawListener(
+                    new android.view.ViewTreeObserver.OnPreDrawListener() {
+                        @Override
+                        public boolean onPreDraw() {
+                            if (observer.isAlive()) {
+                                observer.removeOnPreDrawListener(this);
+                            }
+                            String drawnBound = HookBridge.get().messageIdOf(view);
+                            if (messageId != null
+                                    && !RerenderRegistry.stillBound(messageId, drawnBound)) {
+                                logRerender(messageId, view, drawnBound,
+                                        "row-refresh-skipped-rebound-before-draw");
+                                return true;
+                            }
+                            boolean hostBindObserved = !PENDING_HOST_REBINDS.remove(view);
+                            logRerender(messageId, view, drawnBound,
+                                    "row-refresh-after-layout(notified=" + notified
+                                            + ",hostBind=" + hostBindObserved
+                                            + ",before=" + heightBefore
+                                            + ",after=" + view.getHeight()
+                                            + ",metrics=" + textLayoutMetrics(view) + ")");
+                            return true;
+                        }
+                    });
+            view.invalidate();
+        });
+        if (!posted) {
+            PENDING_ROW_REFRESH.remove(key);
+            // 视图未附着：滚动重新绑定时仍会走正常渲染，无需强制刷新。
+            XLog.d("row refresh skipped: view not attached");
+        }
+    }
+
+    /** 已安排但尚未执行的行刷新；避免同一帧内重复 notifyItemChanged。 */
+    private static final java.util.Set<String> PENDING_ROW_REFRESH =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    private static final java.util.Set<View> PENDING_HOST_REBINDS =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    static boolean consumePendingHostRebind(View view) {
+        return view != null && PENDING_HOST_REBINDS.remove(view);
+    }
+
+    void logHostBindObserved(String messageId, View view) {
+        logRerender(messageId, view, messageIdOf(view), "host-bind-enter-after-row-refresh");
+    }
+
+    /**
+     * 让承载该消息的列表重新绑定这一行。
+     *
+     * <p>只对视图调用 {@code requestLayout}/{@code forceLayout} 不足以刷新行高：
+     * 列表行高度由 RecyclerView 的布局过程决定，而
+     * {@code ChatListChildView$DefaultImpls.onMeasureConsiderFrozen} 在父视图宽度为
+     * EXACTLY 且 {@code ChatListView.getMeasuredWidth()==0} 时会用旧尺寸做测量。
+     * 宿主自己刷新单行内容走的也是 {@code notifyItemChanged(index)}
+     * （{@code ChannelChatListAdapter} 处理 {@code ListOperation$Change}），
+     * 滚动能恢复正是因为滚动重新 bind 了该行。</p>
+     *
+     * <p>位置无法解析时静默放弃：这只是刷新增强，不能影响已完成的翻译渲染。</p>
+     */
+    private static boolean invalidateRow(@Nullable String messageId, @Nullable View view) {
+        if (view == null) {
+            return false;
+        }
+        String bound = HookBridge.get().messageIdOf(view);
+        if (messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
+            logRerender(messageId, view, bound, "row-refresh-skipped-rebound-before-notify");
+            return false;
+        }
+        try {
+            android.view.ViewParent parent = findRecyclerView(view);
+            if (parent == null) {
+                return false;
+            }
+            // 不新增 androidx.recyclerview 依赖：宿主已提供这些类，按名反射即可，
+            // 也能容忍宿主内部 RecyclerView 版本差异。
+            Object adapter = Reflect.call(
+                    findInheritedMethod(parent.getClass(), "getAdapter", 0), parent);
+            if (adapter == null) {
+                return false;
+            }
+            Object holder = Reflect.call(
+                    findInheritedMethod(parent.getClass(), "findContainingViewHolder", 1, View.class),
+                    parent, view);
+            if (holder == null) {
+                return false;
+            }
+            if (Reflect.getField(holder, "messageContentView") != view) {
+                logRerender(messageId, view, bound, "row-refresh-holder-view-mismatch");
+                return false;
+            }
+            Object positionValue = Reflect.call(
+                    findInheritedMethod(holder.getClass(), "getBindingAdapterPosition", 0), holder);
+            if (!(positionValue instanceof Integer)) {
+                return false;
+            }
+            int position = (Integer) positionValue;
+            // RecyclerView.NO_POSITION 为 -1；行已回收时不能再通知。
+            if (position < 0) {
+                return false;
+            }
+            Object bindingAdapter = Reflect.call(
+                    findInheritedMethod(holder.getClass(), "getBindingAdapter", 0), holder);
+            Object absolutePositionValue = Reflect.call(
+                    findInheritedMethod(holder.getClass(), "getAbsoluteAdapterPosition", 0), holder);
+            int absolutePosition = absolutePositionValue instanceof Integer
+                    ? (Integer) absolutePositionValue : -1;
+            Method notifyItemChanged = findInheritedMethod(
+                    adapter.getClass(), "notifyItemChanged", 1, int.class);
+            logRerender(messageId, view, bound,
+                    "row-refresh-target(adapter=" + adapter.getClass().getName()
+                            + ",bindingAdapter=" + (bindingAdapter == null
+                            ? "unavailable" : bindingAdapter.getClass().getName())
+                            + ",bindingPosition=" + position
+                            + ",absolutePosition=" + absolutePosition
+                            + ",notifyMethod=" + (notifyItemChanged != null)
+                            + ",notifyPosition=" + position + ")");
+            boolean cacheInvalidated = invalidateMessageContentBindCache(holder);
+            logRerender(messageId, view, bound,
+                    "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
+            PENDING_HOST_REBINDS.add(view);
+            Reflect.call(notifyItemChanged, adapter, position);
+            return true;
+        } catch (Throwable t) {
+            XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private static boolean invalidateMessageContentBindCache(Object holder) {
+        for (Class<?> cls = holder.getClass(); cls != null; cls = cls.getSuperclass()) {
+            try {
+                java.lang.reflect.Field field = cls.getDeclaredField("lastMessageContent");
+                field.setAccessible(true);
+                field.set(holder, null);
+                return true;
+            } catch (NoSuchFieldException ignored) {
+                // Keep searching the holder's superclass chain.
+            } catch (Throwable t) {
+                XLog.w("cannot invalidate message bind cache: "
+                        + t.getClass().getSimpleName(), t);
+                return false;
+            }
+        }
+        XLog.w("lastMessageContent field not found; row rebind may be skipped");
+        return false;
+    }
+
+    /**
+     * 沿继承链查找方法：{@code getAdapter}/{@code notifyItemChanged} 等声明在
+     * {@code RecyclerView} 或其 {@code Adapter} 基类上，子类的
+     * {@code getDeclaredMethods()} 看不到它们。
+     */
+    @Nullable
+    private static Method findInheritedMethod(@Nullable Class<?> cls, String namePrefix,
+                                              int paramCount, Class<?>... firstParams) {
+        for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
+            Method m = Reflect.findMethod(c, namePrefix, paramCount, firstParams);
+            if (m != null) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 沿父链找到最近的 RecyclerView（按类名判断，避免编译期依赖）。
+     */
+    @Nullable
+    private static android.view.ViewParent findRecyclerView(View view) {
+        android.view.ViewParent parent = view.getParent();
+        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
+            if (Reflect.isInstanceOfName(parent, RECYCLER_VIEW_CLASS)) {
+                return parent;
+            }
+            parent = parent.getParent();
+        }
+        return null;
+    }
+
+    private static final String RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView";
+
+    /** 向上查找列表时的最大层数。 */
+    private static final int RELAYOUT_MAX_DEPTH = 12;
+
+    /** 诊断开关：只有排查“布局未刷新”时才打开。 */
+    private static volatile boolean sLayoutDiagnostic = false;
+
+    /** 由模块入口在解析配置后设置，与“详细诊断日志”共用同一个开关。 */
+    public static void setLayoutDiagnostic(boolean enabled) {
+        sLayoutDiagnostic = enabled;
+    }
+
+    /**
+     * 诊断日志：记录重渲染是否真的执行、视图处于什么状态。
+     *
+     * <p>不记录消息正文与密钥；只含消息 ID、视图类型、attached/可见性、
+     * 重渲染时视图高度、当前绑定关系与结论标签。</p>
+     */
+    private static void logRerender(@Nullable String messageId, @Nullable View view,
+                                    @Nullable String bound, String outcome) {
+        String line;
+        if (view == null) {
+            line = "msg=" + messageId + " view=null outcome=" + outcome;
+        } else {
+            line = "msg=" + messageId
+                    + " view=" + view.getClass().getSimpleName()
+                    + " attached=" + view.isAttachedToWindow()
+                    + " visible=" + (view.getVisibility() == View.VISIBLE)
+                    + " height=" + view.getHeight()
+                    + " bound=" + (bound == null ? "null" : bound)
+                    + " outcome=" + outcome;
+        }
+        Diagnostics.record("layout-diag: " + line);
+    }
+
+    /** 记录模块进入 Discord 目标进程的事实，不依赖远程配置写入。 */
+    public static void logModuleReady(String detail) {
+        XLog.i("module-ready " + detail);
+    }
+
+    /**
+     * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
+     *
+     * <p>与 {@link #logRerender} 共用同一套日志输出通道。</p>
+     */
+    public void logLayoutFact(@Nullable String messageId, String what) {
+        logRerender(messageId, null, null, what);
     }
 
     // ---------------------------------------------------------------- 翻译流程

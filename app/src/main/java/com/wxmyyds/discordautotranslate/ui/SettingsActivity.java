@@ -168,6 +168,11 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         verboseInput.setText("详细诊断日志（消息正文与译文始终脱敏）");
         root.addView(verboseInput, matchWrap());
 
+        TextView diagnosticsInfo = new TextView(this);
+        diagnosticsInfo.setTextSize(12f);
+        diagnosticsInfo.setText("布局诊断写入 LSPosed 日志与 Android logcat，过滤标签：DiscordAutoTranslate");
+        root.addView(diagnosticsInfo, matchWrap());
+
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
                 ApiTester.DEFAULT_TEST_TEXT,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);

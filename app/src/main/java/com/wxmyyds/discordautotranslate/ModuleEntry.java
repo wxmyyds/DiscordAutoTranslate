@@ -179,6 +179,7 @@ public class ModuleEntry extends XposedModule {
     private void install(ClassLoader cl) {
         // 记录目标 Discord 版本，便于诊断（需求 §9.1）。
         logTargetVersion(cl);
+        HookBridge.logModuleReady("target=" + TARGET_PACKAGE);
 
         StructurableTextFactory.init(cl);
         Scheduler.MainThread.install();
@@ -251,7 +252,7 @@ public class ModuleEntry extends XposedModule {
 
     private void reloadConfig() {
         try {
-            SharedPreferences prefs = getRemotePreferences(Config.GROUP);
+            final SharedPreferences prefs = getRemotePreferences(Config.GROUP);
             Config.Snapshot snapshot = Config.read(prefs);
             HookBridge.get().updateConfig(snapshot);
             XLog.i("config loaded: enabled=" + snapshot.enabled

@@ -2,6 +2,8 @@ package com.wxmyyds.discordautotranslate.hooks;
 
 import android.view.View;
 
+import androidx.annotation.Nullable;
+
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -95,8 +97,22 @@ public final class RerenderRegistry {
     }
 
     /**
+     * 视图是否仍可承载该消息的渲染。
+     *
+     * <p>绑定未知（{@code null}）不等于已复用：映射表是容量上限 512 的 LRU，
+     * 长列表滚动后旧条目会被淘汰。只有确认绑定了其他消息时才必须跳过。</p>
+     */
+    static boolean stillBound(@Nullable String expected, @Nullable String actual) {
+        return expected == null || actual == null || expected.equals(actual);
+    }
+
+    /**
      * 用最新状态重新渲染该消息的全部视图（消息行 + 所有引用它的回复预览）。
-     * 视图已回收或已被复用到其他消息时会自动跳过并清理。
+     *
+     * <p>视图已回收或确认已被复用到其他消息时会跳过并清理。注意：
+     * “绑定未知”不等于“已复用”——{@code viewToMessageId} 是容量上限 512 的 LRU，
+     * 长列表滚动后旧条目会被淘汰。若把未知也当成已复用而删除登记项，
+     * 该消息就再也不会因译文完成而刷新，只有重新 bind（滚动）才恢复。</p>
      */
     public static void rerender(String messageId) {
         if (messageId == null) {
@@ -104,6 +120,9 @@ public final class RerenderRegistry {
         }
         List<Target> list = TARGETS.get(messageId);
         if (list == null) {
+            // 关键事实：译文已完成却找不到登记项，说明重渲染从未被安排，
+            // 行高自然只能等滚动重新 bind 才更新。
+            HookBridge.get().logLayoutFact(messageId, "no-target");
             return;
         }
         synchronized (list) {
@@ -115,8 +134,8 @@ public final class RerenderRegistry {
                     continue;
                 }
                 String bound = HookBridge.get().messageIdOf(contentView);
-                if (!messageId.equals(bound)) {
-                    // 视图已被复用到别的消息，不能再用它渲染本条消息。
+                if (!stillBound(messageId, bound)) {
+                    // 已确认被复用到别的消息，不能再用它渲染本条消息。
                     it.remove();
                     continue;
                 }
@@ -125,7 +144,11 @@ public final class RerenderRegistry {
                     it.remove();
                     continue;
                 }
-                HookBridge.get().requestRerender(invocationTarget, target.method, target.args);
+                HookBridge.get().logLayoutFact(messageId,
+                        "target(h=" + contentView.getHeight() + ",attached="
+                                + contentView.isAttachedToWindow() + ")");
+                HookBridge.get().requestRerender(contentView, messageId,
+                        invocationTarget, target.method, target.args);
             }
             if (list.isEmpty()) {
                 TARGETS.remove(messageId, list);

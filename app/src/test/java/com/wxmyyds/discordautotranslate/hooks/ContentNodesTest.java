@@ -130,6 +130,14 @@ public class ContentNodesTest {
         }
     }
 
+    /** 换行结构节点：宿主渲染为单个换行符号，本身不带文本。 */
+    public static final class NewLineContentNode {
+    }
+
+    /** 行内换行节点（与 NewLine 同义）。 */
+    public static final class LineBreakContentNode {
+    }
+
     /** 带列表的容器节点（模拟 Paragraph）。 */
     public static final class ParagraphContentNode {
         private final List<Object> content;
@@ -400,14 +408,14 @@ public class ContentNodesTest {
         assertEquals(1, out.size());
         ParagraphContentNode para = (ParagraphContentNode) out.get(0);
 
-        // 结构必须保留：仍然是 3 个子节点，且表情节点原样复用（同一实例）
-        assertEquals("段落结构必须保留", 3, para.getContent().size());
+        // 尾部空文本节点被裁剪，但容器结构与可见的 emoji 必须保留（同一实例）。
+        assertEquals("段落结构必须保留", 2, para.getContent().size());
         assertSame("结构化节点必须原样复用", inner.get(1), para.getContent().get(1));
         assertTrue(para.getContent().get(1) instanceof EmojiContentNode);
 
         // 不变量：替换后所有文本节点的拼接应等于译文。
         // （译文无换行时不会为了凑节点数而把句子硬切碎，因此首节点承载全部、
-        //   其余为空串；这是刻意设计，避免产生读不通的断句。）
+        //   其余为空串；尾部的空文本节点随后被裁剪。）
         StringBuilder joined = new StringBuilder();
         for (Object o : para.getContent()) {
             if (o instanceof TextContentNode) {
@@ -426,8 +434,9 @@ public class ContentNodesTest {
         List<Object> out = ContentNodes.replaceText(nodes, "你好");
 
         assertNotNull(out);
+        // 尾部空片段被裁剪，不再留下空白行。
+        assertEquals(2, out.size());
         assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
-        assertEquals("", ((TextContentNode) out.get(2)).getContent());
         assertSame(emoji, out.get(1));
         assertEquals("hello", shared.getContent());
         assertSame(shared, nodes.get(0));
@@ -451,10 +460,10 @@ public class ContentNodesTest {
         List<Object> out = ContentNodes.replaceText(list(shared, shared), "你好");
 
         assertNotNull(out);
+        // 第二个容器内的空文本属于尾部空白，整容器被裁剪。
+        assertEquals(1, out.size());
         ParagraphContentNode first = (ParagraphContentNode) out.get(0);
-        ParagraphContentNode second = (ParagraphContentNode) out.get(1);
         assertEquals("你好", ((TextContentNode) first.getContent().get(0)).getContent());
-        assertEquals("", ((TextContentNode) second.getContent().get(0)).getContent());
         assertSame(text, shared.getContent().get(0));
         assertEquals("hello", text.getContent());
     }
@@ -774,5 +783,113 @@ public class ContentNodesTest {
         assertEquals("只有一行", parts.get(0));
         assertEquals("", parts.get(1));
         assertEquals("", parts.get(2));
+    }
+
+    // ---------------------------------------------------------------- 行数与尾部空白
+
+    @Test
+    public void twoOriginalLinesWithOneTranslatedLineLeaveNoExtraBlankLine() {
+        List<Object> nodes = list(new TextContentNode("first line"), new NewLineContentNode(),
+                new TextContentNode("second line"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "只有一行译文");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("只有一行译文", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("first line", ((TextContentNode) nodes.get(0)).getContent());
+    }
+
+    @Test
+    public void lineBreakVariantsAreTrimmedAtTheEnd() {
+        for (Object blank : new Object[]{new NewLineContentNode(), new LineBreakContentNode(),
+                new TextContentNode(""), new TextContentNode("   ")}) {
+            List<Object> nodes = list(new TextContentNode("hello world"), blank);
+
+            List<Object> out = ContentNodes.replaceText(nodes, "你好世界");
+
+            assertNotNull(out);
+            assertEquals(1, out.size());
+            assertEquals("你好世界", ((TextContentNode) out.get(0)).getContent());
+        }
+    }
+
+    @Test
+    public void translationTrailingNewlinesAndCarriageReturnsAreNormalized() {
+        assertEquals("你好世界", ContentNodes.normalize("你好世界\r\n"));
+        assertEquals("你好\n世界", ContentNodes.normalize("你好\r\n世界\n\n  "));
+        assertEquals("你好\n世界", ContentNodes.normalize("你好\r世界"));
+        assertEquals("", ContentNodes.normalize("\r\n \t"));
+
+        List<Object> nodes = list(new TextContentNode("hello"), new TextContentNode("world"));
+        List<Object> out = ContentNodes.replaceText(nodes, "你好世界\r\n\n");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("你好世界", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    @Test
+    public void trailingParagraphWithBlankContentIsTrimmedFromItsParent() {
+        ParagraphContentNode emptyTail = new ParagraphContentNode(
+                list(new TextContentNode("")));
+        List<Object> nodes = list(new TextContentNode("hello world"), emptyTail);
+
+        List<Object> out = ContentNodes.replaceText(nodes, "你好世界");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("你好世界", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    @Test
+    public void visibleTailContentIsNeverTrimmed() {
+        EmojiContentNode emoji = new EmojiContentNode("1");
+        TextContentNode tail = new TextContentNode("bye");
+        List<Object> nodes = list(new TextContentNode("hello"), emoji,
+                new NewLineContentNode(), tail);
+
+        List<Object> out = ContentNodes.replaceText(nodes, "你好\n再见");
+
+        assertNotNull(out);
+        assertEquals(4, out.size());
+        assertSame(emoji, out.get(1));
+        assertEquals("再见", ((TextContentNode) out.get(3)).getContent());
+    }
+
+    @Test
+    public void bulletListItemBlankTailIsTrimmedButItemIsKept() {
+        BulletListContentNode bullets = new BulletListContentNode(null, false,
+                new ArrayList<>(Arrays.asList(
+                        list(new TextContentNode("item one"), new NewLineContentNode()))));
+        List<Object> nodes = list(bullets);
+
+        List<Object> out = ContentNodes.replaceText(nodes, "第一项");
+
+        assertNotNull(out);
+        BulletListContentNode rebuilt = (BulletListContentNode) out.get(0);
+        assertEquals("项目不能被删除", 1, rebuilt.getItems().size());
+        assertEquals(1, rebuilt.getItems().get(0).size());
+        assertEquals("第一项",
+                ((TextContentNode) rebuilt.getItems().get(0).get(0)).getContent());
+    }
+
+    @Test
+    public void untrimmableTailKeepsTranslationInsteadOfFallingBackToOriginal() {
+        // 容器内有可见内容（emoji）但以换行收尾，且无法 copy：
+        // 裁剪失败时保留原节点，不能因此让整条消息退回英文。
+        EmojiContentNode emoji = new EmojiContentNode("1");
+        NewLineContentNode blank = new NewLineContentNode();
+        NoCopyContainer.ParagraphContentNode tail =
+                new NoCopyContainer.ParagraphContentNode(list(emoji, blank));
+        List<Object> nodes = list(new TextContentNode("hello world"), tail);
+
+        List<Object> out = ContentNodes.replaceText(nodes, "你好世界");
+
+        assertNotNull("裁剪失败不得让整条消息退回英文", out);
+        assertEquals("你好世界", ((TextContentNode) out.get(0)).getContent());
+        assertSame("无法复制的容器保持原样", tail, out.get(1));
+        assertEquals(2, tail.getContent().size());
+        assertSame(emoji, tail.getContent().get(0));
     }
 }
