@@ -58,6 +58,8 @@ public final class IconClickSpanFactory {
             public Object invoke(Object proxy, Method method, Object[] args) {
                 switch (method.getName()) {
                     case "onClick":
+                        // 临时诊断：确认宿主确实把点击交到了我们手里。
+                        IconHitProbe.noteClickDelivered(messageId);
                         // 触摸在消息行上处理，回调发生在主线程。
                         HookBridge.get().onIconClicked(messageId);
                         return null;

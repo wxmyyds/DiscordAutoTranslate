@@ -131,6 +131,8 @@ public final class InlineIconInjector {
             if (clickSpan != null) {
                 ssb.setSpan(clickSpan, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
+            // 临时诊断：记录本次注入的字符范围，供命中探针对比。
+            IconHitProbe.noteIconRange(host, start, end, ssb.length());
             // 启动/续接旋转动画（仅翻译中状态）。
             icon.bindHost(host);
 
