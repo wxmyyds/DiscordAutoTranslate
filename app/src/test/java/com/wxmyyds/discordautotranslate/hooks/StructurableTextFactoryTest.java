@@ -144,7 +144,9 @@ public class StructurableTextFactoryTest {
         List<Object> nodes = ((AnnotatedStructurableText) out).getContent();
         assertEquals(2, nodes.size());
         assertSame(mention, nodes.get(0));
-        assertEquals(translation, ((TextContentNode) nodes.get(1)).getContent());
+        // body 以空格开头：该前导空白属于原节点结构，留在标记外，重建时从原节点取，
+        // 因此译文前仍带一个空格。正文本身不得丢失。
+        assertEquals(" " + translation, ((TextContentNode) nodes.get(1)).getContent());
         assertEquals("ExampleUser", ((TextContentNode) mention.getContent().get(0)).getContent());
     }
 

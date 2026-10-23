@@ -413,16 +413,16 @@ public class ContentNodesTest {
         assertSame("结构化节点必须原样复用", inner.get(1), para.getContent().get(1));
         assertTrue(para.getContent().get(1) instanceof EmojiContentNode);
 
-        // 不变量：替换后所有文本节点的拼接应等于译文。
-        // （译文无换行时不会为了凑节点数而把句子硬切碎，因此首节点承载全部、
-        //   其余为空串；尾部的空文本节点随后被裁剪。）
+        // 不变量：替换后所有文本节点的拼接应等于译文（含原节点的首尾空白）。
+        // "Hello " 的尾随空格属于原节点结构，会保留在译文之后。
         StringBuilder joined = new StringBuilder();
         for (Object o : para.getContent()) {
             if (o instanceof TextContentNode) {
                 joined.append(((TextContentNode) o).getContent());
             }
         }
-        assertEquals("译文内容必须完整保留", "你好世界", joined.toString());
+        assertEquals("译文内容必须完整保留（含原节点尾部空格）",
+                "你好 世界", joined.toString());
     }
 
     @Test
@@ -775,10 +775,11 @@ public class ContentNodesTest {
                 new TextContentNode(" foo"));
 
         List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1>你好 </s1><s2>世界</s2><s3> 呀</s3>");
+                "<s1>你好</s1> <s2>世界</s2> <s3>呀</s3>");
 
         assertNotNull(out);
         assertEquals(3, out.size());
+        // 节点首尾空格属于原节点结构，重建时从原节点取，因此仍为 "你好 "。
         assertEquals("你好 ", ((TextContentNode) out.get(0)).getContent());
         assertTrue("加粗容器必须保留", out.get(1) instanceof StrongContentNode);
         StrongContentNode rebuilt = (StrongContentNode) out.get(1);

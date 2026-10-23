@@ -157,7 +157,9 @@ public class TextExtractorSegmentsTest {
 
         assertNotNull(r);
         assertEquals("hello world foo", r.text);
-        assertEquals("<s1>hello </s1><s2>world</s2><s3> foo</s3>", r.segmented);
+        // 首尾空白属于结构，留在标记外："hello " 的尾随空格与 " foo" 的前导空格
+        // 都不交给模型，避免模型改写或合并它们（实测会丢空行/空格）。
+        assertEquals("<s1>hello</s1> <s2>world</s2> <s3>foo</s3>", r.segmented);
     }
 
     @Test
