@@ -127,7 +127,7 @@ public final class InlineIconInjector {
             int end = start + PLACEHOLDER.length();
             ssb.setSpan(icon, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
 
-            Object clickSpan = IconClickSpanFactory.create(hostCl, messageId, host);
+            Object clickSpan = IconClickSpanFactory.create(hostCl, messageId);
             if (clickSpan != null) {
                 ssb.setSpan(clickSpan, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }

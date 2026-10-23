@@ -1,7 +1,5 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
-import android.view.View;
-
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
@@ -24,9 +22,7 @@ import java.lang.reflect.Proxy;
  * <p>该接口位于目标 APK 内、编译期不可见，因此用 {@link Proxy} 按接口名动态实现，
  * 避免编译期依赖 Discord 类。</p>
  *
- * <p><b>长按</b>：仅在「详细诊断日志」开启时消费长按并弹出诊断日志，
- * 否则一律返回 {@code false} 放行给宿主自己的消息长按菜单。这样默认行为与
- * 未安装本模块时完全一致。</p>
+ * <p><b>长按</b>：始终返回 {@code false}，将长按交给宿主消息菜单。</p>
  */
 public final class IconClickSpanFactory {
 
@@ -43,13 +39,10 @@ public final class IconClickSpanFactory {
      *
      * @param hostCl    宿主 ClassLoader（必须能加载该接口）
      * @param messageId 所属消息 ID，点击时用于查回该消息的状态
-     * @param hostView  承载该 span 的正文视图，用于取宿主 {@code Context} 弹窗；
-     *                  仅在长按诊断时需要，可为 null
      * @return 代理对象；接口不可解析时返回 null（图标仍可见，只是不可点）
      */
     @Nullable
-    public static Object create(@Nullable ClassLoader hostCl, @Nullable String messageId,
-                                @Nullable View hostView) {
+    public static Object create(@Nullable ClassLoader hostCl, @Nullable String messageId) {
         if (hostCl == null || messageId == null) {
             return null;
         }
@@ -69,12 +62,7 @@ public final class IconClickSpanFactory {
                         HookBridge.get().onIconClicked(messageId);
                         return null;
                     case "onLongClick":
-                        // 只有显式开启详细诊断时才抢长按，否则原样放行给宿主消息菜单。
-                        if (!HookBridge.isVerboseDiagnostics()) {
-                            return Boolean.FALSE;
-                        }
-                        DiagnosticsDialog.show(hostView == null ? null : hostView.getContext());
-                        return Boolean.TRUE;
+                        return Boolean.FALSE;
                     case "enableHighlight":
                         return null;
                     case "getTouchPriority":

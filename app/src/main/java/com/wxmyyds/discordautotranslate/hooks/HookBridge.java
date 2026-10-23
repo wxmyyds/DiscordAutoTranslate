@@ -1,12 +1,10 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
 import android.view.View;
-import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.Diagnostics;
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.EnglishDetector;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
@@ -80,10 +78,6 @@ public final class HookBridge {
         Config.Snapshot old = this.config;
         this.config = c;
         XLog.setVerbose(c.verboseLog);
-        sVerboseDiagnostics = c.verboseLog;
-        // 布局诊断始终开启：设备上既没有 logcat，也不保证用户勾选了详细日志，
-        // 若与 verboseLog 绑定，排查时就永远拿不到数据。
-        setLayoutDiagnostic(true);
 
         // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
         Scheduler.get().setMaxConcurrency(c.maxConcurrency);
@@ -230,15 +224,12 @@ public final class HookBridge {
         String bound = messageIdOf(contentView);
         if (contentView != null && messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
             XLog.d("rerender skipped: view rebound to another message");
-            logRerender(messageId, contentView, bound, "rebound");
             return;
         }
-        logRerender(messageId, null, bound, "dispatch");
         Runnable task = () -> {
             String currentBound = messageIdOf(contentView);
             if (contentView != null && messageId != null
                     && !RerenderRegistry.stillBound(messageId, currentBound)) {
-                logRerender(messageId, contentView, currentBound, "rebound-before-invoke");
                 return;
             }
             invokeRerender(invocationTarget, contentView, messageId, method, args);
@@ -247,7 +238,6 @@ public final class HookBridge {
             View host = (View) invocationTarget;
             // View.post 把执行移出当前布局遍历；视图未附着时排队到下一次 attach。
             if (!host.post(task)) {
-                logRerender(messageId, host, bound, "post-rejected");
                 task.run();
             }
             return;
@@ -261,64 +251,26 @@ public final class HookBridge {
         View view = contentView != null
                 ? contentView
                 : (invocationTarget instanceof View ? (View) invocationTarget : null);
-        String metricsBefore = textLayoutMetrics(view);
-        int heightBefore = view == null ? -1 : view.getHeight();
         RERENDERING.set(Boolean.TRUE);
         try {
             method.invoke(invocationTarget, args);
         } catch (Throwable t) {
             XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
-            // 这里以前只写 XLog，导致“有 target 但没有 invoked”无从判断。
-            logRerender(messageId, null, null,
-                    "invoke-failed:" + t.getClass().getSimpleName());
             return;
         } finally {
             RERENDERING.remove();
         }
         // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
-        postInvalidateRow(messageId, view, heightBefore);
-        logRerender(messageId, view, messageIdOf(view),
-                "invoked(before=" + heightBefore + ",afterInvoke="
-                        + (view == null ? -1 : view.getHeight())
-                        + ",metricsBefore=" + metricsBefore
-                        + ",metricsAfterInvoke=" + textLayoutMetrics(view) + ")");
-    }
-
-    private static String textLayoutMetrics(@Nullable View view) {
-        if (!(view instanceof TextView)) {
-            return "main=unavailable";
-        }
-        try {
-            String main = oneTextViewMetrics((TextView) view);
-            Object shadow = Reflect.call(
-                    Reflect.findMethod(view.getClass(), "getShadowView", 0), view);
-            return "main{" + main + "} shadow{"
-                    + (shadow instanceof TextView
-                    ? oneTextViewMetrics((TextView) shadow) : "unavailable") + "}";
-        } catch (Throwable t) {
-            return "metrics-error=" + t.getClass().getSimpleName();
-        }
-    }
-
-    private static String oneTextViewMetrics(TextView view) {
-        CharSequence text = view.getText();
-        android.text.Layout layout = view.getLayout();
-        return "len=" + (text == null ? -1 : text.length())
-                + ",lines=" + view.getLineCount()
-                + ",layoutLines=" + (layout == null ? -1 : layout.getLineCount())
-                + ",layoutH=" + (layout == null ? -1 : layout.getHeight());
+        postInvalidateRow(messageId, view);
     }
 
     /**
      * 把行刷新投递到下一轮消息队列，并按消息去重。
      *
-     * <p>{@code notifyItemChanged} 会触发 RecyclerView 重新布局。渲染漏斗
-     * （{@code toSpannable}）本身就在宿主布局过程中被调用，此时直接通知会重入
-     * 布局并抛出 “Cannot call this method while RecyclerView is computing a layout”。
-     * 高度在下一次 pre-draw 读取，避免把通知刚发出时的旧高度误当成布局结果。</p>
+     * <p>{@code notifyItemChanged} is posted after leaving the current host layout pass,
+     * avoiding a RecyclerView notification while it is computing a layout.</p>
      */
-    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view,
-                                          int heightBefore) {
+    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view) {
         if (view == null) {
             return;
         }
@@ -333,50 +285,10 @@ public final class HookBridge {
             if (messageId != null
                     && !RerenderRegistry.stillBound(messageId, currentBound)) {
                 PENDING_ROW_REFRESH.remove(key);
-                logRerender(messageId, view, currentBound, "row-refresh-skipped-rebound");
                 return;
             }
             PENDING_ROW_REFRESH.remove(key);
-            boolean notified = invalidateRow(messageId, view);
-            final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
-            if (!observer.isAlive()) {
-                PENDING_HOST_REBINDS.remove(view);
-                logRerender(messageId, view, currentBound,
-                        "row-refresh-no-predraw(notified=" + notified + ",before="
-                                + heightBefore + ",current=" + view.getHeight() + ")");
-                return;
-            }
-            observer.addOnPreDrawListener(
-                    new android.view.ViewTreeObserver.OnPreDrawListener() {
-                        @Override
-                        public boolean onPreDraw() {
-                            if (observer.isAlive()) {
-                                observer.removeOnPreDrawListener(this);
-                            }
-                            String drawnBound = HookBridge.get().messageIdOf(view);
-                            if (messageId != null
-                                    && !RerenderRegistry.stillBound(messageId, drawnBound)) {
-                                logRerender(messageId, view, drawnBound,
-                                        "row-refresh-skipped-rebound-before-draw");
-                                return true;
-                            }
-                            boolean hostBindObserved = !PENDING_HOST_REBINDS.remove(view);
-                            String layoutState = layoutStateSummary(view);
-                            logRerender(messageId, view, drawnBound,
-                                    "row-refresh-after-layout(notified=" + notified
-                                            + ",hostBind=" + hostBindObserved
-                                            + ",before=" + heightBefore
-                                            + ",after=" + view.getHeight()
-                                            + ",metrics=" + textLayoutMetrics(view)
-                                            + ",layoutState=" + layoutState
-                                            + ")");
-                            return true;
-                        }
-                    });
-            // 关键：invalidate() 只触发重绘，不会重新测量。
-            // TextView.setText 会重建 Layout（因此 layoutH 已变成新值），
-            // 但 View.getHeight() 必须经过 measure/layout 才更新。
-            // 只用 invalidate() 会导致 "layoutH=391 而 height=549" 长期共存。
+            invalidateRow(messageId, view);
             requestLayoutChain(view);
         });
         if (!posted) {
@@ -390,21 +302,10 @@ public final class HookBridge {
     private static final java.util.Set<String> PENDING_ROW_REFRESH =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
-    private static final java.util.Set<View> PENDING_HOST_REBINDS =
-            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
-
-    static boolean consumePendingHostRebind(View view) {
-        return view != null && PENDING_HOST_REBINDS.remove(view);
-    }
-
-    void logHostBindObserved(String messageId, View view) {
-        logRerender(messageId, view, messageIdOf(view), "host-bind-enter-after-row-refresh");
-    }
-
     /**
      * Refresh the outer chat row containing a content item in the nested accessories list.
-     * The nested adapter can rebind the text holder, but only the outer ChatListView row
-     * rebind refreshes MessageView's height in the chat list.
+     * The nested adapter can rebind the text holder, but the outer ChatListView row must also
+     * be notified so MessageView's height is recalculated in the chat list.
      */
     private static boolean invalidateRow(@Nullable String messageId, @Nullable View view) {
         if (view == null) {
@@ -412,13 +313,11 @@ public final class HookBridge {
         }
         String bound = HookBridge.get().messageIdOf(view);
         if (messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
-            logRerender(messageId, view, bound, "row-refresh-skipped-rebound-before-notify");
             return false;
         }
         try {
             android.view.ViewParent contentRecycler = findRecyclerView(view);
             if (contentRecycler == null) {
-                logRerender(messageId, view, bound, "row-refresh-no-content-list");
                 return false;
             }
             Object contentHolder = Reflect.call(
@@ -426,14 +325,12 @@ public final class HookBridge {
                             1, View.class), contentRecycler, view);
             if (contentHolder == null
                     || Reflect.getField(contentHolder, "messageContentView") != view) {
-                logRerender(messageId, view, bound, "row-refresh-content-holder-mismatch");
                 return false;
             }
             Object contentAdapter = Reflect.call(
                     findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
             android.view.ViewParent rowRecycler = findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS);
             if (contentAdapter == null || rowRecycler == null) {
-                logRerender(messageId, view, bound, "row-refresh-no-chat-list");
                 return false;
             }
             Object rowAdapter = Reflect.call(
@@ -442,14 +339,10 @@ public final class HookBridge {
                     findInheritedMethod(rowRecycler.getClass(), "findContainingViewHolder",
                             1, View.class), rowRecycler, view);
             if (rowAdapter == null || rowHolder == null) {
-                logRerender(messageId, view, bound, "row-refresh-no-message-row-holder");
                 return false;
             }
             Object itemView = Reflect.getField(rowHolder, "itemView");
             if (!Reflect.isInstanceOfName(itemView, MESSAGE_VIEW_CLASS)) {
-                logRerender(messageId, view, bound,
-                        "row-refresh-unexpected-item-view=" + (itemView == null
-                                ? "null" : itemView.getClass().getName()));
                 return false;
             }
             Object bindingPositionValue = Reflect.call(
@@ -467,19 +360,11 @@ public final class HookBridge {
             int notifyPosition = absolutePosition >= 0 ? absolutePosition
                     : (bindingAdapter == rowAdapter ? bindingPosition : -1);
             if (notifyPosition < 0) {
-                logRerender(messageId, view, bound,
-                        "row-refresh-no-outer-position(binding=" + bindingPosition
-                                + ",absolute=" + absolutePosition + ")");
                 return false;
             }
-            boolean cacheInvalidated = invalidateMessageContentBindCache(contentHolder);
-            logRerender(messageId, view, bound,
-                    "row-refresh-bind-cache-invalidated=" + cacheInvalidated);
-            // 内层通知：MessageContentView 本身是内层 MessageAccessoriesView
-            // （一个 RecyclerView）的 item。日志里出现过
-            // metrics.layoutH=391 而 MessageContentView@549 共存，说明内层
-            // item 没有被重新测量，多出的 158px 就是文本下方的空白。
-            // 外层通知只让 MessageView 重算，不能单独修好这一层。
+            invalidateMessageContentBindCache(contentHolder);
+            // The content view is an item in the nested MessageAccessoriesView RecyclerView.
+            // Notify it as well as the outer chat row so both layout levels recalculate.
             int contentPosition = -1;
             Object contentPosValue = Reflect.call(
                     findInheritedMethod(contentHolder.getClass(), "getBindingAdapterPosition", 0),
@@ -493,48 +378,23 @@ public final class HookBridge {
                 if (notifyContent != null) {
                     try {
                         notifyContent.invoke(contentAdapter, contentPosition);
-                        logRerender(messageId, view, bound,
-                                "row-refresh-content-notified(pos=" + contentPosition + ")");
                     } catch (Throwable t) {
-                        logRerender(messageId, view, bound,
-                                "row-refresh-content-notify-failed="
-                                        + t.getClass().getSimpleName());
+                        XLog.d("notify inner content failed: "
+                                + t.getClass().getSimpleName());
                     }
                 }
-            } else {
-                logRerender(messageId, view, bound,
-                        "row-refresh-content-no-position=" + contentPosValue);
             }
             Method notifyItemChanged = findInheritedMethod(
                     rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
-            logRerender(messageId, view, bound,
-                    "row-refresh-target(outerAdapter=" + rowAdapter.getClass().getName()
-                            + ",contentAdapter=" + contentAdapter.getClass().getName()
-                            + ",bindingAdapter=" + (bindingAdapter == null
-                            ? "unavailable" : bindingAdapter.getClass().getName())
-                            + ",bindingPosition=" + bindingPosition
-                            + ",absolutePosition=" + absolutePosition
-                            + ",notifyMethod=" + (notifyItemChanged != null)
-                            + ",notifyPosition=" + notifyPosition + ")");
             if (notifyItemChanged == null) {
                 return false;
             }
-            PENDING_HOST_REBINDS.add(view);
             try {
                 notifyItemChanged.invoke(rowAdapter, notifyPosition);
-                // 注意：这里刻意不做同步重绑。曾尝试直接调用宿主
-                // onBindViewHolder(holder, position, payloads) 强制重绑，实测
-                // 会重跑整条绑定管线并再次触发翻译注入（同一行译文长度在
-                // 317/150/147 之间反复变化，invoked 连续出现三次），
-                // 因此回退为仅靠 notifyItemChanged 标记 invalid。
-                //
-                // 真正让高度更新的是下面这次推迟到布局结束后的强制测量：
-                // 实测 MessageView 由 1272x1026 → 1272x868，恰好等于内容层
-                // layoutH 549→391 的差值。
+                // 不做同步重绑，避免直接重跑宿主绑定管线。
                 scheduleRelayoutAfterLayout(view);
                 return true;
             } catch (Throwable t) {
-                PENDING_HOST_REBINDS.remove(view);
                 Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
                         && t.getCause() != null ? t.getCause() : t;
                 XLog.d("notify outer row failed: " + cause.getClass().getSimpleName());
@@ -549,9 +409,7 @@ public final class HookBridge {
     /**
      * 把一次强制重新测量推到当前帧布局结束之后。
      *
-     * <p>在宿主布局进行中调用 {@code requestLayout()} 会被直接丢弃，这是
-     * “重绑已发生但高度不变、必须手动滚动才恢复”的成因。因此用
-     * {@code view.post()} 把强制测量推到本帧布局结束之后执行。</p>
+     * <p>{@code View.post()} defers the request until the current host layout pass ends.</p>
      */
     private static void scheduleRelayoutAfterLayout(@Nullable final View view) {
         if (view == null) {
@@ -565,7 +423,6 @@ public final class HookBridge {
                         if (!view.isAttachedToWindow()) {
                             return;
                         }
-                        watchRelayoutBounds(view);
                         // 布局已结束，此时 requestLayout 不会被丢弃。
                         for (View v = view; v != null; ) {
                             v.forceLayout();
@@ -573,39 +430,11 @@ public final class HookBridge {
                             v = parent instanceof View ? (View) parent : null;
                         }
                         requestLayoutChain(view);
-                        // 只靠父链 requestLayout() 存在一个实测存在的缺口：它会
-                        // 被登记，但若 RecyclerView 自己在下一帧判定无需重新布局，
-                        // 测量就会被推到下一次滚动，表现为“高度不变，滑动一下才恢复”。
-                        // 因此对真正负责布局的 ChatListView 单独再发一次强布局请求。
-                        boolean chatListFound = forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
-                        // 直接给内容视图重新测量并布局。
-                        //
-                        // 依据：next-frame 日志里出现过
-                        //   content=549@0-549 而 metrics.layoutH=391
-                        // 即隔了一整帧内容视图仍未重测；而内层
-                        // MessageAccessoriesView 本身能正确跟随
-                        // （937=549+360+28 / 779=391+360+28）。
-                        // 说明 RecyclerView 收到了 notifyItemChanged，却没有
-                        // 重新测量这个子项。滚动能修好，是因为滚动会触发
-                        // RecyclerView 自己的完整 dispatchLayout。
-                        //
-                        // 这里不再依赖 RecyclerView，用 TextView 自己的 Layout
-                        // 把内容视图量到正确高度。宽度用当前实测宽度（EXACTLY），
-                        // 高度用 UNSPECIFIED（AT_MOST=0），否则会得到一个
-                        // “不能变高”的约束（宿主 measureAndLayout 正是这么错的）。
+                        forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
                         relayoutContentSelf(view);
                         view.invalidate();
-                        dispatchRecyclerLayout(view, "contentList", findRecyclerView(view));
-                        dispatchRecyclerLayout(view, "chatList",
-                                findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
-                        logAfterRequestedLayout(view);
-                        logRerender(null, view, HookBridge.get().messageIdOf(view),
-                                "row-refresh-relayout-posted(after="
-                                        + view.getHeight() + ",chatListForced="
-                                        + chatListFound + ",metrics="
-                                        + textLayoutMetrics(view) + ",rowKids="
-                                        + rowChildrenSummary(view) + ")");
-                        logSecondFrame(view);
+                        dispatchRecyclerLayout(findRecyclerView(view));
+                        dispatchRecyclerLayout(findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
                     } catch (Throwable t) {
                         XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
                     }
@@ -659,7 +488,8 @@ public final class HookBridge {
     private static android.view.ViewParent findRecyclerView(View view) {
         android.view.ViewParent parent = view.getParent();
         for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
-            if (Reflect.isInstanceOfName(parent, RECYCLER_VIEW_CLASS)) {
+            if (Reflect.isInstanceOfName(parent,
+                    "androidx.recyclerview.widget.RecyclerView")) {
                 return parent;
             }
             parent = parent.getParent();
@@ -683,11 +513,8 @@ public final class HookBridge {
     /**
      * 对视图及其父链请求重新布局。
      *
-     * <p><b>为什么必须显式请求</b>：{@code View.invalidate()} 只触发重绘，
-     * 不会重新测量。{@code TextView.setText} 会重建 {@code Layout}，所以
-     * {@code getLayout().getHeight()} 立即变成新值，但 {@code View.getHeight()}
-     * 要经过 measure/layout 才更新。实测日志里同时出现
-     * {@code height=549} 与 {@code layoutH=391}，正是因为测量从未发生。</p>
+     * <p>{@code View.invalidate()} only redraws. A text change rebuilds the text layout,
+     * but {@code View.getHeight()} updates during measure/layout.</p>
      *
      * <p><b>为什么先 forceLayout()</b>：仅调 {@code requestLayout()} 时，
      * 若该 View 的 {@code PFLAG_FORCE_LAYOUT} 未置位且测量参数未变，
@@ -702,14 +529,7 @@ public final class HookBridge {
      *
      * <p>深度上有界（{@link #RELAYOUT_MAX_DEPTH}），避免无界传播。</p>
      */
-    /**
-     * 找到指定类名的祖先并对它发出强布局请求，返回是否找到。
-     *
-     * <p>父链上的 {@code requestLayout()} 是逐级冒泡的，但只要有一层
-     * 处于“不需要重新布局”状态（例如 RecyclerView 的重布局抑制），请求就会止步。
-     * 直接对真正的布局宿主 {@code ChatListView} 调用 {@code forceLayout()} +
-     * {@code requestLayout()}，能让它自己在下一帧参与测量。</p>
-     */
+    /** Requests a relayout on the specified ancestor. */
     private static boolean forceRelayoutAncestor(@Nullable View view, String className) {
         if (view == null) {
             return false;
@@ -734,15 +554,8 @@ public final class HookBridge {
     /**
      * 让内容视图按自身当前文本重新测量并布局，不依赖父级 RecyclerView。
      *
-     * <p><b>为什么需要它</b>：实测 next-frame 日志里 {@code content=549} 与
-     * {@code metrics.layoutH=391} 可以共存整整一帧，而滚动一次就能修好。
-     * 说明内层 RecyclerView 收到 {@code notifyItemChanged} 后并没有重新
-     * 测量该子项；滚动之所以有效，是因为它会触发完整的 dispatchLayout。</p>
-     *
-     * <p><b>约束的选择</b>：宽度用当前实测宽度的 EXACTLY，高度用
-     * {@link View.MeasureSpec#UNSPECIFIED}。不能用 {@code getHeight()} 构造
-     * EXACTLY 高度——那会把当前高度锁死，永远不可能变高或变矮（宿主自带的
-     * {@code ChatListView.measureAndLayout} 就是这个问题）。</p>
+     * <p>Use the current measured width and an {@link View.MeasureSpec#UNSPECIFIED}
+     * height so the new text can determine the content view's required height.</p>
      *
      * <p>只改这个子视图自身的尺寸，不改任何数据或文本内容。</p>
      */
@@ -770,9 +583,6 @@ public final class HookBridge {
                 view.layout(view.getLeft(), view.getTop(),
                         view.getLeft() + width, view.getTop() + newHeight);
             }
-            logRerender(null, view, HookBridge.get().messageIdOf(view),
-                    "content-self-relayout(oldH=" + oldHeight + ",newH="
-                            + newHeight + ",width=" + width + ")");
             // 父级（内层 RecyclerView）自身高度也需跟着收缩，否则空白还在。
             android.view.ViewParent parent = view.getParent();
             if (parent instanceof View) {
@@ -785,346 +595,31 @@ public final class HookBridge {
         }
     }
 
-    private static void watchRelayoutBounds(@Nullable final View content) {
-        if (content == null) {
-            return;
-        }
-        try {
-            final View[] targets = new View[3];
-            final String[] labels = {"content", "contentList", "row"};
-            final boolean[] changed = new boolean[targets.length];
-            targets[0] = content;
-            targets[1] = asView(findRecyclerView(content));
-            targets[2] = findAncestorViewByClassName(content, MESSAGE_VIEW_CLASS);
-            final android.view.View.OnLayoutChangeListener[] listeners =
-                    new android.view.View.OnLayoutChangeListener[targets.length];
-            final String id = HookBridge.get().messageIdOf(content);
-            for (int i = 0; i < targets.length; i++) {
-                final int index = i;
-                View target = targets[i];
-                if (target == null) {
-                    continue;
-                }
-                listeners[i] = new android.view.View.OnLayoutChangeListener() {
-                    @Override
-                    public void onLayoutChange(View changedView, int left, int top,
-                                              int right, int bottom, int oldLeft, int oldTop,
-                                              int oldRight, int oldBottom) {
-                        try {
-                            if (changed[index]) {
-                                return;
-                            }
-                            changed[index] = true;
-                            logRerender(id, content, HookBridge.get().messageIdOf(content),
-                                    "layout-watch-change(target=" + labels[index]
-                                            + ",from=" + oldLeft + "," + oldTop + "-"
-                                            + oldRight + "," + oldBottom
-                                            + ",to=" + left + "," + top + "-"
-                                            + right + "," + bottom + ")");
-                        } catch (Throwable t) {
-                            XLog.d("layout change diagnostic failed: "
-                                    + t.getClass().getSimpleName());
-                        }
-                    }
-                };
-                target.addOnLayoutChangeListener(listeners[i]);
-            }
-            Runnable cleanup = new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        for (int i = 0; i < targets.length; i++) {
-                            if (targets[i] != null && listeners[i] != null) {
-                                targets[i].removeOnLayoutChangeListener(listeners[i]);
-                            }
-                        }
-                        if (content.isAttachedToWindow()) {
-                            logRerender(id, content, HookBridge.get().messageIdOf(content),
-                                    "layout-watch-summary(changes=" + changed[0] + ","
-                                            + changed[1] + "," + changed[2]
-                                            + ",state=" + layoutStateSummary(content) + ")");
-                        }
-                    } catch (Throwable t) {
-                        XLog.d("layout bounds watch failed: "
-                                + t.getClass().getSimpleName());
-                    }
-                }
-            };
-            if (!content.postDelayed(cleanup, 200L)) {
-                cleanup.run();
-            }
-        } catch (Throwable t) {
-            XLog.d("start layout bounds watch failed: "
-                    + t.getClass().getSimpleName());
-        }
-    }
-
-    private static void dispatchRecyclerLayout(@Nullable View content, String label,
-                                               @Nullable android.view.ViewParent recycler) {
-        if (content == null || recycler == null) {
-            logRerender(null, content, HookBridge.get().messageIdOf(content),
-                    "dispatch-layout(" + label + ",skipped=no-recycler)");
+    private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
+        if (recycler == null) {
             return;
         }
         try {
             Object suppressed = Reflect.getField(recycler, "mLayoutSuppressed");
             Object interceptDepth = Reflect.getField(recycler, "mInterceptRequestLayoutDepth");
-            Object deferred = Reflect.getField(recycler, "mLayoutWasDefered");
             Object computing = Reflect.call(findInheritedMethod(
                     recycler.getClass(), "isComputingLayout", 0), recycler);
-            boolean fieldsAvailable = suppressed instanceof Boolean
-                    && interceptDepth instanceof Integer && deferred instanceof Boolean;
-            if (!fieldsAvailable) {
-                logRerender(null, content, HookBridge.get().messageIdOf(content),
-                        "dispatch-layout(" + label + ",skipped=state-unavailable)");
-                return;
-            }
-            if (Boolean.TRUE.equals(suppressed)
+            if (!Boolean.FALSE.equals(suppressed)
+                    || !(interceptDepth instanceof Integer)
                     || ((Integer) interceptDepth) != 0
                     || Boolean.TRUE.equals(computing)) {
-                logRerender(null, content, HookBridge.get().messageIdOf(content),
-                        "dispatch-layout(" + label + ",skipped=busy,suppressed="
-                                + suppressed + ",interceptDepth=" + interceptDepth
-                                + ",computing=" + computing + ")");
                 return;
             }
             Method dispatchLayout = findInheritedMethod(
                     recycler.getClass(), "dispatchLayout", 0);
-            if (dispatchLayout == null) {
-                logRerender(null, content, HookBridge.get().messageIdOf(content),
-                        "dispatch-layout(" + label + ",skipped=no-method)");
-                return;
+            if (dispatchLayout != null) {
+                dispatchLayout.invoke(recycler);
             }
-            String before = describeLayoutState(asView(recycler));
-            dispatchLayout.invoke(recycler);
-            String after = describeLayoutState(asView(recycler));
-            logRerender(null, content, HookBridge.get().messageIdOf(content),
-                    "dispatch-layout(" + label + ",called=true,deferred=" + deferred
-                            + ",before=" + before + ",after=" + after + ")");
         } catch (Throwable t) {
             Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
                     && t.getCause() != null ? t.getCause() : t;
-            XLog.d("dispatchLayout " + label + " failed: "
-                    + cause.getClass().getSimpleName());
-            logRerender(null, content, HookBridge.get().messageIdOf(content),
-                    "dispatch-layout(" + label + ",failed="
-                            + cause.getClass().getSimpleName() + ")");
+            XLog.d("dispatchLayout failed: " + cause.getClass().getSimpleName());
         }
-    }
-
-    private static void logAfterRequestedLayout(@Nullable final View view) {
-        if (view == null) {
-            return;
-        }
-        try {
-            final android.view.ViewTreeObserver observer = view.getViewTreeObserver();
-            if (!observer.isAlive()) {
-                return;
-            }
-            observer.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
-                @Override
-                public boolean onPreDraw() {
-                    try {
-                        if (observer.isAlive()) {
-                            observer.removeOnPreDrawListener(this);
-                        }
-                        if (view.isAttachedToWindow()) {
-                            logRerender(null, view, HookBridge.get().messageIdOf(view),
-                                    "row-refresh-after-request-layout(layoutState="
-                                            + layoutStateSummary(view) + ")");
-                        }
-                    } catch (Throwable t) {
-                        XLog.d("post-layout snapshot failed: "
-                                + t.getClass().getSimpleName());
-                    }
-                    return true;
-                }
-            });
-        } catch (Throwable t) {
-            XLog.d("schedule post-layout snapshot failed: "
-                    + t.getClass().getSimpleName());
-        }
-    }
-
-    /**
-     * 在下一帧再记录一次状态，用于判断布局结果是否真的已应用到屏幕。
-     *
-     * <p>上一行日志（relayout-posted）打在强制测量之前，只能反映修正前的值。
-     * 这里再等一帧，记录 MessageView 的实际 getHeight()/getTop()/getBottom()
-     * 以及内层 MessageAccessoriesView 的高度，用来区分：</p>
-     * <ul>
-     *   <li>测量/布局都跑了，但下次滚动才重排 —— 说明布局被推迟；</li>
-     *   <li>布局跑了，但 RecyclerView 仍按旧 offset 摆放子项 —— 说明需要
-     *       同时修正滚动位置或子项偏移。</li>
-     * </ul>
-     */
-    private static void logSecondFrame(@Nullable final View view) {
-        if (view == null) {
-            return;
-        }
-        try {
-            view.post(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        if (!view.isAttachedToWindow()) {
-                            return;
-                        }
-                        View row = null;
-                        android.view.ViewParent parent = view.getParent();
-                        for (int depth = 0;
-                             depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
-                            View v = (View) parent;
-                            if (Reflect.isInstanceOfName(v, MESSAGE_VIEW_CLASS)) {
-                                row = v;
-                                break;
-                            }
-                            parent = v.getParent();
-                        }
-                        String rowInfo = row == null ? "no-row"
-                                : (row.getHeight() + "@" + row.getTop()
-                                        + "-" + row.getBottom());
-                        logRerender(null, view, HookBridge.get().messageIdOf(view),
-                                "row-refresh-next-frame(content=" + view.getHeight()
-                                        + "@" + view.getTop() + "-" + view.getBottom()
-                                        + ",row=" + rowInfo
-                                        + ",metrics=" + textLayoutMetrics(view)
-                                        + ")");
-                    } catch (Throwable t) {
-                        XLog.d("next-frame diag failed: " + t.getClass().getSimpleName());
-                    }
-                }
-            });
-        } catch (Throwable t) {
-            XLog.d("schedule next-frame diag failed: " + t.getClass().getSimpleName());
-        }
-    }
-
-    private static String layoutStateSummary(@Nullable View content) {
-        try {
-            android.view.ViewParent contentRecycler = findRecyclerView(content);
-            android.view.ViewParent chatList = findAncestorByClassName(
-                    content, CHAT_LIST_VIEW_CLASS);
-            View row = findAncestorViewByClassName(content, MESSAGE_VIEW_CLASS);
-            return "content=" + describeLayoutState(content)
-                    + ",contentList=" + describeLayoutState(asView(contentRecycler))
-                    + ",row=" + describeLayoutState(row)
-                    + ",chatList=" + describeLayoutState(asView(chatList))
-                    + ",chatComputing=" + isComputingLayout(chatList);
-        } catch (Throwable t) {
-            XLog.d("layout state diagnostic failed: " + t.getClass().getSimpleName());
-            return "unavailable";
-        }
-    }
-
-    @Nullable
-    private static View asView(@Nullable android.view.ViewParent parent) {
-        return parent instanceof View ? (View) parent : null;
-    }
-
-    private static String describeLayoutState(@Nullable View view) {
-        if (view == null) {
-            return "null";
-        }
-        String rvGate = Reflect.isInstanceOfName(view, RECYCLER_VIEW_CLASS)
-                ? recyclerLayoutGate(view) : "";
-        return view.getClass().getSimpleName()
-                + "(measured=" + view.getMeasuredWidth() + "x" + view.getMeasuredHeight()
-                + ",bounds=" + view.getWidth() + "x" + view.getHeight()
-                + "@" + view.getLeft() + "," + view.getTop()
-                + "-" + view.getRight() + "," + view.getBottom()
-                + rvGate + ")";
-    }
-
-    private static String recyclerLayoutGate(View view) {
-        Object suppressed = Reflect.getField(view, "mLayoutSuppressed");
-        Object interceptDepth = Reflect.getField(view, "mInterceptRequestLayoutDepth");
-        Object deferred = Reflect.getField(view, "mLayoutWasDefered");
-        return ",rvGate(suppressed=" + diagnosticValue(suppressed)
-                + ",interceptDepth=" + diagnosticValue(interceptDepth)
-                + ",deferred=" + diagnosticValue(deferred) + ")";
-    }
-
-    private static String diagnosticValue(@Nullable Object value) {
-        return value == null ? "?" : String.valueOf(value);
-    }
-
-    private static boolean isComputingLayout(@Nullable android.view.ViewParent view) {
-        if (view == null) {
-            return false;
-        }
-        try {
-            Object result = Reflect.call(
-                    findInheritedMethod(view.getClass(), "isComputingLayout", 0), view);
-            return Boolean.TRUE.equals(result);
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    @Nullable
-    private static View findAncestorViewByClassName(View view, String className) {
-        try {
-            android.view.ViewParent parent = view.getParent();
-            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
-                View parentView = (View) parent;
-                if (Reflect.isInstanceOfName(parentView, className)) {
-                    return parentView;
-                }
-                parent = parent.getParent();
-            }
-        } catch (Throwable t) {
-            XLog.d("find layout ancestor failed: " + t.getClass().getSimpleName());
-        }
-        return null;
-    }
-
-    /**
-     * 汇总某个 View 自身及其直接子 View 的类名与高度，用于定位多余空白。
-     *
-     * <p>仅输出类名与高度像素值，不包含任何消息正文或译文内容。</p>
-     */
-    private static String rowChildrenSummary(@Nullable View view) {
-        if (view == null) {
-            return "none";
-        }
-        try {
-            android.view.ViewParent parent = view.getParent();
-            if (parent instanceof View) {
-                return "ascend=" + view.getHeight() + ":"
-                        + describeViewTree((View) parent, 2);
-            }
-            if (view instanceof android.view.ViewGroup) {
-                return describeViewTree(view, 2);
-            }
-            return "no-parent";
-        } catch (Throwable t) {
-            return "error=" + t.getClass().getSimpleName();
-        }
-    }
-
-    /** 描述 view 及其往下 depth 层子视图的 类名@高度。 */
-    private static String describeViewTree(View view, int depth) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(view.getClass().getSimpleName())
-                .append('@').append(view.getHeight())
-                .append(view.getVisibility() == View.VISIBLE ? "" : "(hidden)");
-        if (depth > 0 && view instanceof android.view.ViewGroup) {
-            android.view.ViewGroup group = (android.view.ViewGroup) view;
-            int n = group.getChildCount();
-            sb.append('[');
-            for (int i = 0; i < n && i < 6; i++) {
-                if (i > 0) {
-                    sb.append('+');
-                }
-                sb.append(describeViewTree(group.getChildAt(i), depth - 1));
-            }
-            if (n > 6) {
-                sb.append("+...").append(n - 6);
-            }
-            sb.append(']');
-        }
-        return sb.toString();
     }
 
     private static void requestLayoutChain(@Nullable View view) {
@@ -1148,13 +643,11 @@ public final class HookBridge {
         }
     }
 
-    private static final String RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView";
     private static final String CHAT_LIST_VIEW_CLASS =
             "com.discord.chat.presentation.list.ChatListView";
     private static final String MESSAGE_VIEW_CLASS =
             "com.discord.chat.presentation.message.MessageView";
 
-    /** 向上查找列表时的最大层数。 */
     /**
      * 父链传播的最大深度。
      *
@@ -1164,69 +657,6 @@ public final class HookBridge {
      * 这里放宽到 32（仍为有界值，避免异常情况下的无界传播）。</p>
      */
     private static final int RELAYOUT_MAX_DEPTH = 32;
-
-    /** 诊断开关：只有排查“布局未刷新”时才打开。 */
-    private static volatile boolean sLayoutDiagnostic = false;
-
-    /**
-     * 「详细诊断日志」开关的进程内快照。
-     *
-     * <p>长按行内图标弹出诊断日志复用它：默认关闭时不抢宿主的长按菜单，
-     * 保证普通用户的行为与未安装模块时一致。</p>
-     */
-    private static volatile boolean sVerboseDiagnostics = false;
-
-    /** 是否已开启详细诊断（决定长按图标是否弹出诊断日志）。 */
-    static boolean isVerboseDiagnostics() {
-        return sVerboseDiagnostics;
-    }
-
-    /** 由模块入口在解析配置后设置，与“详细诊断日志”共用同一个开关。 */
-    public static void setLayoutDiagnostic(boolean enabled) {
-        sLayoutDiagnostic = enabled;
-    }
-
-    /**
-     * 诊断日志：记录重渲染是否真的执行、视图处于什么状态。
-     *
-     * <p>不记录消息正文与密钥；只含消息 ID、视图类型、attached/可见性、
-     * 重渲染时视图高度、当前绑定关系与结论标签。</p>
-     */
-    /** 供宿主测量钩子等旁路调用的诊断入口；仅转发到 logRerender。 */
-    public void logMeasurePass(@Nullable View view, String outcome) {
-        logRerender(null, view, messageIdOf(view), outcome);
-    }
-
-    private static void logRerender(@Nullable String messageId, @Nullable View view,
-                                    @Nullable String bound, String outcome) {
-        String line;
-        if (view == null) {
-            line = "msg=" + messageId + " view=null outcome=" + outcome;
-        } else {
-            line = "msg=" + messageId
-                    + " view=" + view.getClass().getSimpleName()
-                    + " attached=" + view.isAttachedToWindow()
-                    + " visible=" + (view.getVisibility() == View.VISIBLE)
-                    + " height=" + view.getHeight()
-                    + " bound=" + (bound == null ? "null" : bound)
-                    + " outcome=" + outcome;
-        }
-        Diagnostics.record("layout-diag: " + line);
-    }
-
-    /** 记录模块进入 Discord 目标进程的事实，不依赖远程配置写入。 */
-    public static void logModuleReady(String detail) {
-        XLog.i("module-ready " + detail);
-    }
-
-    /**
-     * 记录一条布局事实（供 {@link RerenderRegistry} 等外部调用）。
-     *
-     * <p>与 {@link #logRerender} 共用同一套日志输出通道。</p>
-     */
-    public void logLayoutFact(@Nullable String messageId, String what) {
-        logRerender(messageId, null, null, what);
-    }
 
     // ---------------------------------------------------------------- 翻译流程
 
