@@ -36,7 +36,7 @@ public final class ParagraphProbe {
     }
 
     /** 输出节点树的形状与每个文本节点的长度。 */
-    static void logTree(String tag, @Nullable List<?> nodes) {
+    public static void logTree(String tag, @Nullable List<?> nodes) {
         try {
             StringBuilder sb = new StringBuilder();
             walk(tag, nodes, sb, 0);
@@ -85,8 +85,11 @@ public final class ParagraphProbe {
      * 输出译文的结构统计：总长度、换行数、连续换行（空行）数、是否带分段标记。
      *
      * <p>只输出计数，不输出任何字符内容。</p>
+     *
+     * <p>必须为 {@code public}：调用点在 {@code translate} 包（JsonApiEngine），
+     * 与本类不在同一个包。</p>
      */
-    static void logTranslation(String tag, @Nullable String translated) {
+    public static void logTranslation(String tag, @Nullable String translated) {
         try {
             if (translated == null) {
                 XLog.d("[para] " + tag + " trans=null");
