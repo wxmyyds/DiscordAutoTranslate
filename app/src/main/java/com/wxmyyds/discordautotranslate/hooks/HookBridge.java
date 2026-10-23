@@ -658,6 +658,14 @@ public final class HookBridge {
      */
     private static final int RELAYOUT_MAX_DEPTH = 32;
 
+    /**
+     * 启用分段标记时附加到缓存键的后缀。
+     *
+     * <p>含 {@code U+0000} 保证不会与任何真实正文混淆；只有存在 ≥2 个文本节点
+     * 的消息会带上它，因此单节点消息的缓存与旧版本保持兼容。</p>
+     */
+    private static final String SEGMENT_CACHE_SUFFIX = "\u0000seg1";
+
     // ---------------------------------------------------------------- 翻译流程
 
     /**
@@ -674,7 +682,15 @@ public final class HookBridge {
         }
 
         Config.Snapshot cfg = config;
-        String hash = Scheduler.contentHash(ex.text, cfg.version());
+        // 请求文本带分段标记（存在 ≥2 个文本节点时），使译文能逐段回填。
+        // 内容哈希仍以无标记纯文本为主：它决定「内容是否相同」。
+        // 但对启用标记的消息追加一个协议版本后缀：这类消息的译文形态变了
+        // （从「整段塞进首节点」变成「逐段带标记」），旧缓存条目必须失效，
+        // 否则已缓存的旧译文会继续走回退路径、格式照旧丢失。
+        // 单节点消息不受影响，其缓存与旧版本完全兼容。
+        String requestText = ex.segmented != null ? ex.segmented : ex.text;
+        String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
+        String hash = Scheduler.contentHash(hashInput, cfg.version());
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
         rawContent.put(messageId, structurableText);
         if (contentView != null) {
@@ -728,7 +744,7 @@ public final class HookBridge {
         // 立即重渲染，让「翻译中」旋转图标显示出来。
         RerenderRegistry.rerender(messageId);
 
-        Scheduler.get().submit(messageId, hash, ex.text, engine,
+        Scheduler.get().submit(messageId, hash, requestText, engine,
                 (generationSnapshot, contentHash) -> {
                     if (generationSnapshot != StateStore.get().generation()) {
                         return false; // 模块已热重载/配置已重置：丢弃（需求 §风险 6）

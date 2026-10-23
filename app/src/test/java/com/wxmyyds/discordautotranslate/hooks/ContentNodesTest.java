@@ -745,6 +745,85 @@ public class ContentNodesTest {
         assertSame("原始节点不得被修改", original, nodes.get(0));
     }
 
+    // ---------------------------------------------------------------- 分段标记回填
+
+    @Test
+    public void segmentMarkersKeepOneLinePerTextNode() {
+        // 原文两行（hi / hi）各自一个文本节点，中间是换行节点。
+        // 旧行为：模型返回「你好 你好」时全塞进第一个节点，换行节点被裁掉 → 两行合一。
+        // 新行为：带标记请求后逐段回填，换行结构保留。
+        List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
+                new TextContentNode("hi"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>\n<s2>你好</s2>");
+
+        assertNotNull(out);
+        assertEquals("两个文本节点之间的换行必须保留", 3, out.size());
+        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+        assertTrue(out.get(1) instanceof NewLineContentNode);
+        assertEquals("你好", ((TextContentNode) out.get(2)).getContent());
+    }
+
+    @Test
+    public void segmentMarkersKeepStrongContainerAndItsText() {
+        // 原文 hello **world** foo：加粗是一个独立容器。
+        // 旧行为：译文只有一行时加粗节点被置空，其容器被当作空白裁掉 → 样式丢失。
+        TextContentNode world = new TextContentNode("world");
+        StrongContentNode strong = new StrongContentNode(list(world));
+        List<Object> nodes = list(new TextContentNode("hello "), strong,
+                new TextContentNode(" foo"));
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "<s1>你好 </s1><s2>世界</s2><s3> 呀</s3>");
+
+        assertNotNull(out);
+        assertEquals(3, out.size());
+        assertEquals("你好 ", ((TextContentNode) out.get(0)).getContent());
+        assertTrue("加粗容器必须保留", out.get(1) instanceof StrongContentNode);
+        StrongContentNode rebuilt = (StrongContentNode) out.get(1);
+        assertEquals("世界", ((TextContentNode) rebuilt.getContent().get(0)).getContent());
+        assertEquals(" 呀", ((TextContentNode) out.get(2)).getContent());
+    }
+
+    @Test
+    public void segmentMarkersPreserveHeadingLevel() {
+        List<Object> nodes = list(new HeadingContentNode(
+                list(new TextContentNode("Title")), 2));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>标题</s1>");
+
+        assertNotNull(out);
+        HeadingContentNode h = (HeadingContentNode) out.get(0);
+        assertEquals("level 必须保留", 2, h.component2());
+        assertEquals("标题", ((TextContentNode) h.getContent().get(0)).getContent());
+    }
+
+    @Test
+    public void incompleteSegmentMarkersFallBackToLineSplit() {
+        // 模型漏写第二段：不能把第二行留空或错位，必须整体回退到旧逻辑。
+        List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
+                new TextContentNode("hi"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>");
+
+        assertNotNull(out);
+        // 回退后按换行切分：译文无换行 → 首节点承载全部，其余为空被裁剪。
+        assertEquals(1, out.size());
+        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    @Test
+    public void plainTranslationWithoutMarkersStillWorks() {
+        // 未启用标记（单节点消息）或缓存命中旧译文时，必须是原来的行切分行为。
+        List<Object> nodes = list(new TextContentNode("hello"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "你好");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+    }
+
     @Test
     public void describesNodeList() {
         String d = ContentNodes.describe(list(new TextContentNode("a"), new EmojiContentNode("b")));

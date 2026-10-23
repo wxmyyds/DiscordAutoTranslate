@@ -3,6 +3,7 @@ package com.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
+import com.wxmyyds.discordautotranslate.core.Segments;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
 import com.wxmyyds.discordautotranslate.core.XLog;
 
@@ -89,8 +90,12 @@ public final class ContentNodes {
     /**
      * 把节点列表中的自然语言文本片段替换为译文。
      *
+     * <p>译文优先按分段标记（{@code <sN>…</sN>}）回填：每个文本节点拿到自己
+     * 对应的片段，于是换行结构与加粗/标题等样式容器都按原样保留。模型没有
+     * 遵守标记协议时回退到按换行切分；两者都不改变节点树结构。</p>
+     *
      * @param nodes        原始节点列表
-     * @param translated   译文（纯文本；换行会被还原为换行）
+     * @param translated   译文（可能是带标记的模型原文，也可能是纯文本）
      * @return 新的节点列表；无需变化或任一节点重建失败时返回 null，调用方应保留原文
      */
     @Nullable
@@ -103,10 +108,19 @@ public final class ContentNodes {
             XLog.d("no TextContentNode found; nothing to substitute");
             return null;
         }
+        // 优先按分段标记回填：模型逐段翻译并保留 <sN> 标记时，
+        // 每个文本节点拿到自己的片段，样式容器与换行结构自然保留。
+        // 解析失败（模型漏写/改写/合并标记）则回退到按换行切分的旧逻辑。
+        List<String> parts = Segments.parse(translated, targetCount);
+        if (parts == null) {
+            if (Segments.isSegmented(translated)) {
+                XLog.d("segment markers incomplete; falling back to line split");
+            }
+            parts = splitTranslation(normalize(translated), targetCount);
+        }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
         // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
-        Replacement replacement = new Replacement(
-                splitTranslation(normalize(translated), targetCount));
+        Replacement replacement = new Replacement(parts);
         List<Object> result = new ArrayList<>(nodes.size());
         for (Object n : nodes) {
             result.add(rebuild(n, replacement, 0));

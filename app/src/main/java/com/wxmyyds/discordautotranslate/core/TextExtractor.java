@@ -24,6 +24,15 @@ public final class TextExtractor {
     public static final class Result {
         /** 可翻译的纯文本（含换行；原样保留的结构节点仅贡献空白分隔）。 */
         public final String text;
+        /**
+         * 带分段标记的请求文本：每个可翻译文本节点包在 {@code <sN>…</sN>} 内。
+         *
+         * <p>只有当消息存在 ≥2 个可翻译文本节点时才非 null；单节点消息不需要
+         * 标记，直接使用 {@link #text} 即可。纯文本仍用于语言检测与内容哈希，
+         * 因此标记不会影响既有判定。</p>
+         */
+        @Nullable
+        public final String segmented;
         /** 文本节点数量，用于判断消息是否包含自然语言。 */
         public final int textNodeCount;
         /** 不可解析的结构节点数量（提及、表情等）。 */
@@ -31,15 +40,17 @@ public final class TextExtractor {
         /** 是否为不可翻译结构（例如纯代码块消息）。 */
         public final boolean codeHeavy;
 
-        Result(String text, int textNodeCount, int opaqueNodeCount, boolean codeHeavy) {
+        Result(String text, @Nullable String segmented, int textNodeCount,
+               int opaqueNodeCount, boolean codeHeavy) {
             this.text = text;
+            this.segmented = segmented;
             this.textNodeCount = textNodeCount;
             this.opaqueNodeCount = opaqueNodeCount;
             this.codeHeavy = codeHeavy;
         }
     }
 
-    private static final Result EMPTY = new Result("", 0, 0, false);
+    private static final Result EMPTY = new Result("", null, 0, 0, false);
     private static final int MAX_DEPTH = 12;
 
     private TextExtractor() {
@@ -57,7 +68,7 @@ public final class TextExtractor {
             if (s == null) {
                 return EMPTY;
             }
-            return new Result(s, s.isEmpty() ? 0 : 1, 0, false);
+            return new Result(s, null, s.isEmpty() ? 0 : 1, 0, false);
         }
 
         if (cls.endsWith("AnnotatedStructurableText")) {
@@ -69,7 +80,19 @@ public final class TextExtractor {
             StringBuilder sb = new StringBuilder();
             int[] counters = new int[3]; // text, opaque, codeBlocks
             walkList((List<?>) list, sb, counters, 0);
-            return new Result(sb.toString(), counters[0], counters[1], counters[2] > 0);
+            // 同一棵树再走一遍生成带标记文本。两遍分开是为了让纯文本保持
+            // 既有形态（语言检测与内容哈希都依赖它），标记只进请求。
+            StringBuilder marked = new StringBuilder();
+            int[] markCounters = new int[3];
+            int[] segment = new int[]{0};
+            walkListMarked((List<?>) list, marked, markCounters, segment, 0);
+            // 只有标记数与可翻译文本节点数完全相等时才启用标记：
+            // 两者错位会导致回填时片段对不上节点，此时宁可不标记。
+            // 单节点消息不需要标记（无段落结构可保）。
+            String segmented = segment[0] >= 2 && segment[0] == counters[0]
+                    ? marked.toString() : null;
+            return new Result(sb.toString(), segmented, counters[0], counters[1],
+                    counters[2] > 0);
         }
 
         XLog.d("unknown StructurableText impl: " + cls);
@@ -106,6 +129,87 @@ public final class TextExtractor {
         }
         for (Object node : nodes) {
             walkNode(node, out, counters, depth);
+        }
+    }
+
+    // ------------------------------------------------- 带标记文本（保留段落与样式）
+
+    /**
+     * 与 {@link #walkList} 判定规则完全一致，但把每个可翻译文本节点包在分段标记里。
+     *
+     * <p>结构字符（换行、列表项符号、代码与不可翻译节点留下的空格）留在标记之外，
+     * 回填时它们仍由原节点渲染，因此标记不会污染看起来的正文。</p>
+     */
+    private static void walkListMarked(List<?> nodes, StringBuilder out, int[] counters,
+                                       int[] segment, int depth) {
+        if (nodes == null || depth > MAX_DEPTH) {
+            return;
+        }
+        for (Object node : nodes) {
+            walkNodeMarked(node, out, counters, segment, depth);
+        }
+    }
+
+    private static void walkNodeMarked(@Nullable Object node, StringBuilder out, int[] counters,
+                                       int[] segment, int depth) {
+        if (node == null || depth > MAX_DEPTH) {
+            return;
+        }
+        String name = node.getClass().getSimpleName();
+        if (isTextContainer(name)) {
+            Object inner = Reflect.call(
+                    Reflect.findMethod(node.getClass(), "getContent", 0), node);
+            if (inner instanceof List) {
+                walkListMarked((List<?>) inner, out, counters, segment, depth + 1);
+            }
+            return;
+        }
+
+        switch (name) {
+            case "TextContentNode": {
+                String s = Reflect.callString(node, "getContent");
+                if (s != null) {
+                    // 编号必须与 countTextNodes 一一对应：它按「非 null」计数，
+                    // 因此空串也要占一个标记，否则两边的片段数会错位。
+                    segment[0]++;
+                    out.append(Segments.wrap(segment[0], s));
+                    counters[0]++;
+                }
+                return;
+            }
+            case "InlineCodeContentNode": {
+                counters[1]++;
+                out.append(' ');
+                return;
+            }
+            case "CodeBlockContentNode": {
+                counters[2]++;
+                out.append('\n');
+                return;
+            }
+            case "NewLineContentNode":
+            case "LineBreakContentNode":
+                out.append('\n');
+                return;
+            case "BulletListContentNode": {
+                Object items = Reflect.call(
+                        Reflect.findMethod(node.getClass(), "getItems", 0), node);
+                if (items instanceof List) {
+                    for (Object item : (List<?>) items) {
+                        out.append('\n').append("• ");
+                        if (item instanceof List) {
+                            walkListMarked((List<?>) item, out, counters, segment, depth + 1);
+                        } else {
+                            walkNodeMarked(item, out, counters, segment, depth + 1);
+                        }
+                    }
+                }
+                return;
+            }
+            default: {
+                counters[1]++;
+                out.append(' ');
+            }
         }
     }
 
