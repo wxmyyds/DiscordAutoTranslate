@@ -111,7 +111,8 @@ public final class Segments {
      * 从译文里解析出 {@code parts} 个片段。
      *
      * @param translated 模型返回的带标记译文
-     * @param parts      期望的片段数（= 原文可翻译文本节点数）
+     * @param parts      期望的片段数（= 原文可翻译段落块数，见
+     *                   {@link TextExtractor#countSegments}）
      * @return 按编号顺序排列的片段；任何编号缺失或重复时返回 {@code null}，
      *         调用方应整体回退
      */

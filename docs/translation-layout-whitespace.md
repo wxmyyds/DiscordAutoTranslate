@@ -8,6 +8,8 @@
 
 1. **位置补空**：`ContentNodes.splitTranslation` 在译文可用行数少于原文文本节点数时，首段承载全部译文，其余位置补空串。原文 `行1 / 换行 / 行2` 有两个 `TextContentNode`，译文一行即得到 `["译文", ""]`。
 2. **换行是独立结构节点**：宿主 `TextUtilsKt` 把 `NewLineContentNode`、`LineBreakContentNode` 渲染为 `"\n"`（`TextUtilsKt.smali` 约 3665–3673 行）；`ParagraphContentNode` 在非最后一个节点时还会追加 `"\n\n"`（约 5759–5762 行）。这些节点不承载译文，替换后仍保留。
+
+   > **补充（后续实测修正）**：段落分隔并不总是独立节点。真机节点树探针显示，它常常就是内容为 `"\n\n"` 的 `TextContentNode`（形如 `[Mention[Text] Text(2) Heading[Text] ...]`，其中 `Text(2)` 即 `"\n\n"`）。这类空白节点若被当作正文发给模型，模型会把它挪到串首并被 `trim()` 删掉，导致**原文空行消失**。因此现在：只含空白的文本节点不加分段标记、原样保留；文本节点首尾空白留在标记外；节点内部空行按 `BlankLines` 切分，分隔符由原节点提供。详见 `core/BlankLines` 与 `TextExtractor.countSegments`。
 3. **宿主不裁剪尾部空白**：`TextUtilsKt` 中没有对应 `trim` 的收尾处理，`SpannableStringBuilder` 的长度就是布局高度，因此尾部空文本节点与换行节点都会占一行高度。
 4. **视图更新不是原因**：切换原文/译文走 `RerenderRegistry.rerender` → `HookBridge.requestRerender`，重新执行 `setMessageContent` / `configureReply`，`TextUtilsKt.toSpannable` 每次重新生成 spannable，长度变化会由宿主 `setText` 触发重新布局。未发现缓存旧 spannable 的路径。
 

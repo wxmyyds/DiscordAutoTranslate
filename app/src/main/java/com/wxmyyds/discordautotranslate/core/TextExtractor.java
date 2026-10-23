@@ -83,9 +83,8 @@ public final class TextExtractor {
             // 同一棵树再走一遍生成带标记文本。两遍分开是为了让纯文本保持
             // 既有形态（语言检测与内容哈希都依赖它），标记只进请求。
             StringBuilder marked = new StringBuilder();
-            int[] markCounters = new int[3];
             int[] segment = new int[]{0};
-            walkListMarked((List<?>) list, marked, markCounters, segment, 0);
+            walkListMarked((List<?>) list, marked, segment, 0);
             // 只有标记数至少为 2 时才启用：单段消息没有段落结构可保，
             // 加标记只会给模型增加噪音。
             //
@@ -138,18 +137,6 @@ public final class TextExtractor {
     // ------------------------------------------------- 带标记文本（保留段落与样式）
 
     /**
-     * 文本是否只含空白（含空串）。
-     *
-     * <p>这类 {@code TextContentNode} 承载的是段落/空行结构（真机实测：段落之间的
-     * {@code NewLine} 常常就是内容为 {@code "\n\n"} 的文本节点），没有可翻译的
-     * 自然语言。把它包进分段标记会被模型当作正文改写（实测把 {@code \n\n} 挪到串首
-     * 并被 {@code trim()} 删掉），导致原文空行消失。</p>
-     */
-    public static boolean isBlankText(@Nullable String s) {
-        return BlankLines.isBlank(s);
-    }
-
-    /**
      * 一个文本节点会被拆成多少个可翻译片段（空段落不计）。
      *
      * <p>提取（生成标记）、计数（消费片段）与重建三步必须用同一个口径，
@@ -198,17 +185,17 @@ public final class TextExtractor {
      * <p>结构字符（换行、列表项符号、代码与不可翻译节点留下的空格）留在标记之外，
      * 回填时它们仍由原节点渲染，因此标记不会污染看起来的正文。</p>
      */
-    private static void walkListMarked(List<?> nodes, StringBuilder out, int[] counters,
+    private static void walkListMarked(List<?> nodes, StringBuilder out,
                                        int[] segment, int depth) {
         if (nodes == null || depth > MAX_DEPTH) {
             return;
         }
         for (Object node : nodes) {
-            walkNodeMarked(node, out, counters, segment, depth);
+            walkNodeMarked(node, out, segment, depth);
         }
     }
 
-    private static void walkNodeMarked(@Nullable Object node, StringBuilder out, int[] counters,
+    private static void walkNodeMarked(@Nullable Object node, StringBuilder out,
                                        int[] segment, int depth) {
         if (node == null || depth > MAX_DEPTH) {
             return;
@@ -218,7 +205,7 @@ public final class TextExtractor {
             Object inner = Reflect.call(
                     Reflect.findMethod(node.getClass(), "getContent", 0), node);
             if (inner instanceof List) {
-                walkListMarked((List<?>) inner, out, counters, segment, depth + 1);
+                walkListMarked((List<?>) inner, out, segment, depth + 1);
             }
             return;
         }
@@ -229,8 +216,7 @@ public final class TextExtractor {
                 if (s == null) {
                     return;
                 }
-                counters[0]++;
-                if (isBlankText(s)) {
+                if (BlankLines.isBlank(s)) {
                     // 只含空白：它是段落/空行结构，不翻译、不加标记，
                     // 原样输出，与节点树保持一致。
                     out.append(s);
@@ -263,12 +249,10 @@ public final class TextExtractor {
                 return;
             }
             case "InlineCodeContentNode": {
-                counters[1]++;
                 out.append(' ');
                 return;
             }
             case "CodeBlockContentNode": {
-                counters[2]++;
                 out.append('\n');
                 return;
             }
@@ -283,18 +267,16 @@ public final class TextExtractor {
                     for (Object item : (List<?>) items) {
                         out.append('\n').append("• ");
                         if (item instanceof List) {
-                            walkListMarked((List<?>) item, out, counters, segment, depth + 1);
+                            walkListMarked((List<?>) item, out, segment, depth + 1);
                         } else {
-                            walkNodeMarked(item, out, counters, segment, depth + 1);
+                            walkNodeMarked(item, out, segment, depth + 1);
                         }
                     }
                 }
                 return;
             }
-            default: {
-                counters[1]++;
+            default:
                 out.append(' ');
-            }
         }
     }
 
