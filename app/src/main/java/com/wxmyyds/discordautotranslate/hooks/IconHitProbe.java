@@ -216,6 +216,11 @@ public final class IconHitProbe {
         int iconLine = layout.getLineForOffset(iconStart);
         int textLen = tv.getText() == null ? -1 : tv.getText().length();
 
+        // 决定性数据：当前文本里图标 span 的**真实**位置，以及该格子实际占的
+        // 水平像素区间。注入时记录的 [start,end) 可能与它不一致（span 被改写），
+        // 也可能一致但触点 x 落在了相邻格子里（字符命中是整格判定）。
+        String live = describeLiveIcon(tv, layout, line, x);
+
         XLog.d("[hit] down msg=" + messageId
                 + " x=" + x + " y=" + y
                 + " line=" + line + " lineL=" + (int) lineLeft + " lineR=" + (int) lineRight
@@ -225,7 +230,60 @@ public final class IconHitProbe {
                 + " spans=" + spans
                 + " iconLine=" + iconLine + (iconLine == line ? "(same)" : "(diff)")
                 + " textLen=" + textLen + " injectLen=" + range[2]
-                + (textLen == range[2] ? "" : " text-grew-by=" + (textLen - range[2])));
+                + (textLen == range[2] ? "" : " text-grew-by=" + (textLen - range[2]))
+                + " live=" + live);
+    }
+
+    /**
+     * 输出图标 span 在当前文本中的真实区间，以及该区间在当前行上的像素范围。
+     *
+     * <p>这两项是区分两种失败原因的关键：</p>
+     * <ul>
+     *   <li>真实区间 ≠ 注入区间：span 被渲染后的文本改写（如截断/追加）弄错了位置；</li>
+     *   <li>真实区间 == 注入区间，但触点 x 不在该区间的像素范围内：
+     *       {@code getOffsetForHorizontal} 返回的是<b>整格</b>归属，触点落在
+     *       图标左侧那个字符的格子里，于是算出的 offset 是图标前一个字符。</li>
+     * </ul>
+     */
+    @SuppressWarnings("unchecked")
+    private static String describeLiveIcon(TextView tv, Layout layout, int line, int x) {
+        try {
+            CharSequence text = tv.getText();
+            if (!(text instanceof android.text.Spanned)) {
+                return "no-spanned";
+            }
+            android.text.Spanned sp = (android.text.Spanned) text;
+            Object[] icons = sp.getSpans(0, sp.length(), InlineIconSpan.class);
+            if (icons == null || icons.length == 0) {
+                return "gone";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (Object icon : icons) {
+                int s = sp.getSpanStart(icon);
+                int e = sp.getSpanEnd(icon);
+                int iconLine = layout.getLineForOffset(s);
+                sb.append('[').append(s).append(',').append(e).append(')');
+                if (iconLine != line) {
+                    sb.append("@line").append(iconLine).append("!=").append(line);
+                    continue;
+                }
+                // 该字符格子在当前行上的左右像素边界。
+                float l = layout.getPrimaryHorizontal(s);
+                float r = s + 1 <= sp.length()
+                        ? layout.getPrimaryHorizontal(Math.min(s + 1, sp.length()))
+                        : l;
+                if (r < l) {
+                    float t = l;
+                    l = r;
+                    r = t;
+                }
+                sb.append(" px=[").append((int) l).append(',').append((int) r).append(')')
+                        .append(x >= l && x <= r ? " xInside" : " xOUTSIDE");
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "err:" + t.getClass().getSimpleName();
+        }
     }
 
     private static void logUp(Object tracker, View view, int[] range, @Nullable String messageId) {
