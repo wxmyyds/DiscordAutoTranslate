@@ -220,6 +220,8 @@ public final class IconHitProbe {
         // 水平像素区间。注入时记录的 [start,end) 可能与它不一致（span 被改写），
         // 也可能一致但触点 x 落在了相邻格子里（字符命中是整格判定）。
         String live = describeLiveIcon(tv, layout, line, x);
+        String map = describeOffsetMap(layout, line, x);
+        String win = describeOffsetWindow(tv, iconStart, iconEnd);
 
         XLog.d("[hit] down msg=" + messageId
                 + " x=" + x + " y=" + y
@@ -231,7 +233,87 @@ public final class IconHitProbe {
                 + " iconLine=" + iconLine + (iconLine == line ? "(same)" : "(diff)")
                 + " textLen=" + textLen + " injectLen=" + range[2]
                 + (textLen == range[2] ? "" : " text-grew-by=" + (textLen - range[2]))
-                + " live=" + live);
+                + " live=" + live
+                + " map=" + map
+                + " win=" + win);
+    }
+
+    /**
+     * 反向映射：图标附近每个 offset 上是否存在我们的可点击 span。
+     *
+     * <p>正向看：触点 x → offset；反向看：哪些 offset 能拿到 span。
+     * 两者一对就能知道图标「可点击的 offset 区间」是否与它被绘制的格子错位。
+     * 区间记怰：O=命中、.=未命中。</p>
+     */
+    @SuppressWarnings("unchecked")
+    private static String describeOffsetWindow(TextView tv, int iconStart, int iconEnd) {
+        try {
+            CharSequence text = tv.getText();
+            if (!(text instanceof android.text.Spanned) || sClickableIface == null) {
+                return "n/a";
+            }
+            android.text.Spanned sp = (android.text.Spanned) text;
+            int len = sp.length();
+            int from = Math.max(0, iconStart - 2);
+            int to = Math.min(len - 1, iconEnd + 1);
+            StringBuilder sb = new StringBuilder();
+            for (int o = from; o <= to; o++) {
+                Object[] hits = sp.getSpans(o, o, (Class<Object>) sClickableIface);
+                boolean ours = false;
+                if (hits != null) {
+                    for (Object h : hits) {
+                        if (isOurProxy(h)) {
+                            ours = true;
+                            break;
+                        }
+                    }
+                }
+                if (o > from) {
+                    sb.append(' ');
+                }
+                sb.append(o).append(':').append(ours ? 'O' : '.');
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "err:" + t.getClass().getSimpleName();
+        }
+    }
+
+    /**
+     * 打印该行上 x→offset 的实际映射，用于解开 API 之间的矛盾。
+     *
+     * <p>现有日志里 {@code getPrimaryHorizontal} 说图标格子在 [0,112)，而
+     * {@code getOffsetForHorizontal(56)} 返回图标起始位之前的 offset，两个 API 相互矛盾。
+     * 扫描多个 x 并输出行首/行末 offset，可以直接看出该行到底从哪个字符开始、
+     * 宽格子归属于哪个字符。</p>
+     */
+    private static String describeOffsetMap(Layout layout, int line, int x) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("start=").append(layout.getLineStart(line))
+                    .append(" end=").append(layout.getLineEnd(line));
+            // 行内前两个字符的像素起点，确认宽格子归属于谁。
+            int ls = layout.getLineStart(line);
+            sb.append(" h(").append(ls).append(")=")
+                    .append((int) layout.getPrimaryHorizontal(ls));
+            if (ls + 1 <= layout.getText().length()) {
+                sb.append(" h(").append(ls + 1).append(")=")
+                        .append((int) layout.getPrimaryHorizontal(ls + 1));
+            }
+            // 扫描若干 x，看 offset 在哪个像素开始跳到下一个字符。
+            int[] probes = {0, 1, x / 2, x, x + 1, x + 56, 112, 113, 168};
+            sb.append(" offs=");
+            for (int i = 0; i < probes.length; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(probes[i]).append(':')
+                        .append(layout.getOffsetForHorizontal(line, probes[i]));
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "err:" + t.getClass().getSimpleName();
+        }
     }
 
     /**
