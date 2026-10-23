@@ -157,4 +157,46 @@ public class InlineIconGeometryTest {
             assertTrue("t=" + t + " angle=" + a, a >= 0f && a < 360f);
         }
     }
+
+    // ---------------------------------------------------------- 点击区间
+
+    @Test
+    public void clickRangeStartsOneCharacterBeforeTheIcon() {
+        // 真机实测：手指落在图标靠左部分时，宿主用 getOffsetForHorizontal 算出的
+        // offset 是 iconStart - 1。该位置原本不属于任何图标 span（getSpans 只对
+        // span 末尾边界包含），因此点击 span 必须向前多覆盖一格。
+        int[] range = InlineIconGeometry.clickRange(155, 156);
+        assertEquals("点击区间必须覆盖 iconStart-1", 154, range[0]);
+        assertEquals("点击区间必须覆盖到图标末尾", 156, range[1]);
+    }
+
+    @Test
+    public void clickRangeCoversBothOffsetsSeenOnDevice() {
+        // 设备日志里出现过的两种解析结果都必须能命中：
+        //   off = iconStart - 1 → 失败样本（154 / 322）
+        //   off = iconEnd       → 成功样本（156 / 324）
+        int iconStart = 155;
+        int iconEnd = 156;
+        int[] range = InlineIconGeometry.clickRange(iconStart, iconEnd);
+        for (int off : new int[]{iconStart - 1, iconStart, iconEnd}) {
+            assertTrue("off=" + off + " 必须落在点击区间内",
+                    off >= range[0] && off <= range[1]);
+        }
+    }
+
+    @Test
+    public void clickRangeDoesNotExtendPastTheIconEnd() {
+        // 图标之后的文字必须保持原有行为（链接/提及/查看更多不能被图标抢走）。
+        int[] range = InlineIconGeometry.clickRange(155, 156);
+        int afterIcon = 157;
+        assertTrue("图标之后的字符不得落入点击区间", afterIcon > range[1]);
+    }
+
+    @Test
+    public void clickRangeHandlesZeroStartWithoutGoingNegative() {
+        // 防御：iconStart 为 0 时没有可扩展的字符，不得产生负下标。
+        int[] range = InlineIconGeometry.clickRange(0, 1);
+        assertEquals(0, range[0]);
+        assertEquals(1, range[1]);
+    }
 }

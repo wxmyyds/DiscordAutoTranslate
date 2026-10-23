@@ -90,6 +90,29 @@ public final class InlineIconGeometry {
         return (safe % durationMs) * 360f / durationMs;
     }
 
+    /**
+     * 点击 span 应覆盖的字符区间。
+     *
+     * <p>宿主在 {@code ACTION_DOWN} 用 {@code Layout.getOffsetForHorizontal} 把触点换算成
+     * 字符位置，它对宽 span 的格子按<b>左边界</b>归属；手指落在图标靠左部分时算出的
+     * offset 是 {@code iconStart - 1}。而 {@code getSpans(offset, offset)} 只对 span 的
+     * <b>末尾</b>边界包含，所以该位置原本什么也拿不到，宿主于是退化为调用消息的
+     * {@code onClickListener}（表现为「点击图标却触发了消息点击」）。
+     *
+     * <p>因此点击 span 必须从图标前一个字符开始。调用方负责让那一格由本模块自己插入
+     * （零宽非断行字符），这样不会抢占任何真实内容的点击。
+     *
+     * @param iconStart 图标占位字符的起始下标
+     * @param iconEnd   图标占位字符的结束下标（不含）
+     * @return 长度 2 的数组 {@code {clickStart, clickEnd}}；{@code clickStart} 已向前多扩一格
+     */
+    public static int[] clickRange(int iconStart, int iconEnd) {
+        // 多向前覆盖一格；iconStart 为 0 时没有可扩展的字符（理论上不会发生，
+        // 因为调用方总会先插入前置字符），此时保持原区间。
+        int clickStart = iconStart > 0 ? iconStart - 1 : iconStart;
+        return new int[]{clickStart, iconEnd};
+    }
+
     private InlineIconGeometry() {
     }
 }

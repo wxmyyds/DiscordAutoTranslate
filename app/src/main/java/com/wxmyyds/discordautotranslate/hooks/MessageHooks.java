@@ -85,14 +85,12 @@ public final class MessageHooks {
      * <p>任一步骤抛出异常时回滚已安装的 Hook，避免留下“部分安装”的进程状态；
      * 调用方应据返回的句柄数量判断模块是否可用。</p> */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
-        List<XposedInterface.HookHandle> handles = new ArrayList<>(5);
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(4);
         try {
             installBindHook(module, cl, handles);
             installExpandedRenderHook(module, cl, handles);
             installToSpannableHook(module, cl, handles);
             installReplyHook(module, cl, handles);
-            // 临时诊断：行内图标点击命中探针（定位完成后删除）。
-            IconHitProbe.install(module, cl, handles);
         } catch (Throwable t) {
             XLog.e("hook installation aborted, rolling back " + handles.size() + " hooks", t);
             for (XposedInterface.HookHandle handle : handles) {
