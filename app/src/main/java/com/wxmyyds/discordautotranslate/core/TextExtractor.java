@@ -86,11 +86,14 @@ public final class TextExtractor {
             int[] markCounters = new int[3];
             int[] segment = new int[]{0};
             walkListMarked((List<?>) list, marked, markCounters, segment, 0);
-            // 只有标记数与可翻译文本节点数完全相等时才启用标记：
-            // 两者错位会导致回填时片段对不上节点，此时宁可不标记。
-            // 单节点消息不需要标记（无段落结构可保）。
-            String segmented = segment[0] >= 2 && segment[0] == counters[0]
-                    ? marked.toString() : null;
+            // 只有标记数至少为 2 时才启用：单段消息没有段落结构可保，
+            // 加标记只会给模型增加噪音。
+            //
+            // 标记数本身由 walkNodeMarked 与 ContentNodes.countTextNodes 共用的
+            // 口径（TextExtractor.countSegments）保证一致：两边都只给「非空白的
+            // 段落块」编号。若这里再拿一个恒等的计数去校验，等于什么都没校验，
+            // 所以只保留「至少 2 段」这个有意义的门槛。
+            String segmented = segment[0] >= 2 ? marked.toString() : null;
             return new Result(sb.toString(), segmented, counters[0], counters[1],
                     counters[2] > 0);
         }
@@ -135,7 +138,62 @@ public final class TextExtractor {
     // ------------------------------------------------- 带标记文本（保留段落与样式）
 
     /**
-     * 与 {@link #walkList} 判定规则完全一致，但把每个可翻译文本节点包在分段标记里。
+     * 文本是否只含空白（含空串）。
+     *
+     * <p>这类 {@code TextContentNode} 承载的是段落/空行结构（真机实测：段落之间的
+     * {@code NewLine} 常常就是内容为 {@code "\n\n"} 的文本节点），没有可翻译的
+     * 自然语言。把它包进分段标记会被模型当作正文改写（实测把 {@code \n\n} 挪到串首
+     * 并被 {@code trim()} 删掉），导致原文空行消失。</p>
+     */
+    public static boolean isBlankText(@Nullable String s) {
+        return BlankLines.isBlank(s);
+    }
+
+    /**
+     * 一个文本节点会被拆成多少个可翻译片段（空段落不计）。
+     *
+     * <p>提取（生成标记）、计数（消费片段）与重建三步必须用同一个口径，
+     * 否则片段会串位。口径：去掉节点首尾空白后按空行切分，非空白的块各算一个。</p>
+     */
+    public static int countSegments(@Nullable String content) {
+        if (content == null) {
+            return 0;
+        }
+        int lead = leadingWhitespace(content);
+        int tail = trailingWhitespaceStart(content);
+        if (lead >= tail) {
+            return 0; // 只含空白
+        }
+        BlankLines.Split split = BlankLines.split(content.substring(lead, tail));
+        int count = 0;
+        for (String chunk : split.chunks) {
+            if (!BlankLines.isBlank(chunk)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** 前导空白长度。 */
+    public static int leadingWhitespace(String s) {
+        int i = 0;
+        while (i < s.length() && Character.isWhitespace(s.charAt(i))) {
+            i++;
+        }
+        return i;
+    }
+
+    /** 末尾空白之前的位置（即核心内容的结束下标，不含）。 */
+    public static int trailingWhitespaceStart(String s) {
+        int i = s.length();
+        while (i > 0 && Character.isWhitespace(s.charAt(i - 1))) {
+            i--;
+        }
+        return i;
+    }
+
+    /**
+     * 与 {@link #walkList} 判定规则一致，但把每个可翻译文本节点包在分段标记里。
      *
      * <p>结构字符（换行、列表项符号、代码与不可翻译节点留下的空格）留在标记之外，
      * 回填时它们仍由原节点渲染，因此标记不会污染看起来的正文。</p>
@@ -168,13 +226,40 @@ public final class TextExtractor {
         switch (name) {
             case "TextContentNode": {
                 String s = Reflect.callString(node, "getContent");
-                if (s != null) {
-                    // 编号必须与 countTextNodes 一一对应：它按「非 null」计数，
-                    // 因此空串也要占一个标记，否则两边的片段数会错位。
-                    segment[0]++;
-                    out.append(Segments.wrap(segment[0], s));
-                    counters[0]++;
+                if (s == null) {
+                    return;
                 }
+                counters[0]++;
+                if (isBlankText(s)) {
+                    // 只含空白：它是段落/空行结构，不翻译、不加标记，
+                    // 原样输出，与节点树保持一致。
+                    out.append(s);
+                    return;
+                }
+                // 首尾空白同样属于结构：留在标记外，只把核心内容交给模型。
+                // 这样即使模型在译文里增删首尾空白，重建时也会用原节点的空白，
+                // 不会把 "\n\n" 这种段落分隔弄丢。
+                int lead = leadingWhitespace(s);
+                int tail = trailingWhitespaceStart(s);
+                String core = s.substring(lead, tail);
+                out.append(s, 0, lead);
+                // 文本内部可能自带空行（如纯文本消息 "你好\n\n世界"）。
+                // 空行必须留在标记外，否则模型会把它们合并或挑走。
+                BlankLines.Split split = BlankLines.split(core);
+                for (int i = 0; i < split.chunks.size(); i++) {
+                    if (i > 0) {
+                        out.append(split.separators.get(i - 1));
+                    }
+                    String chunk = split.chunks.get(i);
+                    if (BlankLines.isBlank(chunk)) {
+                        // 空段落：不占标记，原样保留。
+                        out.append(chunk);
+                        continue;
+                    }
+                    segment[0]++;
+                    out.append(Segments.wrap(segment[0], chunk));
+                }
+                out.append(s, tail, s.length());
                 return;
             }
             case "InlineCodeContentNode": {

@@ -56,11 +56,11 @@ public class StructurableTextFactoryTest {
         TextContentNode text = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");
         List<Object> nodes = list(new NoCopyContainer.ParagraphContentNode(
-                list(new TextContentNode(""))), text, emoji);
+                list(new TextContentNode("first"))), text, emoji);
         AnnotatedStructurableText original = new AnnotatedStructurableText(nodes);
 
         // 返回 null 是 forTranslation 的“不替换”协议，所有 Hook 调用方保留 original。
-        assertNull(StructurableTextFactory.forTranslation(original, "你好"));
+        assertNull(StructurableTextFactory.forTranslation(original, "第一\n你好"));
         assertSame(nodes, original.getContent());
         assertSame(emoji, original.getContent().get(2));
         assertEquals("hello", text.getContent());

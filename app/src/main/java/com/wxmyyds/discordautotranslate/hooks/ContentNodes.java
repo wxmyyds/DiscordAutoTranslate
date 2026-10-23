@@ -2,6 +2,7 @@ package com.wxmyyds.discordautotranslate.hooks;
 
 import androidx.annotation.Nullable;
 
+import com.wxmyyds.discordautotranslate.core.BlankLines;
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.Segments;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
@@ -105,14 +106,11 @@ public final class ContentNodes {
         }
         int targetCount = countTextNodes(nodes, 0);
         if (targetCount == 0) {
-            XLog.d("no TextContentNode found; nothing to substitute");
+            XLog.d("no translatable TextContentNode found; nothing to substitute");
             return null;
         }
-        // 【临时诊断，定位后删除】只输出结构，不输出正文。
-        ParagraphProbe.logTree("replace", nodes);
-        ParagraphProbe.logTranslation("replace", translated);
         // 优先按分段标记回填：模型逐段翻译并保留 <sN> 标记时，
-        // 每个文本节点拿到自己的片段，样式容器与换行结构自然保留。
+        // 每个段落块拿到自己的片段，样式容器与换行结构自然保留。
         // 解析失败（模型漏写/改写/合并标记）则回退到按换行切分的旧逻辑。
         List<String> parts = Segments.parse(translated, targetCount);
         if (parts == null) {
@@ -268,7 +266,12 @@ public final class ContentNodes {
         }
     }
 
-    /** 递归统计自然语言文本节点，每次出现分别计数（包括共享实例）。 */
+    /**
+     * 递归统计<b>可翻译</b>片段数，每次出现分别计数（包括共享实例）。
+     *
+     * <p>口径与提取阶段完全一致：一个文本节点可能因为内部空行被拆成多个片段，
+     * 只含空白的节点不计数。三者口径不一致会让片段串位。</p>
+     */
     private static int countTextNodes(@Nullable List<?> nodes, int depth) {
         if (nodes == null || depth > 12) {
             return 0;
@@ -284,10 +287,7 @@ public final class ContentNodes {
             }
             String simple = n.getClass().getSimpleName();
             if ("TextContentNode".equals(simple)) {
-                // 与提取阶段一致：null 内容不会进入请求，也不占用译文片段。
-                if (Reflect.callString(n, "getContent") != null) {
-                    count++;
-                }
+                count += TextExtractor.countSegments(Reflect.callString(n, "getContent"));
                 continue;
             }
             if (CODE_NODES.contains(simple)) {
@@ -341,15 +341,39 @@ public final class ContentNodes {
 
         // 按出现位置消费译文片段，同一实例在不同位置可以承载不同片段。
         if ("TextContentNode".equals(simple)) {
-            if (Reflect.callString(node, "getContent") == null) {
+            String original = Reflect.callString(node, "getContent");
+            if (original == null) {
                 return node;
             }
-            if (replacement.next >= replacement.parts.size()) {
+            int needed = TextExtractor.countSegments(original);
+            if (needed == 0) {
+                // 空白/空行结构节点：不参与翻译，原样保留。
+                return node;
+            }
+            if (replacement.next + needed > replacement.parts.size()) {
                 replacement.failed = true;
                 return node;
             }
-            String repl = replacement.parts.get(replacement.next++);
-            Object created = createTextNode(node, repl);
+            // 保留首尾空白，并按原空行位置拼回译文片段：
+            // 段落分隔由原节点提供，不依赖模型是否保留。
+            int lead = TextExtractor.leadingWhitespace(original);
+            int tail = TextExtractor.trailingWhitespaceStart(original);
+            BlankLines.Split split = BlankLines.split(original.substring(lead, tail));
+            StringBuilder rebuilt = new StringBuilder();
+            rebuilt.append(original, 0, lead);
+            for (int i = 0; i < split.chunks.size(); i++) {
+                if (i > 0) {
+                    rebuilt.append(split.separators.get(i - 1));
+                }
+                String chunk = split.chunks.get(i);
+                if (BlankLines.isBlank(chunk)) {
+                    rebuilt.append(chunk);
+                    continue;
+                }
+                rebuilt.append(replacement.parts.get(replacement.next++));
+            }
+            rebuilt.append(original, tail, original.length());
+            Object created = createTextNode(node, rebuilt.toString());
             if (created != null) {
                 return created;
             }

@@ -470,30 +470,31 @@ public class ContentNodesTest {
 
     @Test
     public void failedFirstContainerDoesNotClearRemainingTextAndLeaveOnlyEmoji() {
-        TextContentNode spacer = new TextContentNode("");
+        // 容器内放可翻译文本，才能真正走到 copy 失败那条路（空文本节点不触发 copy）。
+        TextContentNode inside = new TextContentNode("first");
         NoCopyContainer.ParagraphContentNode container =
-                new NoCopyContainer.ParagraphContentNode(list(spacer));
+                new NoCopyContainer.ParagraphContentNode(list(inside));
         TextContentNode visible = new TextContentNode("hello world");
         EmojiContentNode emoji = new EmojiContentNode("1");
         List<Object> nodes = list(container, visible, emoji);
 
         // 旧实现丢弃首片段的译文却把 visible 变为空串，只剩 emoji。
-        assertNull(ContentNodes.replaceText(nodes, "你好世界"));
+        assertNull(ContentNodes.replaceText(nodes, "第一\n你好世界"));
         assertEquals("hello world", visible.getContent());
         assertSame(container, nodes.get(0));
         assertSame(visible, nodes.get(1));
         assertSame(emoji, nodes.get(2));
-        assertSame(spacer, container.getContent().get(0));
+        assertSame(inside, container.getContent().get(0));
     }
 
     @Test
     public void throwingCopyAbortsWholeReplacement() {
         ThrowingCopyContainer.ParagraphContentNode first =
-                new ThrowingCopyContainer.ParagraphContentNode(list(new TextContentNode("")));
+                new ThrowingCopyContainer.ParagraphContentNode(list(new TextContentNode("first")));
         TextContentNode visible = new TextContentNode("hello");
         List<Object> nodes = list(first, visible, new EmojiContentNode("1"));
 
-        assertNull(ContentNodes.replaceText(nodes, "你好"));
+        assertNull(ContentNodes.replaceText(nodes, "第一\n你好"));
         assertEquals("hello", visible.getContent());
     }
 
@@ -824,6 +825,75 @@ public class ContentNodesTest {
         assertNotNull(out);
         assertEquals(1, out.size());
         assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    // ---------------------------------------------------------------- 空行与段落
+
+    @Test
+    public void blankLineNodeIsNotTranslatedAndStaysAsIs() {
+        // 真机实测的节点树形态：段落之间的分隔就是内容为 "\n\n" 的 TextContentNode。
+        // 它不参与翻译，必须原样保留，否则译文里的空行会消失。
+        List<Object> nodes = list(new TextContentNode("hello"),
+                new TextContentNode("\n\n"),
+                new TextContentNode("world"));
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "<s1>你好</s1>\n\n<s2>世界</s2>");
+
+        assertNotNull(out);
+        assertEquals(3, out.size());
+        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("空行节点必须原样保留",
+                "\n\n", ((TextContentNode) out.get(1)).getContent());
+        assertEquals("世界", ((TextContentNode) out.get(2)).getContent());
+    }
+
+    @Test
+    public void blankLineInsideOneTextNodeIsPreserved() {
+        // 一条纯文本消息 "hello\n\nworld" 整体是一个节点，但有两个段落。
+        // 空行必须留在标记外，重建时按原位置拼回。
+        List<Object> nodes = list(new TextContentNode("hello\n\nworld"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>\n\n<s2>世界</s2>");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("段落结构必须保留",
+                "你好\n\n世界", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    @Test
+    public void modelCollapsingBlankLinesStillKeepsStructure() {
+        // 模型把译文里的空行删掉（实测常见）也不影响结构：
+        // 分隔符来自原节点，不是模型输出。
+        List<Object> nodes = list(new TextContentNode("hello\n\nworld"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1><s2>世界</s2>");
+
+        assertNotNull(out);
+        assertEquals("你好\n\n世界", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    @Test
+    public void singleNewlineInsideNodeIsTranslatedAsOnePiece() {
+        // 单个换行不是段落分隔，不得被当作切分点。
+        List<Object> nodes = list(new TextContentNode("first\nsecond"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>第一\n第二</s1>");
+
+        assertNotNull(out);
+        assertEquals("第一\n第二", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    @Test
+    public void leadingAndTrailingWhitespaceOfNodeIsPreserved() {
+        // 节点首尾的空白属于结构（缩进/段落间距），不交给模型，也不会被译文吞掉。
+        List<Object> nodes = list(new TextContentNode("  hello  "));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>");
+
+        assertNotNull(out);
+        assertEquals("  你好  ", ((TextContentNode) out.get(0)).getContent());
     }
 
     @Test

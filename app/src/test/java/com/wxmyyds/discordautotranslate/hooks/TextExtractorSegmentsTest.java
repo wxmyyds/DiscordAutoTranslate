@@ -190,16 +190,57 @@ public class TextExtractorSegmentsTest {
     }
 
     @Test
-    public void emptyTextNodeStillOccupiesASegmentToKeepNumberingAligned() {
-        // 空串文本节点也计入 textNodeCount，因此必须占一个标记，
-        // 否则标记数与文本节点数错位，回填时片段会串到相邻节点上。
+    public void blankTextNodeIsNotSegmentedButStaysInPlace() {
+        // 空串/纯空白文本节点承载的是段落结构，不是正文。
+        // 把它包进标记会被模型当作内容改写（真机实测："\n\n" 被挑到串首后
+        // 被 trim() 删掉，原文空行消失）。因此它不占标记，但位置必须保留。
         TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(
                 list(new TextContentNode("hello"), new TextContentNode(""),
                         new TextContentNode("world"))));
 
         assertNotNull(r);
-        assertEquals(3, r.textNodeCount);
-        assertEquals("<s1>hello</s1><s2></s2><s3>world</s3>", r.segmented);
+        assertEquals("空白节点不占标记", "<s1>hello</s1><s2>world</s2>", r.segmented);
+    }
+
+    @Test
+    public void blankLineNodeKeepsItsNewlinesOutsideTags() {
+        // 真机实测的节点树形态：段落分隔就是内容为 "\n\n" 的文本节点。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new TextContentNode("hello"), new TextContentNode("\n\n"),
+                        new TextContentNode("world"))));
+
+        assertNotNull(r);
+        assertEquals("<s1>hello</s1>\n\n<s2>world</s2>", r.segmented);
+    }
+
+    @Test
+    public void blankLineInsideOneNodeIsKeptOutsideTags() {
+        // 纯文本消息 "hello\n\nworld" 是一个节点，但有两个可翻译段落。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new TextContentNode("hello\n\nworld"))));
+
+        assertNotNull(r);
+        assertEquals("<s1>hello</s1>\n\n<s2>world</s2>", r.segmented);
+    }
+
+    @Test
+    public void singleNewlineInsideNodeStaysInsideTheTag() {
+        // 单个换行不是段落分隔，仍属于同一段落，由模型按正常换行翻译。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new TextContentNode("first\nsecond"), new TextContentNode("third"))));
+
+        assertNotNull(r);
+        assertEquals("<s1>first\nsecond</s1><s2>third</s2>", r.segmented);
+    }
+
+    @Test
+    public void leadingAndTrailingWhitespaceStaysOutsideTags() {
+        // 首尾空白属于结构（缩进/段间距），不能交给模型。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new TextContentNode("  hello  "), new TextContentNode("world"))));
+
+        assertNotNull(r);
+        assertEquals("  <s1>hello</s1>  <s2>world</s2>", r.segmented);
     }
 
     @Test

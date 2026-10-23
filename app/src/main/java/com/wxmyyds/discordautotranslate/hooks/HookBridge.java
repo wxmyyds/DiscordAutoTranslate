@@ -690,9 +690,6 @@ public final class HookBridge {
         // 单节点消息不受影响，其缓存与旧版本完全兼容。
         String requestText = ex.segmented != null ? ex.segmented : ex.text;
         String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
-        // 【临时诊断，定位后删除】确认标记协议是否对这条消息生效。
-        ParagraphProbe.logTranslation("request", requestText);
-        ParagraphProbe.logTree("request", ContentNodes.listOf(structurableText));
         String hash = Scheduler.contentHash(hashInput, cfg.version());
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
         rawContent.put(messageId, structurableText);

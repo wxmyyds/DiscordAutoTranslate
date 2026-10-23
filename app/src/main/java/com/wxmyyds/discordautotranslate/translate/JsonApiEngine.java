@@ -77,9 +77,6 @@ public final class JsonApiEngine implements Scheduler.Engine {
         if (translated == null || translated.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }
-        // 【临时诊断，定位后删除】只输出结构计数，不输出正文。
-        com.wxmyyds.discordautotranslate.hooks.ParagraphProbe
-                .logTranslation("engine-raw", translated);
         return translated.trim();
     }
 
