@@ -108,6 +108,9 @@ public final class ContentNodes {
             XLog.d("no TextContentNode found; nothing to substitute");
             return null;
         }
+        // 【临时诊断，定位后删除】只输出结构，不输出正文。
+        ParagraphProbe.logTree("replace", nodes);
+        ParagraphProbe.logTranslation("replace", translated);
         // 优先按分段标记回填：模型逐段翻译并保留 <sN> 标记时，
         // 每个文本节点拿到自己的片段，样式容器与换行结构自然保留。
         // 解析失败（模型漏写/改写/合并标记）则回退到按换行切分的旧逻辑。
