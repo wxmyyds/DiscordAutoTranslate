@@ -137,15 +137,56 @@ public final class IconHitProbe {
         synchronized (LOCK) {
             range = ICON_RANGE.get(view);
         }
-        if (range == null) {
-            return; // 该视图上没有本模块的图标：不产生日志噪音
-        }
         String messageId = HookBridge.get().messageIdOf(view);
+        if (range == null) {
+            // 盲区修正：以前这里直接静默返回，于是「失败但没日志」的情况抓不到。
+            // 现在只在 DOWN 且该视图的文本里确实有图标 span 时才输出，
+            // 用来区分「触点 View 不是我们登记的 View」与「图标 span 已不存在」。
+            if (action == MotionEvent.ACTION_DOWN) {
+                logNoRange(view, (MotionEvent) eventArg, messageId);
+            }
+            return;
+        }
         if (action == MotionEvent.ACTION_DOWN) {
             logDown(view, (MotionEvent) eventArg, range, messageId);
         } else {
             logUp(tracker, view, range, messageId);
         }
+    }
+
+    /**
+     * 触点所在 View 没有登记过图标区间时的诊断。
+     *
+     * <p>只有该 View 的文本里真的含有图标 span 才输出：说明注入与触摸发生在
+     * 不同 View 实例上（列表复用 / 嵌套结构），或者登记被后续渲染覆盖。</p>
+     */
+    private static void logNoRange(View view, MotionEvent ev, @Nullable String messageId) {
+        TextView tv = view instanceof TextView ? (TextView) view : null;
+        if (tv == null) {
+            return;
+        }
+        CharSequence text = tv.getText();
+        if (!(text instanceof android.text.Spanned)) {
+            return;
+        }
+        Object[] icons = ((android.text.Spanned) text)
+                .getSpans(0, text.length(), InlineIconSpan.class);
+        if (icons == null || icons.length == 0) {
+            return; // 这个 View 本来就没图标：确实是无关触摸，不输出
+        }
+        Layout layout = tv.getLayout();
+        int line = layout == null ? -1 : layout.getLineForVertical(
+                (int) ev.getY() - tv.getTotalPaddingTop() + tv.getScrollY());
+        StringBuilder sb = new StringBuilder();
+        for (Object icon : icons) {
+            sb.append('[').append(((android.text.Spanned) text).getSpanStart(icon))
+                    .append(',').append(((android.text.Spanned) text).getSpanEnd(icon))
+                    .append(')');
+        }
+        XLog.d("[hit] down msg=" + messageId + " NO-REGISTERED-RANGE but icons=" + sb
+                + " textLen=" + text.length() + " line=" + line
+                + " view=" + view.getClass().getSimpleName()
+                + "@" + Integer.toHexString(System.identityHashCode(view)));
     }
 
     private static void logDown(View view, MotionEvent ev, int[] range,
@@ -170,7 +211,7 @@ public final class IconHitProbe {
         int iconStart = range[0];
         int iconEnd = range[1];
         boolean offInRange = off >= iconStart && off < iconEnd;
-        int spanCount = countClickableSpans(tv, off);
+        String spans = describeClickableSpans(tv, off);
 
         int iconLine = layout.getLineForOffset(iconStart);
         int textLen = tv.getText() == null ? -1 : tv.getText().length();
@@ -181,10 +222,10 @@ public final class IconHitProbe {
                 + " outsideLine=" + outsideLine
                 + " off=" + off
                 + " icon=[" + iconStart + "," + iconEnd + ") offInRange=" + offInRange
-                + " spans=" + spanCount
+                + " spans=" + spans
                 + " iconLine=" + iconLine + (iconLine == line ? "(same)" : "(diff)")
                 + " textLen=" + textLen + " injectLen=" + range[2]
-                + (textLen == range[2] ? "" : " TEXT-CHANGED-AFTER-INJECT"));
+                + (textLen == range[2] ? "" : " text-grew-by=" + (textLen - range[2])));
     }
 
     private static void logUp(Object tracker, View view, int[] range, @Nullable String messageId) {
@@ -202,30 +243,82 @@ public final class IconHitProbe {
                         ? ((TextView) view).getText().length() : -1));
     }
 
-    /** 用与宿主相同的查询方式数一遍可点击 span，确认代理对象确实在文本里。 */
+    /**
+     * 列出该 offset 上所有可点击 span 的身份与范围，并标出宿主会选择哪一个。
+     *
+     * <p>宿主的选择规则（已从 smali 核对）：在候选数组里取
+     * {@code getTouchPriority()} 最高者；平手时保留数组中<b>靠前</b>的那个，
+     * 而 {@code getSpans} 按 span 插入顺序返回。我们自己注入的 span 总是排在
+     * Discord 正文 span 之后，因此平手时我们输。这段日志用于证实或推翻该推断。</p>
+     */
     @SuppressWarnings("unchecked")
-    private static int countClickableSpans(TextView tv, int offset) {
+    private static String describeClickableSpans(TextView tv, int offset) {
         try {
             CharSequence text = tv.getText();
             if (!(text instanceof android.text.Spanned)) {
-                return -1;
+                return "no-spanned";
             }
             Class<?> iface = sClickableIface;
             if (iface == null) {
-                return -2;
+                return "no-iface";
             }
-            // offset 可能等于文本长度（光标停在末尾），需要夹到合法区间。
             int len = text.length();
             if (len == 0) {
-                return 0;
+                return "empty-text";
             }
             int at = Math.max(0, Math.min(offset, len - 1));
-            Object[] spans = ((android.text.Spanned) text)
-                    .getSpans(at, at, (Class<Object>) iface);
-            return spans == null ? -3 : spans.length;
+            android.text.Spanned sp = (android.text.Spanned) text;
+            Object[] spans = sp.getSpans(at, at, (Class<Object>) iface);
+            if (spans == null || spans.length == 0) {
+                return "0";
+            }
+            // 复算宿主的挑选结果：优先级最高，平手取靠前。
+            int winner = 0;
+            for (int i = 1; i < spans.length; i++) {
+                if (priorityOf(spans[i]) > priorityOf(spans[winner])) {
+                    winner = i;
+                }
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append(spans.length).append('{');
+            for (int i = 0; i < spans.length; i++) {
+                if (i > 0) {
+                    sb.append(' ');
+                }
+                Object s = spans[i];
+                boolean ours = isOurProxy(s);
+                sb.append(ours ? "OURS" : s.getClass().getSimpleName())
+                        .append('[').append(sp.getSpanStart(s))
+                        .append(',').append(sp.getSpanEnd(s)).append(')')
+                        .append(":p").append(priorityOf(s));
+                if (i == winner) {
+                    sb.append("<=HOST-PICK");
+                }
+            }
+            return sb.append('}').toString();
         } catch (Throwable t) {
-            return -4;
+            return "err:" + t.getClass().getSimpleName();
         }
+    }
+
+    /** 取 span 的触摸优先级；接口不可用或调用失败时按 0 计。 */
+    private static int priorityOf(@Nullable Object span) {
+        if (span == null) {
+            return 0;
+        }
+        try {
+            Object p = span.getClass()
+                    .getMethod("getTouchPriority")
+                    .invoke(span);
+            return p instanceof Enum ? ((Enum<?>) p).ordinal() : 0;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 是否为本模块注入的点击代理（类名是 {@code $Proxy}）。 */
+    private static boolean isOurProxy(@Nullable Object span) {
+        return span != null && span.getClass().getName().contains("$Proxy");
     }
 
     /** 供 {@link IconClickSpanFactory} 记录回调确实到达。 */
