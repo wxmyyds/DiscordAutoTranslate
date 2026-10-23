@@ -455,6 +455,17 @@ public class SchedulerTest {
             s.submit("1", "old-hash", "old text", blocking, ALWAYS, new Collector());
             Collector edited = new Collector();
             s.submit("1", "new-hash", "new text", blocking, ALWAYS, edited);
+            // 两个任务都要真正进入引擎后，这里的断言才有意义。
+            //
+            // 旧写法直接 release.countDown() 然后等 edited 回调：两个引擎调用
+            // 是否都已发生取决于线程调度。若线程池先跑完 edited 那个任务的首轮
+            // 尝试（引擎已被调用）而旧任务还没开始执行引擎，calls 只到 1，
+            // 断言就会偶发失败（真机上出现过同一个 commit 两次 CI 结果相反）。
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (calls.get() < 2 && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertEquals("both tasks must reach the engine", 2, calls.get());
             release.countDown();
             edited.await();
             assertEquals("edited content must reach the engine", 2, calls.get());
