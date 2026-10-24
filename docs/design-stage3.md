@@ -327,6 +327,18 @@ lang / ordered）、行内代码与代码块不被翻译、列表节点 items �
      帖子预览挂在 footer（仅图标身份映射，不参与替换）。点击行为与正文一致：
      成功切换原文/译文、失败重试。回复引用仍不注入（无宿主，沿用既有行为）。
    - 帖子预览的 subtitle 为纯 String 且多为作者/品牌信息，暂不翻译。
+2. **投票卡片翻译**：已实现（见 `PollHooks`，smali 核对 Discord 340.13）。
+   - Hook `PollViewHolder.bind`（4 参，`PollMessageAccessory` 自带 messageId）；
+     问题文本 `data.getQuestion().getText()` 与各选项
+     `getAnswers()[i].getAnswer().getPollMedia().getText()` 均为纯 String，
+     全程不经 toSpannable（问题直接 `TextView.setText`，选项经
+     `PollMediaView.setMedia` 构造 DraweeSpanStringBuilder）。
+   - 替换采用绑定参数深层重建：译文就绪的文本经 Kotlin data class 的
+     copy/componentN 通用链换入（PollMessageAccessory → PollData → PollMedia 与
+     PollAnswerAccessory → PollAnswer → PollMedia），未就绪保持原实例；
+     译文完成后重渲染（重新 bind）生效。状态键复用 Embed 的
+     「行消息 ID + 内容哈希」。
+   - 投票卡片不注入行内图标（无 toSpannable 漏斗可借，避免另造注入机制）。
 2. **流式（SSE）响应**：仍只支持一次性 JSON 响应。
 3. **`ColorString` 等样式细节**：译文继承原节点的样式字段，但模型返回的
    译文不含 Markdown 语法时，格式由原结构（而非译文内容）决定，属预期行为。

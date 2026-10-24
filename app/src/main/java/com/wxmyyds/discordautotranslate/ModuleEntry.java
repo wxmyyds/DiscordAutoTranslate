@@ -14,6 +14,7 @@ import com.wxmyyds.discordautotranslate.core.XLog;
 import com.wxmyyds.discordautotranslate.hooks.EmbedHooks;
 import com.wxmyyds.discordautotranslate.hooks.HookBridge;
 import com.wxmyyds.discordautotranslate.hooks.InlineIconSpan;
+import com.wxmyyds.discordautotranslate.hooks.PollHooks;
 import com.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import com.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
 import com.wxmyyds.discordautotranslate.hooks.MessageHooks;
@@ -205,6 +206,8 @@ public class ModuleEntry extends XposedModule {
         hooks.addAll(created);
         // Embed 翻译是增强能力：目标版本缺少对应类时静默降级，不影响核心 Hook 数。
         hooks.addAll(EmbedHooks.install(this, cl));
+        // 投票卡片翻译同为增强能力，独立降级。
+        hooks.addAll(PollHooks.install(this, cl));
         XLog.i("installed " + hooks.size() + " hooks");
     }
 

@@ -72,10 +72,10 @@ final class RowRefresher {
     /**
      * holder 的内容承载视图字段名（smali 已核对，Discord 340.13）：
      * 正文 {@code messageContentView}、富 Embed {@code embedView}、
-     * 帖子预览 {@code postPreviewEmbedView}。
+     * 帖子预览 {@code postPreviewEmbedView}、投票 {@code pollView}。
      */
     private static final String[] CONTENT_VIEW_FIELDS = {
-            "messageContentView", "embedView", "postPreviewEmbedView"};
+            "messageContentView", "embedView", "postPreviewEmbedView", "pollView"};
 
     /** holder 是否以 {@code view} 作为其内容承载视图；据此过滤无关视图的误刷新。 */
     private static boolean ownsContentView(Object holder, View view) {
