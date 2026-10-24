@@ -25,8 +25,9 @@ import java.util.regex.Pattern;
  * 一一取回，于是每个文本节点都拿到自己的译文片段，样式容器与换行结构自然保留。</p>
  *
  * <p><b>边界</b>：只有当一条消息存在 ≥2 个可翻译文本节点时才加标记；单节点消息
- * 保持原样，避免给常见情况引入无意义的标记噪音。解析必须取回全部编号，任何
- * 缺失都整体回退到无标记的旧分配逻辑（宁可少保样式，也不能丢文字）。</p>
+ * 保持原样，避免给常见情况引入无意义的标记噪音。解析是全有或全无：任何缺号、
+ * 重复、错序、空段、标记夹带或占位符都判定协议被模型破坏，调用方必须保留
+ * 原文（不替换），绝不能把损坏的译文显示给用户。</p>
  */
 public final class Segments {
 
@@ -44,6 +45,17 @@ public final class Segments {
 
     /** 形如 {@code <s3>} 的开标记。 */
     private static final Pattern OPEN = Pattern.compile("<s\\s*(\\d+)\\s*>");
+
+    /** 段内容里夹带的标记碎片（开/闭均算）：协议被破坏，会把标记泄漏成字面量。 */
+    private static final Pattern STRAY_MARKER = Pattern.compile("</?s\\s*\\d");
+
+    /**
+     * 模型幻觉出的模板占位符（如 {@code XXXXXX}）。
+     *
+     * <p>实测小模型在长重复文本上会输出 {@code SENSENOVA_..._HHMMSS_XXXXXX}
+     * 这类占位符；正常译文不会出现 4 个以上连续大写 X。</p>
+     */
+    private static final Pattern PLACEHOLDER_RUN = Pattern.compile("X{4,}");
 
     private Segments() {
     }
@@ -110,11 +122,17 @@ public final class Segments {
     /**
      * 从译文里解析出 {@code parts} 个片段。
      *
+     * <p>校验是严格的：编号必须按 {@code 1..parts} 的文档顺序逐一出现，
+     * 每段内容非空、不夹带标记碎片、不含模板占位符，末段之后也不得残留
+     * 标记碎片。任何一条不满足都返回 {@code null}——协议已被模型破坏，
+     * 此时输出不可信（实测：内容复读、尾部乱码、标记泄漏、占位符幻觉），
+     * 调用方必须安全回退为保留原文，不能把损坏结果切分后硬塞回节点树。</p>
+     *
      * @param translated 模型返回的带标记译文
      * @param parts      期望的片段数（= 原文可翻译段落块数，见
      *                   {@link TextExtractor#countSegments}）
-     * @return 按编号顺序排列的片段；任何编号缺失或重复时返回 {@code null}，
-     *         调用方应整体回退
+     * @return 按编号顺序排列的片段（每段去掉首尾空白——提取侧的块本来就是
+     *         边缘无空白的，段内边缘空白是模型噪音）；任何违规返回 {@code null}
      */
     @Nullable
     public static List<String> parse(@Nullable String translated, int parts) {
@@ -122,10 +140,10 @@ public final class Segments {
             return null;
         }
         Matcher open = OPEN.matcher(translated);
-        // 编号 -> 片段。用下标定位，避免依赖模型输出的先后顺序。
         String[] slots = new String[parts + 1];
         int found = 0;
         int searchFrom = 0;
+        int tailFrom = 0;
         while (open.find(searchFrom)) {
             int index;
             try {
@@ -136,19 +154,40 @@ public final class Segments {
             if (index < 1 || index > parts) {
                 return null; // 越界编号：协议被破坏
             }
+            if (index != found + 1) {
+                // 错序或重复：模型重排/改写了段落，编号与原文位置无法对齐。
+                return null;
+            }
             int contentStart = open.end();
             int close = findClose(translated, index, contentStart);
             if (close < 0) {
                 return null;
             }
-            if (slots[index] != null) {
-                return null; // 编号重复：后一段会覆盖前一段，宁可整体回退
+            String content = translated.substring(contentStart, close);
+            if (content.trim().isEmpty()) {
+                // 被标记的段落在提取侧永不为空（空段落不占标记）；
+                // 空段 = 模型丢弃了该段内容。
+                return null;
             }
-            slots[index] = translated.substring(contentStart, close);
+            if (STRAY_MARKER.matcher(content).find()) {
+                // 段内夹带 <sN> / </sN>：回填后标记会作为字面量显示。
+                return null;
+            }
+            if (PLACEHOLDER_RUN.matcher(content).find()) {
+                // 模型幻觉的模板占位符（XXXXXX 之类）。
+                return null;
+            }
+            slots[index] = content.trim();
             found++;
             searchFrom = close;
+            tailFrom = skipClose(translated, index, close);
         }
         if (found != parts) {
+            return null;
+        }
+        if (STRAY_MARKER.matcher(translated).region(tailFrom, translated.length()).find()) {
+            // 末段之后仍残留标记碎片：模型输出了额外/错位的段，
+            // 正文可能已被挪到段外（会被静默丢弃），整体拒绝。
             return null;
         }
         List<String> out = new ArrayList<>(parts);

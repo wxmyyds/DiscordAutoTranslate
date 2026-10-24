@@ -84,6 +84,18 @@ public class TextExtractorSegmentsTest {
         }
     }
 
+    public static final class LinkContentNode {
+        private final List<Object> content;
+
+        public LinkContentNode(List<Object> content) {
+            this.content = content;
+        }
+
+        public List<Object> getContent() {
+            return content;
+        }
+    }
+
     public static final class BulletListContentNode {
         private final List<List<Object>> items;
 
@@ -265,5 +277,60 @@ public class TextExtractorSegmentsTest {
         assertNotNull(r);
         assertEquals("hello\nworld", r.text);
         assertNull(r.segmented);
+    }
+
+    @Test
+    public void urlLinkStaysOutsideTags() {
+        // 裸 URL 链接的显示文本不进请求：模型重新生成 URL 会造成字符损坏
+        // （实测 IJYuv3wZ → lJYuv3wZ）。链接只贡献一个分隔空格。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(list(
+                new TextContentNode("hello"),
+                new NewLineContentNode(),
+                new LinkContentNode(list(new TextContentNode("https://gofile.io/d/rfh2yimO"))),
+                new NewLineContentNode(),
+                new TextContentNode("world"))));
+
+        assertNotNull(r);
+        assertEquals("<s1>hello</s1>\n \n<s2>world</s2>", r.segmented);
+        assertFalse("URL 不得进入请求文本", r.segmented.contains("gofile"));
+        // 纯文本形态不受影响（语言检测与内容哈希依赖它）。
+        assertTrue(r.text.contains("https://gofile.io/d/rfh2yimO"));
+    }
+
+    @Test
+    public void nonUrlLinkTextIsWrappedLikeOtherText() {
+        // 掩码链接的显示文本是自然语言，照常包标记翻译。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(list(
+                new LinkContentNode(list(new TextContentNode("this guide"))),
+                new TextContentNode(" is good"))));
+
+        assertNotNull(r);
+        assertEquals("<s1>this guide</s1> <s2>is good</s2>", r.segmented);
+    }
+
+    @Test
+    public void urlChunkInsideTextNodeIsNotWrapped() {
+        // 文本节点内部的裸 URL 块不占标记、原样保留，计数与回填同口径。
+        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(list(
+                new TextContentNode("hello\n\nhttps://example.com/a\n\nworld"))));
+
+        assertNotNull(r);
+        assertEquals("<s1>hello</s1>\n\nhttps://example.com/a\n\n<s2>world</s2>",
+                r.segmented);
+    }
+
+    @Test
+    public void isUrlLikeMatchesUrlsOnly() {
+        assertTrue(TextExtractor.isUrlLike("https://gofile.io/d/IJYuv3wZ"));
+        assertTrue(TextExtractor.isUrlLike("http://a.b/c"));
+        assertTrue(TextExtractor.isUrlLike("www.example.com"));
+        assertTrue(TextExtractor.isUrlLike("gofile.io/d/rfh2yimO"));
+        assertTrue(TextExtractor.isUrlLike("example.com"));
+        assertFalse("含空格的不是 URL", TextExtractor.isUrlLike("click here"));
+        assertFalse("普通句子不是 URL", TextExtractor.isUrlLike("hello world foo"));
+        assertFalse("版本号不是 URL", TextExtractor.isUrlLike("v1.2"));
+        assertFalse("缩写不是 URL", TextExtractor.isUrlLike("e.g."));
+        assertFalse(TextExtractor.isUrlLike(""));
+        assertFalse(TextExtractor.isUrlLike(null));
     }
 }

@@ -93,11 +93,13 @@ public final class ContentNodes {
      *
      * <p>译文优先按分段标记（{@code <sN>…</sN>}）回填：每个文本节点拿到自己
      * 对应的片段，于是换行结构与加粗/标题等样式容器都按原样保留。模型没有
-     * 遵守标记协议时回退到按换行切分；两者都不改变节点树结构。</p>
+     * 完整遵守标记协议时，安全回退为保留原文（不替换）；两者都不改变节点树
+     * 结构。URL 链接与 URL 文本块不参与翻译，原样保留。</p>
      *
      * @param nodes        原始节点列表
      * @param translated   译文（可能是带标记的模型原文，也可能是纯文本）
-     * @return 新的节点列表；无需变化或任一节点重建失败时返回 null，调用方应保留原文
+     * @return 新的节点列表；无需变化、协议校验失败或任一节点重建失败时返回
+     *         null，调用方应保留原文
      */
     @Nullable
     public static List<Object> replaceText(@Nullable List<?> nodes, String translated) {
@@ -111,19 +113,25 @@ public final class ContentNodes {
         }
         // 优先按分段标记回填：模型逐段翻译并保留 <sN> 标记时，
         // 每个段落块拿到自己的片段，样式容器与换行结构自然保留。
-        // 解析失败（模型漏写/改写/合并标记）则回退到按换行切分的旧逻辑。
+        // 校验失败（漏写/改写/合并/错序标记、空段、标记夹带、占位符）时，
+        // 模型输出已不可信（实测：内容复读、尾部乱码、标记泄漏成字面量），
+        // 安全回退 = 整条保留原文，绝不把损坏译文切分后塞回节点树。
         List<String> parts = Segments.parse(translated, targetCount);
         if (parts == null) {
-            // 解析失败时先剔除标记：否则 <s1> 会被当作普通文字渲染到消息里。
-            String plain = Segments.isSegmented(translated)
-                    ? Segments.strip(translated) : translated;
-            if (plain == null) {
-                plain = "";
+            // targetCount >= 2 等价于「本次请求带分段标记」：提取侧只在
+            // 标记数 ≥2 时启用分段。此时译文必须完整通过协议校验才允许回填。
+            if (targetCount >= 2) {
+                XLog.d("segment protocol violated (parts=" + targetCount
+                        + "); keeping original text");
+                return null;
             }
-            if (Segments.isSegmented(translated)) {
-                XLog.d("segment markers incomplete; falling back to line split");
+            // 单段请求本无标记；仍防御性剔除可能混入的标记后整段回填。
+            String plain = normalize(Segments.strip(translated));
+            if (plain.isEmpty()) {
+                // 剔除后什么都不剩：不能清空消息，保留原文。
+                return null;
             }
-            parts = splitTranslation(normalize(plain), targetCount);
+            parts = splitTranslation(plain, targetCount);
         }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
         // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
@@ -293,6 +301,9 @@ public final class ContentNodes {
             if (CODE_NODES.contains(simple)) {
                 continue; // 代码不翻译
             }
+            if ("LinkContentNode".equals(simple) && TextExtractor.linkDisplayIsUrl(n)) {
+                continue; // 显示文本为 URL 的链接不翻译，与提取阶段同口径
+            }
             List<?> inner = childListOf(n, simple);
             if (inner != null) {
                 count += countTextNodes(inner, depth + 1);
@@ -366,7 +377,8 @@ public final class ContentNodes {
                     rebuilt.append(split.separators.get(i - 1));
                 }
                 String chunk = split.chunks.get(i);
-                if (BlankLines.isBlank(chunk)) {
+                if (BlankLines.isBlank(chunk) || TextExtractor.isUrlLike(chunk)) {
+                    // 空白块或 URL 块不消费片段，原样保留（与计数口径一致）。
                     rebuilt.append(chunk);
                     continue;
                 }
@@ -383,6 +395,12 @@ public final class ContentNodes {
 
         // 代码节点不进入。
         if (CODE_NODES.contains(simple)) {
+            return node;
+        }
+
+        // 显示文本为 URL 的链接不进入：URL 必须由原节点原样渲染，
+        // 不能让模型重新生成（实测会发生字符损坏）。
+        if ("LinkContentNode".equals(simple) && TextExtractor.linkDisplayIsUrl(node)) {
             return node;
         }
 

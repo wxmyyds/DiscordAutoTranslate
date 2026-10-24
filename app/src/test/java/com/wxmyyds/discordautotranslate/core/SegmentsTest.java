@@ -42,11 +42,10 @@ public class SegmentsTest {
     }
 
     @Test
-    public void parseIgnoresOrderOfSegmentsInResponse() {
-        // 模型把段落顺序颠倒时仍按编号归位，不能按出现顺序错位回填。
-        List<String> parts = Segments.parse("<s2>第二</s2><s1>第一</s1>", 2);
-        assertNotNull(parts);
-        assertEquals(Arrays.asList("第一", "第二"), parts);
+    public void parseReturnsNullWhenSegmentsAreOutOfOrder() {
+        // 错序意味着模型重排/改写了段落，编号与原文位置无法对齐；
+        // 按编号硬归位会掩盖错位本身，必须整体拒绝、保留原文。
+        assertNull(Segments.parse("<s2>第二</s2><s1>第一</s1>", 2));
     }
 
     @Test
@@ -120,12 +119,36 @@ public class SegmentsTest {
     }
 
     @Test
-    public void parseAllowsEmptySegmentContent() {
-        // 某个片段本身可以为空（例如用户留白），但编号必须齐全。
-        List<String> parts = Segments.parse("<s1></s1><s2>世界</s2>", 2);
-        assertNotNull(parts);
-        assertEquals("", parts.get(0));
-        assertEquals("世界", parts.get(1));
+    public void parseReturnsNullWhenSegmentContentIsBlank() {
+        // 被标记的段落在提取侧永不为空（空段落不占标记）；空段 = 模型丢内容。
+        assertNull(Segments.parse("<s1></s1><s2>世界</s2>", 2));
+        assertNull(Segments.parse("<s1>  </s1><s2>世界</s2>", 2));
+    }
+
+    @Test
+    public void parseReturnsNullWhenStrayMarkerLeaksIntoContent() {
+        // 实测：模型把改写后的编号（如 <s22>）夹在段内容里，回填后会作为
+        // 字面量显示给用户。必须整体拒绝。
+        assertNull(Segments.parse("<s1>你好 <s22>泄漏</s22> 些</s1>", 1));
+        assertNull(Segments.parse("<s1>你好</s1><s2>世界 </s2>尾部</s2>", 2));
+    }
+
+    @Test
+    public void parseReturnsNullWhenContentHasTemplatePlaceholder() {
+        // 实测：小模型在长重复文本上幻觉出 SENSENOVA_..._XXXXXX 这类占位符。
+        assertNull(Segments.parse(
+                "<s1>SENSENOVA_6_8_FLASH_LITE_YYYMMDD_HHMMSS_XXXXXX</s1>", 1));
+        assertNull(Segments.parse("<s1>占位 XXXXXX 符</s1>", 1));
+        // 三个连续 X 不是占位符形态，不得误伤。
+        List<String> ok = Segments.parse("<s1>版本 XXX 正常</s1>", 1);
+        assertNotNull(ok);
+        assertEquals("版本 XXX 正常", ok.get(0));
+    }
+
+    @Test
+    public void parseReturnsNullWhenExtraTagAppearsAfterAllParts() {
+        // 模型多输出了一段：额外的 <s22> 说明它自行改写了段落结构。
+        assertNull(Segments.parse("<s1>a</s1><s2>b</s2><s22>多</s22>", 2));
     }
 
     @Test

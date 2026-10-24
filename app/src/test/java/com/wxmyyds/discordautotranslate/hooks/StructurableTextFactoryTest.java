@@ -92,14 +92,16 @@ public class StructurableTextFactoryTest {
         EmojiContentNode emoji = new EmojiContentNode("1");
         AnnotatedStructurableText original = new AnnotatedStructurableText(list(shared, emoji, shared));
 
-        Object out = StructurableTextFactory.forTranslation(original, "你好");
+        Object out = StructurableTextFactory.forTranslation(original,
+                "<s1>你好</s1><s2>你好</s2>");
 
         assertTrue(out instanceof AnnotatedStructurableText);
         List<Object> nodes = ((AnnotatedStructurableText) out).getContent();
-        // 末尾共享节点的空片段属于尾部空白，已被裁剪。
-        assertEquals(2, nodes.size());
+        // 共享实例在两个位置各拿一个片段，emoji 原样保留。
+        assertEquals(3, nodes.size());
         assertEquals("你好", ((TextContentNode) nodes.get(0)).getContent());
         assertSame(emoji, nodes.get(1));
+        assertEquals("你好", ((TextContentNode) nodes.get(2)).getContent());
         assertEquals("hello", shared.getContent());
     }
 

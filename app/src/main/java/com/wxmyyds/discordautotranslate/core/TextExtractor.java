@@ -53,7 +53,78 @@ public final class TextExtractor {
     private static final Result EMPTY = new Result("", null, 0, 0, false);
     private static final int MAX_DEPTH = 12;
 
+    /**
+     * URL 形态判定：带 scheme 的完整 URL、www 前缀，或「无空白且以
+     * 点+字母后缀（可带端口/路径）收尾」的裸域名（如 {@code gofile.io/d/xxx}）。
+     *
+     * <p>URL 绝不能交给模型翻译：模型会重新生成它，造成字符损坏
+     * （实测 {@code IJYuv3wZ} 被改成 {@code lJYuv3wZ}）。判定只对整段文本做
+     * 全匹配，普通句子（含空白）与版本号（{@code v1.2}）不会误判。</p>
+     */
+    private static final java.util.regex.Pattern URL_LIKE =
+            java.util.regex.Pattern.compile(
+                    "\\A(https?://|www\\.)\\S+\\z"
+                            + "|\\A\\S+\\.[A-Za-z]{2,}(:\\d+)?(/\\S*)?\\z");
+
     private TextExtractor() {
+    }
+
+    /** 文本（整段）是否为 URL。是 URL 的内容不进请求、不翻译、原样保留。 */
+    public static boolean isUrlLike(@Nullable String s) {
+        if (s == null) {
+            return false;
+        }
+        String t = s.trim();
+        if (t.isEmpty()) {
+            return false;
+        }
+        return URL_LIKE.matcher(t).matches();
+    }
+
+    /**
+     * 链接节点的显示文本是否为 URL。
+     *
+     * <p>裸 URL 消息在 Discord 里渲染为 {@code LinkContentNode}，显示文本就是
+     * URL 本身。这类节点整体按不可翻译结构处理（与行内代码同口径）：
+     * 不进请求、回填时不改动，URL 由原节点原样渲染。带自然语言显示文本的
+     * 链接（掩码链接）不受影响，仍正常翻译。</p>
+     */
+    public static boolean linkDisplayIsUrl(Object linkNode) {
+        Object inner = Reflect.call(
+                Reflect.findMethod(linkNode.getClass(), "getContent", 0), linkNode);
+        if (!(inner instanceof List)) {
+            return false;
+        }
+        StringBuilder sb = new StringBuilder();
+        appendDescendantText((List<?>) inner, sb, 0);
+        return isUrlLike(sb.toString());
+    }
+
+    /** 拼接子树内全部 TextContentNode 文本（用于识别链接显示文本），非文本节点跳过。 */
+    private static void appendDescendantText(List<?> nodes, StringBuilder out, int depth) {
+        if (nodes == null || depth > MAX_DEPTH) {
+            return;
+        }
+        for (Object node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            String name = node.getClass().getSimpleName();
+            if ("TextContentNode".equals(name)) {
+                String s = Reflect.callString(node, "getContent");
+                if (s != null) {
+                    out.append(s);
+                }
+                continue;
+            }
+            if (isTextContainer(name)) {
+                Object inner = Reflect.call(
+                        Reflect.findMethod(node.getClass(), "getContent", 0), node);
+                if (inner instanceof List) {
+                    appendDescendantText((List<?>) inner, out, depth + 1);
+                }
+            }
+        }
     }
 
     @Nullable
@@ -137,10 +208,11 @@ public final class TextExtractor {
     // ------------------------------------------------- 带标记文本（保留段落与样式）
 
     /**
-     * 一个文本节点会被拆成多少个可翻译片段（空段落不计）。
+     * 一个文本节点会被拆成多少个可翻译片段（空段落与 URL 不计）。
      *
      * <p>提取（生成标记）、计数（消费片段）与重建三步必须用同一个口径，
-     * 否则片段会串位。口径：去掉节点首尾空白后按空行切分，非空白的块各算一个。</p>
+     * 否则片段会串位。口径：去掉节点首尾空白后按空行切分，非空白且
+     * 非 URL 的块各算一个。</p>
      */
     public static int countSegments(@Nullable String content) {
         if (content == null) {
@@ -154,7 +226,7 @@ public final class TextExtractor {
         BlankLines.Split split = BlankLines.split(content.substring(lead, tail));
         int count = 0;
         for (String chunk : split.chunks) {
-            if (!BlankLines.isBlank(chunk)) {
+            if (!BlankLines.isBlank(chunk) && !isUrlLike(chunk)) {
                 count++;
             }
         }
@@ -202,6 +274,12 @@ public final class TextExtractor {
         }
         String name = node.getClass().getSimpleName();
         if (isTextContainer(name)) {
+            if ("LinkContentNode".equals(name) && linkDisplayIsUrl(node)) {
+                // 显示文本即 URL 的链接：不进请求。模型会重新生成 URL 造成
+                // 字符损坏；节点由原树原样渲染，这里只留一个分隔空格。
+                out.append(' ');
+                return;
+            }
             Object inner = Reflect.call(
                     Reflect.findMethod(node.getClass(), "getContent", 0), node);
             if (inner instanceof List) {
@@ -237,8 +315,9 @@ public final class TextExtractor {
                         out.append(split.separators.get(i - 1));
                     }
                     String chunk = split.chunks.get(i);
-                    if (BlankLines.isBlank(chunk)) {
-                        // 空段落：不占标记，原样保留。
+                    if (BlankLines.isBlank(chunk) || isUrlLike(chunk)) {
+                        // 空段落或 URL：不占标记，原样保留。URL 交给模型会被
+                        // 重新生成而损坏；回填时这段直接取原文。
                         out.append(chunk);
                         continue;
                     }
