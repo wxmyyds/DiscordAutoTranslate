@@ -171,8 +171,9 @@ public final class InlineIconInjector {
         }
     }
 
+    /** 状态 → 图标 Drawable。Embed/投票路径共用。 */
     @Nullable
-    private static Drawable iconFor(Context context, StateStore.Status status) {
+    static Drawable iconFor(Context context, StateStore.Status status) {
         switch (status) {
             case TRANSLATING:
                 return ModuleResources.progressIcon(context);

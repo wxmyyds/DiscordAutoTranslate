@@ -9,7 +9,6 @@ import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
-import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.XLog;
@@ -74,7 +73,8 @@ public final class PollHooks {
             XLog.d("PollViewHolder/PollMessageAccessory not found; poll translation disabled");
             return handles;
         }
-        Method bind = findBindMethod(holder, accessory, POLL_BIND_PARAM_COUNT, 0);
+        Method bind = Reflect.findMethodAt(holder, "bind",
+                POLL_BIND_PARAM_COUNT, 0, accessory);
         if (bind == null) {
             XLog.w("PollViewHolder.bind not found (paramCount=" + POLL_BIND_PARAM_COUNT + ")");
             return handles;
@@ -140,7 +140,10 @@ public final class PollHooks {
         }
         int count = 0;
         for (Object item : (List<?>) answers) {
-            if (item == null || ++count > MAX_ANSWERS) {
+            if (item == null) {
+                continue;
+            }
+            if (++count > MAX_ANSWERS) {
                 break;
             }
             registerPollText(view, messageId, answerMediaText(item), holder, bind, args);
@@ -342,7 +345,7 @@ public final class PollHooks {
                 0, current.length(), InlineIconSpan.class).length > 0) {
             return; // 本帧已带图标
         }
-        Drawable source = iconFor(questionText.getContext(), entry.status);
+        Drawable source = InlineIconInjector.iconFor(questionText.getContext(), entry.status);
         Drawable tinted = InlineIconSpan.tintForState(
                 source, entry.status, entry.showingOriginal);
         InlineIconSpan icon = InlineIconSpan.create(tinted,
@@ -370,19 +373,6 @@ public final class PollHooks {
         Object binding = Reflect.getField(pollView, "binding");
         Object questionText = Reflect.getField(binding, "questionText");
         return questionText instanceof TextView ? (TextView) questionText : null;
-    }
-
-    @Nullable
-    private static Drawable iconFor(android.content.Context context, StateStore.Status status) {
-        switch (status) {
-            case TRANSLATING:
-                return ModuleResources.progressIcon(context);
-            case FAILED:
-                return ModuleResources.errorIcon(context);
-            case TRANSLATED:
-            default:
-                return ModuleResources.translateIcon(context);
-        }
     }
 
     /**
@@ -515,28 +505,6 @@ public final class PollHooks {
     }
 
     // ------------------------------------------------------------------ 工具
-
-    /** 按名字与参数个数定位 {@code bind}，并要求指定下标的参数与模型类型可赋值匹配。 */
-    @Nullable
-    private static Method findBindMethod(Class<?> holder, Class<?> modelType,
-                                         int paramCount, int modelIndex) {
-        for (Method m : holder.getDeclaredMethods()) {
-            if (!"bind".equals(m.getName())) {
-                continue;
-            }
-            Class<?>[] ps = m.getParameterTypes();
-            if (ps.length != paramCount || modelIndex >= ps.length) {
-                continue;
-            }
-            if (!ps[modelIndex].isAssignableFrom(modelType)
-                    && !modelType.isAssignableFrom(ps[modelIndex])) {
-                continue;
-            }
-            m.setAccessible(true);
-            return m;
-        }
-        return null;
-    }
 
     @Nullable
     private static View asView(@Nullable Object o) {

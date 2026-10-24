@@ -85,6 +85,35 @@ public final class Reflect {
         return null;
     }
 
+    /**
+     * 按「精确方法名 + 参数个数 + 指定下标参数与模型类型可赋值匹配」查找方法。
+     *
+     * <p>{@link #findMethod} 的前缀校验只作用于首参；宿主 bind 方法的模型参数
+     * 位于任意下标（Embed 在 1、帖子预览在 0、投票在 0），因此提供此通用形式。</p>
+     */
+    @Nullable
+    public static Method findMethodAt(Class<?> c, String name, int paramCount,
+                                      int typeIndex, Class<?> type) {
+        if (c == null) {
+            return null;
+        }
+        for (Method m : c.getDeclaredMethods()) {
+            if (!m.getName().equals(name)) {
+                continue;
+            }
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length != paramCount || typeIndex >= ps.length) {
+                continue;
+            }
+            if (!ps[typeIndex].isAssignableFrom(type) && !type.isAssignableFrom(ps[typeIndex])) {
+                continue;
+            }
+            m.setAccessible(true);
+            return m;
+        }
+        return null;
+    }
+
     /** 读取字段（含父类链），失败返回 null。 */
     @Nullable
     public static Object getField(@Nullable Object target, String fieldName) {

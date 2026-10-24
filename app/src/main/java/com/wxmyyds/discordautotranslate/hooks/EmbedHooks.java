@@ -99,7 +99,8 @@ public final class EmbedHooks {
             XLog.d("EmbedViewHolder/EmbedMessageAccessory not found; rich embed translation disabled");
             return;
         }
-        Method bind = findBindMethod(holder, accessory, EMBED_BIND_PARAM_COUNT, 1);
+        Method bind = Reflect.findMethodAt(holder, "bind",
+                EMBED_BIND_PARAM_COUNT, 1, accessory);
         if (bind == null) {
             XLog.w("EmbedViewHolder.bind not found (paramCount=" + EMBED_BIND_PARAM_COUNT + ")");
             return;
@@ -235,7 +236,8 @@ public final class EmbedHooks {
             XLog.d("PostPreviewEmbedViewHolder/PostPreviewEmbed not found; post preview translation disabled");
             return;
         }
-        Method bind = findBindMethod(holder, model, POST_PREVIEW_BIND_PARAM_COUNT, 0);
+        Method bind = Reflect.findMethodAt(holder, "bind",
+                POST_PREVIEW_BIND_PARAM_COUNT, 0, model);
         if (bind == null) {
             XLog.w("PostPreviewEmbedViewHolder.bind not found");
             return;
@@ -368,31 +370,6 @@ public final class EmbedHooks {
     }
 
     // ------------------------------------------------------------------ 工具
-
-    /**
-     * 按名字与参数个数定位 {@code bind}，并要求指定下标的参数与模型类型可赋值匹配。
-     * （{@code Reflect.findMethod} 只能校验首参，这里模型在任意下标。）
-     */
-    @Nullable
-    private static Method findBindMethod(Class<?> holder, Class<?> modelType,
-                                         int paramCount, int modelIndex) {
-        for (Method m : holder.getDeclaredMethods()) {
-            if (!"bind".equals(m.getName())) {
-                continue;
-            }
-            Class<?>[] ps = m.getParameterTypes();
-            if (ps.length != paramCount || modelIndex >= ps.length) {
-                continue;
-            }
-            if (!ps[modelIndex].isAssignableFrom(modelType)
-                    && !modelType.isAssignableFrom(ps[modelIndex])) {
-                continue;
-            }
-            m.setAccessible(true);
-            return m;
-        }
-        return null;
-    }
 
     @Nullable
     private static View asView(@Nullable Object o) {
