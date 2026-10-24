@@ -58,6 +58,19 @@ public final class HookBridge {
     /** 按引用身份反查消息 ID；Discord StructurableText 的 equals() 是按内容比较。 */
     private final IdentityMessageMap contentIdentityToMessageId = new IdentityMessageMap();
 
+    /**
+     * 仅用于图标注入的内容身份映射（键 ← 内容实例）。
+     *
+     * <p>帖子预览的标题是普通 String、不经 toSpannable；图标改挂在卡片内唯一走
+     * toSpannable 的 footer 上。footer 不能进入替换身份映射（否则译文会错误地
+     * 写进 footer），因此单独一张表，只被图标注入器读取。</p>
+     */
+    private final IdentityMessageMap iconOnlyContentToKey = new IdentityMessageMap();
+
+    /** 允许注入行内图标的 Embed 状态键：每张卡片只标一段，避免逐段各挂一个图标。 */
+    private final java.util.Set<String> embedIconKeys =
+            java.util.Collections.newSetFromMap(boundedMap(1024));
+
     private volatile Config.Snapshot config = Config.read(null);
     private volatile Scheduler.Engine engine = new JsonApiEngine(config);
 
@@ -119,6 +132,8 @@ public final class HookBridge {
         rawContent.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
+        iconOnlyContentToKey.clear();
+        embedIconKeys.clear();
     }
 
     private static <K, V> Map<K, V> boundedMap(int maxEntries) {
@@ -216,6 +231,38 @@ public final class HookBridge {
         }
         int i = key.indexOf(EMBED_KEY_PREFIX);
         return i >= 0 ? key.substring(0, i) : key;
+    }
+
+    /** 标记某 Embed 状态键为所在卡片的图标承载段（每张卡片只标一段）。 */
+    public void markEmbedIconKey(String key) {
+        if (key != null) {
+            embedIconKeys.add(key);
+        }
+    }
+
+    /** 该 Embed 状态键当前是否允许注入行内图标。 */
+    public boolean isEmbedIconKey(@Nullable String key) {
+        return key != null && embedIconKeys.contains(key);
+    }
+
+    /**
+     * 登记「仅用于图标」的内容身份：该内容实例反查出的键只驱动图标注入，
+     * 不参与 toSpannable 的译文替换（替换仍走 {@link #resolveMessageId}）。
+     */
+    public void rememberIconOnlyContent(String key, @Nullable Object content) {
+        if (key == null || content == null) {
+            return;
+        }
+        iconOnlyContentToKey.put(content, key);
+    }
+
+    /** 反查仅图标身份映射；未登记返回 null。 */
+    @Nullable
+    public String resolveIconOnlyKey(@Nullable Object content) {
+        if (content == null) {
+            return null;
+        }
+        return iconOnlyContentToKey.get(content);
     }
 
     private static String stateKey(String rowMessageId, String contentHash) {

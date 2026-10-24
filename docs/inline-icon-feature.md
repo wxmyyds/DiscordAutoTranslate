@@ -88,9 +88,11 @@ switch (状态) {
 
 两道条件，任一不满足即不注入：
 
-1. **必须来自正常消息正文**：只有 `MessageContentView.setMessageContent` 路径会设置
-   `CURRENT_HOST`。回复引用（`MessageViewReplyPreview`）与 Embed 直接调 `toSpannable`，
-   不设置宿主 → 天然被排除（需求：回复引用默认不注入）。
+1. **必须有渲染宿主**：`MessageContentView.setMessageContent` 路径与 Embed 绑定
+   （`EmbedHooks`，富 Embed 的描述/标题/首字段与帖子预览的 footer）都会在调用链内
+   设置 `CURRENT_HOST`。回复引用（`MessageViewReplyPreview`）直接调 `toSpannable`，
+   不设置宿主 → 天然被排除（需求：回复引用默认不注入）。Embed 每张卡片只挂
+   一个图标（`HookBridge.markEmbedIconKey` 标记主段）。
 2. **必须有可翻译文本**：`TextExtractor.Result.textNodeCount > 0`。
    纯图片 / 纯表情 / 纯提及消息为 0 → 不注入。
 

@@ -40,8 +40,11 @@ import io.github.libxposed.api.XposedModule;
  * <b>不登记</b>——翻译范围之外，且语言检测器（{@code EnglishDetector}）
  * 也会拦下 URL、过短与非拉丁内容。</p>
  *
- * <p>行内图标不注入 Embed（与既有行为一致）：图标注入依赖
- * {@code setMessageContent} 调用链内的宿主传递，Embed 路径天然不经过。</p>
+ * <p><b>行内图标</b>：富 Embed 每张卡片只挂一个图标——主段优先取描述
+ * （正文主体），回落标题、再回落首个字段；帖子预览挂在 footer 上
+ * （标题是 String 不经 toSpannable，footer 经 {@code rememberIconOnlyContent}
+ * 的「仅图标」身份解析，文本本身不被替换）。图标点击走
+ * {@code onIconClicked(状态键)}：成功切换原文/译文，失败重试，与正文一致。</p>
  */
 public final class EmbedHooks {
 
@@ -105,24 +108,31 @@ public final class EmbedHooks {
                 .setId("dat.embedBind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
+                    // 宿主必须在调用链内传递给 toSpannable（同一线程同步）：
+                    // 行内图标靠它驱动旋转重绘；重渲染时同样需要，故无条件设置。
+                    InlineIconInjector.enterHost(
+                            asView(Reflect.getField(chain.getThisObject(), "itemView")));
                     try {
-                        richEmbedPre(chain, bind);
-                    } catch (Throwable t) {
-                        XLog.w("embed bind hook failed", t);
+                        if (!HookBridge.get().isRerendering()) {
+                            try {
+                                richEmbedPre(chain, bind);
+                            } catch (Throwable t) {
+                                XLog.w("embed bind hook failed", t);
+                            }
+                        }
+                        return chain.proceed();
+                    } finally {
+                        InlineIconInjector.exitHost();
                     }
-                    return chain.proceed();
                 }));
         XLog.i("hooked EmbedViewHolder.bind");
     }
 
     /**
-     * 富 Embed 绑定前置：登记各文本段（标题/描述/字段）的状态键与身份映射，
+     * 富 Embed 绑定前置：登记各文本段（描述/标题/字段）的状态键与身份映射，
      * 注册重渲染目标，并触发翻译。替换由 toSpannable 漏斗按各段自己的键完成。
      */
     private static void richEmbedPre(XposedInterface.Chain chain, Method bind) {
-        if (HookBridge.get().isRerendering()) {
-            return; // 重渲染：登记与触发已由首次绑定完成，避免覆盖实参快照。
-        }
         Object accessory = chain.getArg(1);
         if (accessory == null) {
             return;
@@ -139,21 +149,38 @@ public final class EmbedHooks {
         View view = asView(Reflect.getField(chain.getThisObject(), "itemView"));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
-        registerEmbedText(view, messageId, embed, "getTitle", holder, bind, args);
-        registerEmbedText(view, messageId, embed, "getDescription", holder, bind, args);
-        registerEmbedFields(view, messageId, embed, holder, bind, args);
+        // 图标主段优先取描述（正文主体），缺描述时回落标题、再回落首个字段。
+        String primary = registerEmbedText(view, messageId, embed,
+                "getDescription", holder, bind, args);
+        if (primary == null) {
+            primary = registerEmbedText(view, messageId, embed,
+                    "getTitle", holder, bind, args);
+        }
+        if (primary == null) {
+            primary = registerEmbedFields(view, messageId, embed, holder, bind, args);
+        } else {
+            registerEmbedFields(view, messageId, embed, holder, bind, args);
+        }
+        if (primary != null) {
+            HookBridge.get().markEmbedIconKey(primary);
+        }
     }
 
-    /** 登记单段 StructurableText：状态键 + 身份映射 + 重渲染目标 + 触发翻译。 */
-    private static void registerEmbedText(@Nullable View view, String messageId, Object owner,
-                                          String getter, Object holder, Method bind, Object[] args) {
+    /** 登记单段 StructurableText：状态键 + 身份映射 + 重渲染目标 + 触发翻译。
+     *
+     * @return 该段的状态键；文本为空或类型未知时返回 null
+     */
+    @Nullable
+    private static String registerEmbedText(@Nullable View view, String messageId,
+                                            Object owner, String getter,
+                                            Object holder, Method bind, Object[] args) {
         Object text = Reflect.call(Reflect.findMethod(owner.getClass(), getter, 0), owner);
         if (text == null) {
-            return;
+            return null;
         }
         String key = HookBridge.get().embedStateKey(messageId, text);
         if (key == null) {
-            return; // 空文本或未知 StructurableText 类型
+            return null; // 空文本或未知 StructurableText 类型
         }
         HookBridge.get().rememberContent(key, text);
         if (view != null) {
@@ -162,24 +189,40 @@ public final class EmbedHooks {
         RerenderRegistry.register(key, view, holder, bind, args);
         HookBridge.get().onMessageBound(view, key, text);
         XLog.d("embed text registered msg=" + messageId + " via " + getter);
+        return key;
     }
 
-    /** Embed 字段：name 与 value 均为 StructurableText，同为用户可见内容。 */
-    private static void registerEmbedFields(@Nullable View view, String messageId, Object embed,
-                                            Object holder, Method bind, Object[] args) {
+    /** Embed 字段：name 与 value 均为 StructurableText，同为用户可见内容。
+     *
+     * @return 首个成功登记的字段状态键（用作图标主段回落）
+     */
+    @Nullable
+    private static String registerEmbedFields(@Nullable View view, String messageId,
+                                              Object embed, Object holder, Method bind,
+                                              Object[] args) {
         Object fields = Reflect.call(Reflect.findMethod(
                 embed.getClass(), "getFields", 0), embed);
         if (!(fields instanceof List)) {
-            return;
+            return null;
         }
+        String first = null;
         int count = 0;
         for (Object field : (List<?>) fields) {
             if (field == null || ++count > MAX_FIELDS) {
                 break;
             }
-            registerEmbedText(view, messageId, field, "getName", holder, bind, args);
-            registerEmbedText(view, messageId, field, "getValue", holder, bind, args);
+            String nameKey = registerEmbedText(view, messageId, field,
+                    "getName", holder, bind, args);
+            if (first == null) {
+                first = nameKey;
+            }
+            String valueKey = registerEmbedText(view, messageId, field,
+                    "getValue", holder, bind, args);
+            if (first == null) {
+                first = valueKey;
+            }
         }
+        return first;
     }
 
     // ---------------------------------------------------------- 原生帖子预览（X 等）
@@ -201,12 +244,21 @@ public final class EmbedHooks {
                 .setId("dat.postPreviewBind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
+                    // 同富 Embed：宿主在调用链内传递，供 footer 上的行内图标使用。
+                    InlineIconInjector.enterHost(
+                            asView(Reflect.getField(chain.getThisObject(), "itemView")));
                     try {
-                        postPreviewPre(chain, bind);
-                    } catch (Throwable t) {
-                        XLog.w("post preview bind hook failed", t);
+                        if (!HookBridge.get().isRerendering()) {
+                            try {
+                                postPreviewPre(chain, bind);
+                            } catch (Throwable t) {
+                                XLog.w("post preview bind hook failed", t);
+                            }
+                        }
+                        return chain.proceed();
+                    } finally {
+                        InlineIconInjector.exitHost();
                     }
-                    return chain.proceed();
                 }));
         XLog.i("hooked PostPreviewEmbedViewHolder.bind");
     }
@@ -217,13 +269,12 @@ public final class EmbedHooks {
      *   <li>用 {@link StructurableTextFactory#primitive} 把标题包成
      *       PrimitiveStructurableText，才能进入现有翻译管线；</li>
      *   <li>译文替换不靠身份映射，而由
-     *       {@code setPostPreviewEmbed} 的参数替换 Hook 完成。</li>
+     *       {@code setPostPreviewEmbed} 的参数替换 Hook 完成；</li>
+     *   <li>图标挂在 footer（卡片内唯一走 toSpannable 的字段）上：
+     *       仅图标身份映射，footer 文本本身不被替换。</li>
      * </ol>
      */
     private static void postPreviewPre(XposedInterface.Chain chain, Method bind) {
-        if (HookBridge.get().isRerendering()) {
-            return;
-        }
         Object model = chain.getArg(0);
         if (model == null) {
             return;
@@ -247,6 +298,9 @@ public final class EmbedHooks {
         RerenderRegistry.register(key, view, holder, bind, args);
         // 正文语义上等价于一条纯文本消息：走同一条翻译触发路径。
         HookBridge.get().onMessageBound(view, key, wrapped);
+        Object footer = Reflect.call(Reflect.findMethod(
+                model.getClass(), "getFooter", 0), model);
+        HookBridge.get().rememberIconOnlyContent(key, footer);
         XLog.d("post preview title registered msg=" + messageId);
     }
 

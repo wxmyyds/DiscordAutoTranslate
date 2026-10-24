@@ -76,4 +76,30 @@ public class EmbedStateKeyTest {
         assertFalse(RerenderRegistry.stillBound(title, ROW));
         assertFalse(RerenderRegistry.stillBound(ROW, title));
     }
+
+    @Test
+    public void iconKeyMarkingIsExplicitPerCard() {
+        HookBridge bridge = HookBridge.get();
+        String key = bridge.embedTextStateKey(ROW, "icon marker text");
+        // 未标记的 Embed 键不允许注入（每张卡片只挂一个图标）。
+        assertFalse(bridge.isEmbedIconKey(key));
+        bridge.markEmbedIconKey(key);
+        assertTrue(bridge.isEmbedIconKey(key));
+        assertFalse(bridge.isEmbedIconKey(null));
+    }
+
+    @Test
+    public void iconOnlyIdentityIsSeparateFromSubstitutionIdentity() {
+        HookBridge bridge = HookBridge.get();
+        String key = bridge.embedTextStateKey(ROW, "icon only probe");
+        Object footer = new Object();
+        assertNull(bridge.resolveIconOnlyKey(footer));
+        bridge.rememberIconOnlyContent(key, footer);
+        assertEquals(key, bridge.resolveIconOnlyKey(footer));
+        // 关键约束：仅图标映射不得泄漏进替换身份，否则译文会写进 footer。
+        assertNull(bridge.resolveMessageId(footer));
+        // null 容错。
+        bridge.rememberIconOnlyContent(key, null);
+        assertNull(bridge.resolveIconOnlyKey(null));
+    }
 }
