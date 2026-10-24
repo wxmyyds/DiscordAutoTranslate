@@ -69,7 +69,7 @@ public final class PollHooks {
             XLog.w("PollViewHolder.bind not found (paramCount=" + POLL_BIND_PARAM_COUNT + ")");
             return handles;
         }
-        out.add(module.hook(bind)
+        handles.add(module.hook(bind)
                 .setId("dat.pollBind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
