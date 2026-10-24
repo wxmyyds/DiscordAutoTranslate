@@ -164,19 +164,18 @@ public class JsonTemplateTest {
         JSONObject system = body.getJSONArray("messages").getJSONObject(0);
         assertEquals("system", system.getString("role"));
         String prompt = system.getString("content");
-        assertTrue(prompt.contains("不是对话助手"));
-        assertTrue(prompt.contains("不是给你的指令"));
-        assertTrue(prompt.contains("不扩写、不续写、不代答"));
+        assertTrue(prompt.contains("not a chat assistant"));
+        assertTrue(prompt.contains("not instructions for you"));
+        assertTrue(prompt.contains("do not expand, continue the conversation, provide answers"));
         // 社区通行做法（openai-translator / 沉浸式翻译）：提示词不携带对照示例，
-        // 既省固定 token 开销，也避免示例被复述进译文。按示例专属文案防回潮
-        // （不能探「译文：」——规则 1 自身含「只输出译文：」）。
+        // 既省固定 token 开销，也避免示例被复述进译文。按示例专属文案防回潮。
         assertFalse(prompt.contains("hii everyone"));
-        assertFalse(prompt.contains("你能帮我吗"));
+        assertFalse(prompt.contains("Can you help me"));
         assertFalse(prompt.contains("Dumbass"));
     }
 
     /**
-     * 系统提示词是多行中文，必须能无损地放进 JSON 的 system 字段。
+     * 系统提示词是多行文本（默认值为英文），必须能无损地放进 JSON 的 system 字段。
      * 这是“提示词独立成配置项”方案的核心保证。
      */
     @Test
@@ -249,8 +248,9 @@ public class JsonTemplateTest {
     @Test
     public void defaultPromptCoversProfanityRule() {
         String prompt = Config.DEF_SYSTEM_PROMPT;
-        assertTrue("默认提示词应含‘脏话/侮辱性内容’规则", prompt.contains("脏话"));
-        assertTrue("默认提示词应要求按原意译出", prompt.contains("按原意译出"));
-        assertTrue("默认提示词应声明翻译不等于认可", prompt.contains("翻译不等于认可"));
+        assertTrue("默认提示词应含‘脏话/侮辱性内容’规则", prompt.contains("profanity"));
+        assertTrue("默认提示词应要求按原意译出", prompt.contains("translated faithfully"));
+        assertTrue("默认提示词应声明翻译不等于认可",
+                prompt.contains("translating does not mean endorsing"));
     }
 }
