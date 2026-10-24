@@ -1,9 +1,15 @@
 package com.wxmyyds.discordautotranslate.hooks;
 
+import android.graphics.drawable.Drawable;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.view.MotionEvent;
 import android.view.View;
+import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
+import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.XLog;
@@ -33,8 +39,12 @@ import io.github.libxposed.api.XposedModule;
  * 文本保持原实例。译文完成后的重渲染（重新 bind）使替换生效。</p>
  *
  * <p>状态键复用 {@link HookBridge#embedTextStateKey}（行消息 ID + 内容哈希），
- * 与正文/Embed 共用整套翻译管线且互不覆盖。投票卡片<b>不注入行内图标</b>：
- * 图标注入依赖 toSpannable 漏斗，投票没有可借道的文本渲染点。</p>
+ * 与正文/Embed 共用整套翻译管线且互不覆盖。</p>
+ *
+ * <p><b>行内图标</b>：挂在<b>问题</b>文本末尾（{@code pollView.binding.questionText}）。
+ * 该视图不在宿主的 NestedClickableSpan 分发链上，命中判定由自建触摸监听
+ * （触点 → 字符位置 → span 区间）完成；点击行为与正文一致（成功切换原文/译文、
+ * 失败重试），旋转动画复用 {@link InlineIconSpan}。选项文本不挂图标。</p>
  */
 public final class PollHooks {
 
@@ -87,7 +97,15 @@ public final class PollHooks {
                     } catch (Throwable t) {
                         XLog.w("poll accessory rebuild failed", t);
                     }
-                    return chain.proceed(renderArgs);
+                    Object result = chain.proceed(renderArgs);
+                    // 图标同样无状态追加：bind 后问题文本已定型，随当前状态着色。
+                    try {
+                        attachQuestionIcon(chain.getArg(0),
+                                asView(Reflect.getField(chain.getThisObject(), "itemView")));
+                    } catch (Throwable t) {
+                        XLog.w("poll question icon failed", t);
+                    }
+                    return result;
                 }));
         XLog.i("hooked PollViewHolder.bind");
         return handles;
@@ -277,6 +295,129 @@ public final class PollHooks {
         }
         Object rebuilt = copyWithReplaced(media, text, e.translatedText);
         return rebuilt != null ? rebuilt : media;
+    }
+
+    // ------------------------------------------------------------------ 问题图标
+
+    /**
+     * 在投票问题文本末尾追加行内图标。
+     *
+     * <p>路径（smali 已核对）：{@code pollView.binding.questionText} 是普通
+     * {@code TextView.setText(String)} 直排，不在宿主的 NestedClickableSpan
+     * 分发链上，因此命中判定由 {@link PollIconTouch} 自行按触点换算字符位置完成，
+     * 点击直接进入 {@code onIconClicked(状态键)}，与正文图标行为一致。</p>
+     */
+    private static void attachQuestionIcon(@Nullable Object accessory, @Nullable View pollView) {
+        if (accessory == null || pollView == null) {
+            return;
+        }
+        String messageId = Reflect.callString(accessory, "getMessageId");
+        if (messageId == null) {
+            return;
+        }
+        Object data = Reflect.call(Reflect.findMethod(
+                accessory.getClass(), "getData", 0), accessory);
+        Object questionMedia = data == null ? null : Reflect.call(
+                Reflect.findMethod(data.getClass(), "getQuestion", 0), data);
+        String rawText = questionMedia == null
+                ? null : Reflect.callString(questionMedia, "getText");
+        if (rawText == null) {
+            return;
+        }
+        String key = HookBridge.get().embedTextStateKey(messageId, rawText);
+        if (key == null) {
+            return;
+        }
+        StateStore.Entry entry = StateStore.get().peek(key);
+        // 未触发翻译（IDLE/无条目）不显示，与正文注入器口径一致。
+        if (entry == null || entry.status == StateStore.Status.IDLE) {
+            return;
+        }
+        TextView questionText = questionTextViewOf(pollView);
+        if (questionText == null) {
+            return;
+        }
+        CharSequence current = questionText.getText();
+        if (current instanceof Spanned && ((Spanned) current).getSpans(
+                0, current.length(), InlineIconSpan.class).length > 0) {
+            return; // 本帧已带图标
+        }
+        Drawable source = iconFor(questionText.getContext(), entry.status);
+        Drawable tinted = InlineIconSpan.tintForState(
+                source, entry.status, entry.showingOriginal);
+        InlineIconSpan icon = InlineIconSpan.create(tinted,
+                questionText.getContext().getResources().getDisplayMetrics().density,
+                entry.status, key);
+        if (icon == null) {
+            return;
+        }
+        SpannableStringBuilder ssb = new SpannableStringBuilder(
+                current == null ? "" : current);
+        // 与正文注入相同的两格结构：零宽点击前置 + 图标占位；span 覆盖两格，
+        // 触点落在任一格都命中。问题视图无其他触摸行为，监听器可安全接管。
+        int start = ssb.length();
+        ssb.append('\uFEFF').append('\u00A0');
+        ssb.setSpan(icon, start, start + 2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        questionText.setText(ssb);
+        icon.bindHost(questionText);
+        questionText.setOnTouchListener(new PollIconTouch(key));
+        XLog.d("poll question icon attached status=" + entry.status);
+    }
+
+    /** 取投票问题文本视图：{@code pollView.binding.questionText}。 */
+    @Nullable
+    private static TextView questionTextViewOf(View pollView) {
+        Object binding = Reflect.getField(pollView, "binding");
+        Object questionText = Reflect.getField(binding, "questionText");
+        return questionText instanceof TextView ? (TextView) questionText : null;
+    }
+
+    @Nullable
+    private static Drawable iconFor(android.content.Context context, StateStore.Status status) {
+        switch (status) {
+            case TRANSLATING:
+                return ModuleResources.progressIcon(context);
+            case FAILED:
+                return ModuleResources.errorIcon(context);
+            case TRANSLATED:
+            default:
+                return ModuleResources.translateIcon(context);
+        }
+    }
+
+    /**
+     * 图标触摸命中：把触点换算为字符位置，落在图标 span 区间则触发切换/重试。
+     * 其余情况一律放行（返回 false），不影响投票本身的交互。
+     */
+    private static final class PollIconTouch implements View.OnTouchListener {
+        private final String key;
+
+        PollIconTouch(String key) {
+            this.key = key;
+        }
+
+        @Override
+        public boolean onTouch(View v, MotionEvent event) {
+            if (event.getAction() != MotionEvent.ACTION_UP || !(v instanceof TextView)) {
+                return false;
+            }
+            TextView tv = (TextView) v;
+            android.text.Layout layout = tv.getLayout();
+            CharSequence text = tv.getText();
+            if (layout == null || !(text instanceof Spanned)) {
+                return false;
+            }
+            int line = layout.getLineForVertical(
+                    (int) event.getY() - tv.getTotalPaddingTop() + tv.getScrollY());
+            float x = event.getX() - tv.getTotalPaddingLeft() + tv.getScrollX();
+            int offset = layout.getOffsetForHorizontal(line, x);
+            if (((Spanned) text).getSpans(offset, offset, InlineIconSpan.class).length == 0) {
+                return false;
+            }
+            HookBridge.get().onIconClicked(key);
+            v.performClick();
+            return true;
+        }
     }
 
     // ------------------------------------------------------------------ 通用 copy

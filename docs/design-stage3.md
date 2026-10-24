@@ -338,7 +338,10 @@ lang / ordered）、行内代码与代码块不被翻译、列表节点 items �
      PollAnswerAccessory → PollAnswer → PollMedia），未就绪保持原实例；
      译文完成后重渲染（重新 bind）生效。状态键复用 Embed 的
      「行消息 ID + 内容哈希」。
-   - 投票卡片不注入行内图标（无 toSpannable 漏斗可借，避免另造注入机制）。
+   - 行内图标挂在问题文本末尾（`pollView.binding.questionText`）：该视图不在
+     宿主的 NestedClickableSpan 分发链上，命中判定由自建触摸监听完成
+     （触点 → 字符位置 → span 区间），点击切换/重试与正文一致；
+     旋转动画复用 InlineIconSpan。选项文本不挂图标。
 2. **流式（SSE）响应**：仍只支持一次性 JSON 响应。
 3. **`ColorString` 等样式细节**：译文继承原节点的样式字段，但模型返回的
    译文不含 Markdown 语法时，格式由原结构（而非译文内容）决定，属预期行为。
