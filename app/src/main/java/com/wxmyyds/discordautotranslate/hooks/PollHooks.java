@@ -387,7 +387,11 @@ public final class PollHooks {
 
     /**
      * 图标触摸命中：把触点换算为字符位置，落在图标 span 区间则触发切换/重试。
-     * 其余情况一律放行（返回 false），不影响投票本身的交互。
+     *
+     * <p><b>必须在 ACTION_DOWN 命中时就认领手势</b>（返回 true）：问题视图自身
+     * 不可点击，若 DOWN 放行，手势会被上层可点击的行/卡片认领，UP 不会再送到
+     * 本视图。命中 DOWN 后整条手势归本视图，UP 到达即触发；其余情况一律放行，
+     * 不影响投票与消息本身的交互。</p>
      */
     private static final class PollIconTouch implements View.OnTouchListener {
         private final String key;
@@ -398,10 +402,27 @@ public final class PollHooks {
 
         @Override
         public boolean onTouch(View v, MotionEvent event) {
-            if (event.getAction() != MotionEvent.ACTION_UP || !(v instanceof TextView)) {
+            if (!(v instanceof TextView)) {
                 return false;
             }
             TextView tv = (TextView) v;
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    return hitIcon(tv, event);
+                case MotionEvent.ACTION_UP:
+                    if (hitIcon(tv, event)) {
+                        XLog.d("poll icon clicked key=" + key);
+                        HookBridge.get().onIconClicked(key);
+                        tv.performClick();
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        private static boolean hitIcon(TextView tv, MotionEvent event) {
             android.text.Layout layout = tv.getLayout();
             CharSequence text = tv.getText();
             if (layout == null || !(text instanceof Spanned)) {
@@ -411,12 +432,7 @@ public final class PollHooks {
                     (int) event.getY() - tv.getTotalPaddingTop() + tv.getScrollY());
             float x = event.getX() - tv.getTotalPaddingLeft() + tv.getScrollX();
             int offset = layout.getOffsetForHorizontal(line, x);
-            if (((Spanned) text).getSpans(offset, offset, InlineIconSpan.class).length == 0) {
-                return false;
-            }
-            HookBridge.get().onIconClicked(key);
-            v.performClick();
-            return true;
+            return ((Spanned) text).getSpans(offset, offset, InlineIconSpan.class).length > 0;
         }
     }
 
