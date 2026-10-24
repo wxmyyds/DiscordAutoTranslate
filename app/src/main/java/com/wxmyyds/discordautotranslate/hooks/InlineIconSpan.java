@@ -39,7 +39,9 @@ import java.util.WeakHashMap;
  * <h3>旋转动画如何可靠重绘（本类的关键约束）</h3>
  * <p>{@code ReplacementSpan} 本身不会触发重绘，必须由外部驱动。行内 span 拿不到
  * 宿主 {@code TextView}，因此注入时通过 {@link #bindHost} 记下宿主 View（弱引用），
- * 翻译中状态用 {@code View.postOnAnimation} 自驱动重绘。</p>
+ * 翻译中状态用 {@code View.postOnAnimation} 自驱动重绘。宿主是 Embed 卡片
+ * （ViewGroup）时，每帧除宿主外还需逐个失效其内部的 TextView——父视图的
+ * invalidate 不会重录子视图的显示列表，见 {@link #spinTargets}。</p>
  *
  * <p>「翻译中图标卡死不动」有四条已知成因，本类逐一防御：</p>
  * <ol>
@@ -85,6 +87,10 @@ public final class InlineIconSpan extends ImageSpan {
     /** 转一圈用时（毫秒）。视角按此换算，与刷新率解耦。 */
     private static final long SPIN_DURATION_MS = 900L;
 
+    /** 收集失效目标的深度与数量上限，防御异常视图树。 */
+    private static final int SPIN_TARGET_MAX_DEPTH = 8;
+    private static final int SPIN_TARGET_MAX_COUNT = 24;
+
     /**
      * 当前在某个视图上承担动画的 span。
      *
@@ -109,6 +115,18 @@ public final class InlineIconSpan extends ImageSpan {
     /** 宿主视图。弱引用：既不固定视图，也避免与 {@link #ANIMATING} 形成强引用环。 */
     @Nullable
     private WeakReference<View> host;
+
+    /**
+     * 每帧需要失效的视图集合。
+     *
+     * <p>正文路径的宿主就是持有图标的 TextView，失效宿主即可重画。Embed 路径的
+     * 宿主是整张卡片（ViewGroup）：父视图 invalidate 不会重录子 TextView 的
+     * 显示列表（Android 显示列表按视图各自的脏标记重录），图标所在的具体
+     * TextView 不失效、角度变化就不可见。因此宿主为非 TextView 时，
+     * 绑定时把卡片内全部 TextView 收集进来，逐个失效。</p>
+     */
+    private final List<WeakReference<android.widget.TextView>> spinTargets = new ArrayList<>();
+
     /** 当前视角（度）。 */
     private volatile float angle;
     /** 动画是否应当存在（翻译中即为真）。detach 不会改变它。 */
@@ -229,7 +247,49 @@ public final class InlineIconSpan extends ImageSpan {
         this.active = true;
         // 同一实例重复添加会被 View 去重（addOnAttachStateChangeListener）。
         view.addOnAttachStateChangeListener(attachListener);
+        collectSpinTargets(view);
         startSpin();
+    }
+
+    /** 收集每帧失效目标：宿主本身，加上宿主内部的全部 TextView（Embed 卡片场景）。 */
+    private void collectSpinTargets(View hostView) {
+        spinTargets.clear();
+        if (hostView instanceof android.widget.TextView) {
+            spinTargets.add(new WeakReference<>((android.widget.TextView) hostView));
+            return;
+        }
+        collectTextViews(hostView, 0);
+    }
+
+    /** 深度与数量有界，防御异常深的视图树。 */
+    private void collectTextViews(View view, int depth) {
+        if (depth > SPIN_TARGET_MAX_DEPTH || spinTargets.size() >= SPIN_TARGET_MAX_COUNT) {
+            return;
+        }
+        if (!(view instanceof android.view.ViewGroup)) {
+            return;
+        }
+        android.view.ViewGroup group = (android.view.ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof android.widget.TextView) {
+                spinTargets.add(new WeakReference<>((android.widget.TextView) child));
+            }
+            collectTextViews(child, depth + 1);
+        }
+    }
+
+    /** 失效全部目标：已回收的引用顺手清理。 */
+    private void invalidateSpinTargets() {
+        for (java.util.Iterator<WeakReference<android.widget.TextView>> it =
+                spinTargets.iterator(); it.hasNext(); ) {
+            android.widget.TextView target = it.next().get();
+            if (target == null) {
+                it.remove();
+                continue;
+            }
+            target.invalidate();
+        }
     }
 
     /** 启动（或继续）排帧。需在主线程调用。 */
@@ -280,7 +340,7 @@ public final class InlineIconSpan extends ImageSpan {
         }
         angle = InlineIconGeometry.angleForElapsed(
                 SystemClock.uptimeMillis() - spinStartMs, SPIN_DURATION_MS);
-        v.invalidate();
+        invalidateSpinTargets();
         v.postOnAnimation(self);
     }
 

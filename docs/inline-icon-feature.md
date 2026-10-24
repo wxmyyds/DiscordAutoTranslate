@@ -51,6 +51,9 @@ finally { InlineIconInjector.exitHost(); }
 
 **旋转的可靠重绘与停止**：`ReplacementSpan` 不会自行触发重绘，因此
 `InlineIconSpan` 用 `host.postOnAnimation` 自驱动，每次 `invalidate()`。
+宿主是 Embed 卡片（ViewGroup）时需额外失效其内部全部 TextView：
+父视图的 invalidate 不会重录子视图的显示列表，图标所在 TextView 不失效
+则角度变化不可见（正文路径宿主即 TextView，行为不变）。
 
 「翻译中图标卡死不动」有四条已知成因，均已防御：
 
