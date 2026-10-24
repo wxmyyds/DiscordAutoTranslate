@@ -2,8 +2,6 @@ package com.wxmyyds.discordautotranslate.core;
 
 import androidx.annotation.Nullable;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -471,22 +469,12 @@ public final class Scheduler {
 
     /** 稳定内容哈希：内容 + 配置版本（需求 §5.6 缓存键要求）。 */
     public static String contentHash(String text, String configVersion) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update(text.getBytes(StandardCharsets.UTF_8));
-            md.update((byte) 0);
-            md.update(configVersion.getBytes(StandardCharsets.UTF_8));
-            byte[] d = md.digest();
-            StringBuilder sb = new StringBuilder(d.length * 2);
-            for (byte b : d) {
-                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
-                sb.append(Character.forDigit(b & 0xF, 16));
-            }
-            return sb.toString();
-        } catch (Throwable t) {
-            // 理论不可达；退化为稳定但非加密强度的哈希。
-            return Integer.toHexString((text + "|" + configVersion).hashCode());
+        String hex = Sha256.digestHex(text, configVersion);
+        if (hex != null) {
+            return hex;
         }
+        // 理论不可达；退化为稳定但非加密强度的哈希。
+        return Integer.toHexString((text + "|" + configVersion).hashCode());
     }
 
     /** 主线程投递工具。Discord 消息渲染全部发生在主线程。 */

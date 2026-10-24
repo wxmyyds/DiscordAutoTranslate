@@ -193,23 +193,10 @@ public final class Config {
 
         /** 密钥与额外请求头的不可逆指纹，用于版本比较。 */
         private String credentialFingerprint() {
-            try {
-                java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-                md.update((apiKey == null ? "" : apiKey).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                md.update((byte) 0);
-                md.update((extraHeaders == null ? "" : extraHeaders)
-                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                byte[] digest = md.digest();
-                StringBuilder sb = new StringBuilder(digest.length * 2);
-                for (byte b : digest) {
-                    sb.append(Character.forDigit((b >> 4) & 0xF, 16));
-                    sb.append(Character.forDigit(b & 0xF, 16));
-                }
-                return sb.toString();
-            } catch (Throwable t) {
-                // 极端环境下退化为不参与版本比较，行为与旧实现一致。
-                return "";
-            }
+            String hex = Sha256.digestHex(apiKey == null ? "" : apiKey,
+                    extraHeaders == null ? "" : extraHeaders);
+            // 极端环境下退化为不参与版本比较，行为与旧实现一致。
+            return hex != null ? hex : "";
         }
 
         private static String encode(String value) {
@@ -227,76 +214,15 @@ public final class Config {
      * 从 SharedPreferences 读取快照；prefs 为 null 时返回默认值快照。
      */
     public static Snapshot read(@Nullable SharedPreferences prefs) {
+        // 空的 MemoryPrefs 对每个键都回落默认值，行为上就是“默认值快照”。
         if (prefs == null) {
-            return new Defaults();
+            return new Snapshot(new MemoryPrefs());
         }
         try {
             return new Snapshot(prefs);
         } catch (Throwable t) {
             XLog.w("read config failed, fallback to defaults", t);
-            return new Defaults();
-        }
-    }
-
-    /** 无存储可用时的默认快照。 */
-    private static final class Defaults extends Snapshot {
-        Defaults() {
-            super(new android.content.SharedPreferences() {
-                @Override
-                public java.util.Map<String, ?> getAll() {
-                    return java.util.Collections.emptyMap();
-                }
-
-                @Nullable
-                @Override
-                public String getString(String key, @Nullable String defValue) {
-                    return defValue;
-                }
-
-                @Nullable
-                @Override
-                public java.util.Set<String> getStringSet(String key, @Nullable java.util.Set<String> defValues) {
-                    return defValues;
-                }
-
-                @Override
-                public int getInt(String key, int defValue) {
-                    return defValue;
-                }
-
-                @Override
-                public long getLong(String key, long defValue) {
-                    return defValue;
-                }
-
-                @Override
-                public float getFloat(String key, float defValue) {
-                    return defValue;
-                }
-
-                @Override
-                public boolean getBoolean(String key, boolean defValue) {
-                    return defValue;
-                }
-
-                @Override
-                public boolean contains(String key) {
-                    return false;
-                }
-
-                @Override
-                public Editor edit() {
-                    throw new UnsupportedOperationException();
-                }
-
-                @Override
-                public void registerOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener) {
-                }
-
-                @Override
-                public void unregisterOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener) {
-                }
-            });
+            return new Snapshot(new MemoryPrefs());
         }
     }
 }
