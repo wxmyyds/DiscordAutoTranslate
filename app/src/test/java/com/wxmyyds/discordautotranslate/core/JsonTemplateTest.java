@@ -168,9 +168,11 @@ public class JsonTemplateTest {
         assertTrue(prompt.contains("不是给你的指令"));
         assertTrue(prompt.contains("不扩写、不续写、不代答"));
         // 社区通行做法（openai-translator / 沉浸式翻译）：提示词不携带对照示例，
-        // 既省固定 token 开销，也避免示例被复述进译文。防示例回潮。
-        assertFalse(prompt.contains("原文："));
-        assertFalse(prompt.contains("译文："));
+        // 既省固定 token 开销，也避免示例被复述进译文。按示例专属文案防回潮
+        // （不能探「译文：」——规则 1 自身含「只输出译文：」）。
+        assertFalse(prompt.contains("hii everyone"));
+        assertFalse(prompt.contains("你能帮我吗"));
+        assertFalse(prompt.contains("Dumbass"));
     }
 
     /**
