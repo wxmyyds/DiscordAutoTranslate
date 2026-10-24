@@ -83,8 +83,8 @@ public final class JsonPath {
         }
     }
 
-    /** 解析完整 JSON 文本；只允许尾随空白。 */
-    private static Object parse(String json) throws TranslationException {
+    /** 解析完整 JSON 文本；只允许尾随空白。供协议层做结构化提取复用。 */
+    static Object parse(String json) throws TranslationException {
         if (json == null || json.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.PARSE, "响应体为空");
         }

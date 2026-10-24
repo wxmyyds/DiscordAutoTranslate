@@ -9,7 +9,7 @@ package com.wxmyyds.discordautotranslate.core;
 public class TranslationException extends Exception {
 
     public enum Kind {
-        /** 配置缺失或不合法（URL 为空、模板不是合法 JSON、提取路径为空等）。 */
+        /** 配置缺失或不合法（URL 为空、URL 协议头不符、请求体构造失败等）。 */
         CONFIG,
         /** 连接失败、DNS 失败、TLS 失败等网络层错误。 */
         NETWORK,
@@ -19,7 +19,7 @@ public class TranslationException extends Exception {
         HTTP,
         /** 429 或服务端明确提示限流。 */
         RATE_LIMIT,
-        /** 响应不是合法 JSON，或按提取路径取不到译文。 */
+        /** 响应不是合法 JSON，或按协议结构取不到译文。 */
         PARSE,
         /** 请求成功但译文为空。 */
         EMPTY,
