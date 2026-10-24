@@ -157,6 +157,82 @@ public final class HookBridge {
         return contentIdentityToMessageId.get(structurableText);
     }
 
+    // ------------------------------------------------------- Embed 状态键
+
+    /**
+     * 为 Embed 文本生成独立的状态键。
+     *
+     * <p>格式：{@code 行消息ID + "\u0000embed\u0000" + 内容哈希}。它与正文共用
+     * 同一套翻译管线（StateStore/Scheduler/缓存/重渲染/替换），但：
+     * <ul>
+     *   <li>与正文的状态条目、与同消息内不同 Embed 文本（标题/描述/字段）
+     *       互不覆盖——每段文本按内容哈希各占一条；</li>
+     *   <li>哈希与 {@link #onMessageBound} 完全同口径，保证键与条目一致；</li>
+     *   <li>分隔符含 {@code U+0000}，真实雪花 ID 不可能包含，可安全区分
+     *       Embed 键与正文键。</li>
+     * </ul>
+     *
+     * @return 状态键；文本为空或类型未知时返回 null（调用方应跳过）
+     */
+    @Nullable
+    public String embedStateKey(String rowMessageId, @Nullable Object structurable) {
+        TextExtractor.Result ex = TextExtractor.extract(structurable);
+        if (ex == null || ex.text.trim().isEmpty()) {
+            return null;
+        }
+        return stateKey(rowMessageId, contentHashOf(ex, config));
+    }
+
+    /**
+     * 按裸文本生成 Embed 状态键（用于不经 StructurableText 渲染的文本，
+     * 例如原生帖子预览的标题）。
+     *
+     * <p>与 {@link #embedStateKey} 的约定：同一段纯文本两者生成的键<b>必须相等</b>
+     * （登记侧与替换侧各用其一），单测锁定该不变量。</p>
+     */
+    @Nullable
+    public String embedTextStateKey(String rowMessageId, @Nullable String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) {
+            return null;
+        }
+        return stateKey(rowMessageId, contentHashOf(rawText, config));
+    }
+
+    /** 是否为 Embed 状态键。 */
+    public static boolean isEmbedKey(@Nullable String key) {
+        return key != null && key.contains(EMBED_KEY_PREFIX);
+    }
+
+    /**
+     * 取 Embed 状态键中的行消息 ID 部分；非 Embed 键原样返回。
+     *
+     * <p>同一个 Embed 视图承载同一条消息的多段文本（标题/描述/字段），
+     * 各段键不同但行 ID 相同——复用校验按“行未变即仍有效”放宽，
+     * 行 ID 变化（视图被复用到其他消息）则仍然拒绝。</p>
+     */
+    public static String embedRowOf(@Nullable String key) {
+        if (key == null) {
+            return key;
+        }
+        int i = key.indexOf(EMBED_KEY_PREFIX);
+        return i >= 0 ? key.substring(0, i) : key;
+    }
+
+    private static String stateKey(String rowMessageId, String contentHash) {
+        return rowMessageId + EMBED_KEY_PREFIX + contentHash;
+    }
+
+    /** 与 {@link #onMessageBound} 同口径的内容哈希（含分段标记协议版本）。 */
+    private static String contentHashOf(TextExtractor.Result ex, Config.Snapshot cfg) {
+        String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
+        return Scheduler.contentHash(hashInput, cfg.version());
+    }
+
+    /** 裸文本的内容哈希：与 PrimitiveStructurableText 提取出的纯文本同口径。 */
+    private static String contentHashOf(String rawText, Config.Snapshot cfg) {
+        return Scheduler.contentHash(rawText, cfg.version());
+    }
+
     // ---------------------------------------------------------------- 渲染拦截
 
     /** 当前是否处于“重渲染”调用中。 */
@@ -262,6 +338,9 @@ public final class HookBridge {
      */
     private static final String SEGMENT_CACHE_SUFFIX = "\u0000seg1";
 
+    /** Embed 状态键的分隔符；真实消息 ID（雪花 ID）不可能包含 U+0000。 */
+    private static final String EMBED_KEY_PREFIX = "\u0000embed\u0000";
+
     // ---------------------------------------------------------------- 翻译流程
 
     /**
@@ -285,8 +364,7 @@ public final class HookBridge {
         // 否则已缓存的旧译文会继续走回退路径、格式照旧丢失。
         // 单节点消息不受影响，其缓存与旧版本完全兼容。
         String requestText = ex.segmented != null ? ex.segmented : ex.text;
-        String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
-        String hash = Scheduler.contentHash(hashInput, cfg.version());
+        String hash = contentHashOf(ex, cfg);
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
         rawContent.put(messageId, structurableText);
         if (contentView != null) {

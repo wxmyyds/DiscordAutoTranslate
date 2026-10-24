@@ -1,0 +1,347 @@
+package com.wxmyyds.discordautotranslate.hooks;
+
+import android.view.View;
+
+import androidx.annotation.Nullable;
+
+import com.wxmyyds.discordautotranslate.core.Reflect;
+import com.wxmyyds.discordautotranslate.core.StateStore;
+import com.wxmyyds.discordautotranslate.core.XLog;
+
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+
+import io.github.libxposed.api.XposedInterface;
+import io.github.libxposed.api.XposedModule;
+
+/**
+ * Embed 翻译 Hook（富 Embed 与原生帖子预览）。
+ *
+ * <p><b>已核对 smali（Discord 340.13）的渲染链</b>：
+ * <pre>
+ * 富 Embed   MessageAccessoriesAdapter → EmbedViewHolder.bind(ChatEventHandler, EmbedMessageAccessory, …9 参)
+ *              → EmbedView.setEmbed-fDtLluY(…, Embed, …)
+ *              → embed.getTitle()/getDescription()（同一实例）→ TextUtilsKt.toSpannable
+ * 字段        EmbedView.setFields-7YO0LfA(List&lt;EmbedField&gt;, …)
+ *              → field.getName()/getValue()（StructurableText）→ toSpannable
+ * 帖子预览   MessageAccessoriesAdapter → PostPreviewEmbedViewHolder.bind(PostPreviewEmbed, …3 参)
+ *              → PostPreviewEmbedView.setPostPreviewEmbed-4itWklQ(messageId, title, subtitle, …16 参)
+ *              （title/subtitle 是普通 String，不走 toSpannable；footer 走但属品牌信息）
+ * </pre>
+ *
+ * <p>消息 ID 来源与正文一致：{@code MessageAccessory.getMessageId-3Eiw7ao()}
+ * （声明在基类上，前缀匹配可取）。每段 Embed 文本用
+ * {@link HookBridge#embedStateKey} 生成独立状态键——与正文共用整套翻译管线
+ * （去重/缓存/调度/替换），但互不覆盖。</p>
+ *
+ * <p><b>翻译范围</b>：富 Embed 的标题/描述/字段（用户内容）；
+ * 帖子预览的标题。作者名、页脚、提供者（站点/品牌名）、URL、图标等
+ * <b>不登记</b>——翻译范围之外，且语言检测器（{@code EnglishDetector}）
+ * 也会拦下 URL、过短与非拉丁内容。</p>
+ *
+ * <p>行内图标不注入 Embed（与既有行为一致）：图标注入依赖
+ * {@code setMessageContent} 调用链内的宿主传递，Embed 路径天然不经过。</p>
+ */
+public final class EmbedHooks {
+
+    private static final String CLS_EMBED_VIEW_HOLDER =
+            "com.discord.chat.presentation.message.viewholder.EmbedViewHolder";
+    private static final String CLS_EMBED_ACCESSORY =
+            "com.discord.chat.presentation.message.messagepart.EmbedMessageAccessory";
+    private static final String CLS_POST_PREVIEW_HOLDER =
+            "com.discord.chat.presentation.message.viewholder.PostPreviewEmbedViewHolder";
+    private static final String CLS_POST_PREVIEW =
+            "com.discord.chat.bridge.postpreviewembed.PostPreviewEmbed";
+    private static final String CLS_POST_PREVIEW_VIEW =
+            "com.discord.chat.presentation.message.view.PostPreviewEmbedView";
+
+    /** EmbedViewHolder.bind(ChatEventHandler, EmbedMessageAccessory, I, I, Function0, SpoilerConfig, Function2, OnLongClickListener, D)。 */
+    private static final int EMBED_BIND_PARAM_COUNT = 9;
+    /** PostPreviewEmbedViewHolder.bind(PostPreviewEmbed, Function4, SpoilerConfig)。 */
+    private static final int POST_PREVIEW_BIND_PARAM_COUNT = 3;
+    /** setPostPreviewEmbed-4itWklQ(messageId, title, subtitle, color, footer, …5 String, OnClickListener, ZZZZ, SpoilerConfig)。 */
+    private static final int POST_PREVIEW_SET_PARAM_COUNT = 16;
+
+    /** 字段数量上限，防御异常数据导致的反射放大。 */
+    private static final int MAX_FIELDS = 25;
+
+    private EmbedHooks() {
+    }
+
+    /**
+     * 安装 Embed 翻译 Hook。全部为增强能力：任一类或方法在目标版本上不存在时
+     * 仅放弃对应部分，不影响既有消息翻译（安装失败不抛出）。
+     */
+    public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
+        installRichEmbedBindHook(module, cl, handles);
+        installPostPreviewBindHook(module, cl, handles);
+        installPostPreviewSetHook(module, cl, handles);
+        if (handles.isEmpty()) {
+            XLog.w("no embed hooks installed; embed translation unavailable on this version");
+        } else {
+            XLog.i("embed hooks armed: " + handles.size());
+        }
+        return handles;
+    }
+
+    // ---------------------------------------------------------- 富 Embed（链接卡片等）
+
+    private static void installRichEmbedBindHook(XposedModule module, ClassLoader cl,
+                                                 List<XposedInterface.HookHandle> out) {
+        Class<?> holder = Reflect.loadClass(cl, CLS_EMBED_VIEW_HOLDER);
+        Class<?> accessory = Reflect.loadClass(cl, CLS_EMBED_ACCESSORY);
+        if (holder == null || accessory == null) {
+            XLog.d("EmbedViewHolder/EmbedMessageAccessory not found; rich embed translation disabled");
+            return;
+        }
+        Method bind = findBindMethod(holder, accessory, EMBED_BIND_PARAM_COUNT, 1);
+        if (bind == null) {
+            XLog.w("EmbedViewHolder.bind not found (paramCount=" + EMBED_BIND_PARAM_COUNT + ")");
+            return;
+        }
+        out.add(module.hook(bind)
+                .setId("dat.embedBind")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        richEmbedPre(chain, bind);
+                    } catch (Throwable t) {
+                        XLog.w("embed bind hook failed", t);
+                    }
+                    return chain.proceed();
+                }));
+        XLog.i("hooked EmbedViewHolder.bind");
+    }
+
+    /**
+     * 富 Embed 绑定前置：登记各文本段（标题/描述/字段）的状态键与身份映射，
+     * 注册重渲染目标，并触发翻译。替换由 toSpannable 漏斗按各段自己的键完成。
+     */
+    private static void richEmbedPre(XposedInterface.Chain chain, Method bind) {
+        if (HookBridge.get().isRerendering()) {
+            return; // 重渲染：登记与触发已由首次绑定完成，避免覆盖实参快照。
+        }
+        Object accessory = chain.getArg(1);
+        if (accessory == null) {
+            return;
+        }
+        String messageId = Reflect.callString(accessory, "getMessageId");
+        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
+            return;
+        }
+        Object embed = Reflect.call(Reflect.findMethod(
+                accessory.getClass(), "getEmbed", 0), accessory);
+        if (embed == null) {
+            return;
+        }
+        View view = asView(Reflect.getField(chain.getThisObject(), "itemView"));
+        Object holder = chain.getThisObject();
+        Object[] args = chain.getArgs().toArray();
+        registerEmbedText(view, messageId, embed, "getTitle", holder, bind, args);
+        registerEmbedText(view, messageId, embed, "getDescription", holder, bind, args);
+        registerEmbedFields(view, messageId, embed, holder, bind, args);
+    }
+
+    /** 登记单段 StructurableText：状态键 + 身份映射 + 重渲染目标 + 触发翻译。 */
+    private static void registerEmbedText(@Nullable View view, String messageId, Object owner,
+                                          String getter, Object holder, Method bind, Object[] args) {
+        Object text = Reflect.call(Reflect.findMethod(owner.getClass(), getter, 0), owner);
+        if (text == null) {
+            return;
+        }
+        String key = HookBridge.get().embedStateKey(messageId, text);
+        if (key == null) {
+            return; // 空文本或未知 StructurableText 类型
+        }
+        HookBridge.get().rememberContent(key, text);
+        if (view != null) {
+            HookBridge.get().bindView(view, key);
+        }
+        RerenderRegistry.register(key, view, holder, bind, args);
+        HookBridge.get().onMessageBound(view, key, text);
+        XLog.d("embed text registered msg=" + messageId + " via " + getter);
+    }
+
+    /** Embed 字段：name 与 value 均为 StructurableText，同为用户可见内容。 */
+    private static void registerEmbedFields(@Nullable View view, String messageId, Object embed,
+                                            Object holder, Method bind, Object[] args) {
+        Object fields = Reflect.call(Reflect.findMethod(
+                embed.getClass(), "getFields", 0), embed);
+        if (!(fields instanceof List)) {
+            return;
+        }
+        int count = 0;
+        for (Object field : (List<?>) fields) {
+            if (field == null || ++count > MAX_FIELDS) {
+                break;
+            }
+            registerEmbedText(view, messageId, field, "getName", holder, bind, args);
+            registerEmbedText(view, messageId, field, "getValue", holder, bind, args);
+        }
+    }
+
+    // ---------------------------------------------------------- 原生帖子预览（X 等）
+
+    private static void installPostPreviewBindHook(XposedModule module, ClassLoader cl,
+                                                   List<XposedInterface.HookHandle> out) {
+        Class<?> holder = Reflect.loadClass(cl, CLS_POST_PREVIEW_HOLDER);
+        Class<?> model = Reflect.loadClass(cl, CLS_POST_PREVIEW);
+        if (holder == null || model == null) {
+            XLog.d("PostPreviewEmbedViewHolder/PostPreviewEmbed not found; post preview translation disabled");
+            return;
+        }
+        Method bind = findBindMethod(holder, model, POST_PREVIEW_BIND_PARAM_COUNT, 0);
+        if (bind == null) {
+            XLog.w("PostPreviewEmbedViewHolder.bind not found");
+            return;
+        }
+        out.add(module.hook(bind)
+                .setId("dat.postPreviewBind")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        postPreviewPre(chain, bind);
+                    } catch (Throwable t) {
+                        XLog.w("post preview bind hook failed", t);
+                    }
+                    return chain.proceed();
+                }));
+        XLog.i("hooked PostPreviewEmbedViewHolder.bind");
+    }
+
+    /**
+     * 帖子预览绑定前置。标题是普通 String、不经 toSpannable，因此：
+     * <ol>
+     *   <li>用 {@link StructurableTextFactory#primitive} 把标题包成
+     *       PrimitiveStructurableText，才能进入现有翻译管线；</li>
+     *   <li>译文替换不靠身份映射，而由
+     *       {@code setPostPreviewEmbed} 的参数替换 Hook 完成。</li>
+     * </ol>
+     */
+    private static void postPreviewPre(XposedInterface.Chain chain, Method bind) {
+        if (HookBridge.get().isRerendering()) {
+            return;
+        }
+        Object model = chain.getArg(0);
+        if (model == null) {
+            return;
+        }
+        String messageId = Reflect.callString(model, "getMessageId");
+        String title = Reflect.callString(model, "getTitle");
+        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId) || title == null) {
+            return;
+        }
+        String key = HookBridge.get().embedTextStateKey(messageId, title);
+        Object wrapped = StructurableTextFactory.primitive(title);
+        if (key == null || wrapped == null) {
+            return; // 空标题，或目标版本缺少 PrimitiveStructurableText 构造能力
+        }
+        View view = asView(Reflect.getField(chain.getThisObject(), "itemView"));
+        Object holder = chain.getThisObject();
+        Object[] args = chain.getArgs().toArray();
+        if (view != null) {
+            HookBridge.get().bindView(view, key);
+        }
+        RerenderRegistry.register(key, view, holder, bind, args);
+        // 正文语义上等价于一条纯文本消息：走同一条翻译触发路径。
+        HookBridge.get().onMessageBound(view, key, wrapped);
+        XLog.d("post preview title registered msg=" + messageId);
+    }
+
+    private static void installPostPreviewSetHook(XposedModule module, ClassLoader cl,
+                                                  List<XposedInterface.HookHandle> out) {
+        Class<?> viewCls = Reflect.loadClass(cl, CLS_POST_PREVIEW_VIEW);
+        if (viewCls == null) {
+            XLog.d("PostPreviewEmbedView not found; post preview substitution disabled");
+            return;
+        }
+        Method set = null;
+        for (Method m : viewCls.getDeclaredMethods()) {
+            if (!m.getName().startsWith("setPostPreviewEmbed") || m.getName().contains("$")) {
+                continue;
+            }
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length != POST_PREVIEW_SET_PARAM_COUNT || ps[0] != String.class) {
+                continue;
+            }
+            m.setAccessible(true);
+            set = m;
+            break;
+        }
+        if (set == null) {
+            XLog.w("setPostPreviewEmbed not found (paramCount=" + POST_PREVIEW_SET_PARAM_COUNT + ")");
+            return;
+        }
+        out.add(module.hook(set)
+                .setId("dat.postPreviewSet")
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    Object[] renderArgs = chain.getArgs().toArray();
+                    try {
+                        substitutePostPreviewTitle(renderArgs);
+                    } catch (Throwable t) {
+                        XLog.w("post preview substitution failed", t);
+                    }
+                    return chain.proceed(renderArgs);
+                }));
+        XLog.i("hooked PostPreviewEmbedView.setPostPreviewEmbed");
+    }
+
+    /**
+     * 参数替换：{@code setPostPreviewEmbed(messageId, title, …)} 的
+     * 第 0 参是消息 ID、第 1 参是标题（均已在 smali 中核对）。
+     * 标题译文就绪时替换之；未就绪时保持原文（译文完成后经重渲染再次进入这里）。
+     */
+    private static void substitutePostPreviewTitle(Object[] renderArgs) {
+        if (renderArgs.length < 2 || !(renderArgs[0] instanceof String)) {
+            return;
+        }
+        Object titleArg = renderArgs[1];
+        if (!(titleArg instanceof String)) {
+            return;
+        }
+        String key = HookBridge.get().embedTextStateKey((String) renderArgs[0], (String) titleArg);
+        if (key == null) {
+            return;
+        }
+        StateStore.Entry e = StateStore.get().peek(key);
+        if (e != null && e.status == StateStore.Status.TRANSLATED
+                && !e.showingOriginal && e.translatedText != null) {
+            renderArgs[1] = e.translatedText;
+        }
+    }
+
+    // ------------------------------------------------------------------ 工具
+
+    /**
+     * 按名字与参数个数定位 {@code bind}，并要求指定下标的参数与模型类型可赋值匹配。
+     * （{@code Reflect.findMethod} 只能校验首参，这里模型在任意下标。）
+     */
+    @Nullable
+    private static Method findBindMethod(Class<?> holder, Class<?> modelType,
+                                         int paramCount, int modelIndex) {
+        for (Method m : holder.getDeclaredMethods()) {
+            if (!"bind".equals(m.getName())) {
+                continue;
+            }
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length != paramCount || modelIndex >= ps.length) {
+                continue;
+            }
+            if (!ps[modelIndex].isAssignableFrom(modelType)
+                    && !modelType.isAssignableFrom(ps[modelIndex])) {
+                continue;
+            }
+            m.setAccessible(true);
+            return m;
+        }
+        return null;
+    }
+
+    @Nullable
+    private static View asView(@Nullable Object o) {
+        return o instanceof View ? (View) o : null;
+    }
+}

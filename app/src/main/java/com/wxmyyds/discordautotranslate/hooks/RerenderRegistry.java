@@ -101,9 +101,19 @@ public final class RerenderRegistry {
      *
      * <p>绑定未知（{@code null}）不等于已复用：映射表是容量上限 512 的 LRU，
      * 长列表滚动后旧条目会被淘汰。只有确认绑定了其他消息时才必须跳过。</p>
+     *
+     * <p>Embed 文本键：一个 Embed 视图按段（标题/描述/字段）登记了多个键，
+     * 视图绑定只保留最后一个键。同一条消息（行 ID 相同）的键之间互视为有效；
+     * 行 ID 变化说明视图已复用到其他消息，仍然拒绝。</p>
      */
     static boolean stillBound(@Nullable String expected, @Nullable String actual) {
-        return expected == null || actual == null || expected.equals(actual);
+        if (expected == null || actual == null || expected.equals(actual)) {
+            return true;
+        }
+        if (HookBridge.isEmbedKey(expected) && HookBridge.isEmbedKey(actual)) {
+            return HookBridge.embedRowOf(expected).equals(HookBridge.embedRowOf(actual));
+        }
+        return false;
     }
 
     /**

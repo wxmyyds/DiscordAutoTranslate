@@ -309,9 +309,23 @@ lang / ordered）、行内代码与代码块不被翻译、列表节点 items �
 
 ## 8. 阶段 3 仍未覆盖
 
-1. **Embed 内正文**：`EmbedView` 等也调用 `toSpannable`，但它们不在
-   `MessageContentViewHolder` 流程内、没有消息 ID 映射，因此当前不替换。
-   需要时可仿照回复引用的做法，从 Embed 的上游数据取 messageId。
+1. **Embed 翻译**：已实现（见 `EmbedHooks`，smali 核对 Discord 340.13）。
+   - 富 Embed：Hook `EmbedViewHolder.bind`（9 参，第 2 参 `EmbedMessageAccessory`
+     自带 `getMessageId`），登记 `embed.getTitle()/getDescription()/getFields()`
+     的各段 StructurableText——它们与 `EmbedView.setEmbed → toSpannable` 传入的是
+     同一实例，身份映射与替换复用正文漏斗，无需改动 `toSpannable` Hook。
+   - 原生帖子预览（X 等）：`PostPreviewEmbedViewHolder.bind` 登记标题；
+     标题是普通 String，译文经 `setPostPreviewEmbed-4itWklQ`（第 0 参即消息 ID）
+     的参数替换回填。
+   - 每段文本用「行消息 ID + U+0000embed U+0000 + 内容哈希」作为独立状态键，
+     与正文及同消息其他段互不覆盖；`RerenderRegistry.stillBound` 对同行 Embed
+     键放宽（行 ID 变化仍然拒绝）。
+   - 按需求不翻译：作者名、页脚、提供者/站点名（品牌）、URL、图标；
+     帖子预览的 subtitle/footer 属品牌信息，不登记。语言检测器兜底过滤
+     URL、过短与非拉丁文本。
+   - 行内图标不注入 Embed（沿用既有行为：图标依赖 setMessageContent 调用链
+     内的宿主传递，Embed 路径不经过）。
+   - 帖子预览的 subtitle 为纯 String 且多为作者/品牌信息，暂不翻译。
 2. **流式（SSE）响应**：仍只支持一次性 JSON 响应。
 3. **`ColorString` 等样式细节**：译文继承原节点的样式字段，但模型返回的
    译文不含 Markdown 语法时，格式由原结构（而非译文内容）决定，属预期行为。
