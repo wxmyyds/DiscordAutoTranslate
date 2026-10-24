@@ -70,6 +70,24 @@ final class RowRefresher {
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
     /**
+     * holder 的内容承载视图字段名（smali 已核对，Discord 340.13）：
+     * 正文 {@code messageContentView}、富 Embed {@code embedView}、
+     * 帖子预览 {@code postPreviewEmbedView}。
+     */
+    private static final String[] CONTENT_VIEW_FIELDS = {
+            "messageContentView", "embedView", "postPreviewEmbedView"};
+
+    /** holder 是否以 {@code view} 作为其内容承载视图；据此过滤无关视图的误刷新。 */
+    private static boolean ownsContentView(Object holder, View view) {
+        for (String fieldName : CONTENT_VIEW_FIELDS) {
+            if (Reflect.getField(holder, fieldName) == view) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Refresh the outer chat row containing a content item in the nested accessories list.
      * The nested adapter can rebind the text holder, but the outer ChatListView row must also
      * be notified so MessageView's height is recalculated in the chat list.
@@ -91,8 +109,7 @@ final class RowRefresher {
             Object contentHolder = Reflect.call(
                     findInheritedMethod(contentRecycler.getClass(), "findContainingViewHolder",
                             1, View.class), contentRecycler, view);
-            if (contentHolder == null
-                    || Reflect.getField(contentHolder, "messageContentView") != view) {
+            if (contentHolder == null || !ownsContentView(contentHolder, view)) {
                 return false;
             }
             Object contentAdapter = Reflect.call(
@@ -229,7 +246,8 @@ final class RowRefresher {
                 return false;
             }
         }
-        XLog.w("lastMessageContent field not found; row rebind may be skipped");
+        // 仅正文 holder 有该缓存；Embed holder 无 bind 早退缓存，找不到属正常。
+        XLog.d("lastMessageContent field not found; holder has no bind cache to invalidate");
         return false;
     }
 
