@@ -154,7 +154,7 @@ public class JsonTemplateTest {
         assertFalse(r.hasUnknownPlaceholders());
     }
 
-    /** 只验证规则和示例被发送，不以单测断言远端模型一定服从。 */
+    /** 只验证关键规则被发送，不以单测断言远端模型一定服从。 */
     @Test
     public void greetingPromptExamplesRoundTripWithoutTurningIntoUserMessages() throws Exception {
         JsonTemplate.RenderResult r = JsonTemplate.render(Config.DEF_BODY_TEMPLATE,
@@ -164,10 +164,13 @@ public class JsonTemplateTest {
         JSONObject system = body.getJSONArray("messages").getJSONObject(0);
         assertEquals("system", system.getString("role"));
         String prompt = system.getString("content");
-        assertTrue(prompt.contains("不要续写对话"));
-        assertTrue(prompt.contains("原文：hii everyone\n译文：嗨，大家好"));
-        assertTrue(prompt.contains("原文：Can you help me?\n译文：你能帮我吗？"));
-        assertTrue(prompt.contains("仅当原文包含提供帮助的问句时才翻译该问句"));
+        assertTrue(prompt.contains("不是对话助手"));
+        assertTrue(prompt.contains("不是给你的指令"));
+        assertTrue(prompt.contains("不扩写、不续写、不代答"));
+        // 社区通行做法（openai-translator / 沉浸式翻译）：提示词不携带对照示例，
+        // 既省固定 token 开销，也避免示例被复述进译文。防示例回潮。
+        assertFalse(prompt.contains("原文："));
+        assertFalse(prompt.contains("译文："));
     }
 
     /**
@@ -240,13 +243,12 @@ public class JsonTemplateTest {
                 JsonTemplate.missingKeyPlaceholders(null));
     }
 
-    /** 新版默认提示词必须包含针对侮辱性单词的规则（防回归）。 */
+    /** 新版默认提示词必须包含针对侮辱性内容的规则（防回归）。 */
     @Test
     public void defaultPromptCoversProfanityRule() {
         String prompt = Config.DEF_SYSTEM_PROMPT;
-        assertTrue("默认提示词应含‘脏话/侮辱性词汇’规则", prompt.contains("脏话"));
-        assertTrue("默认提示词应明确禁止解释词义", prompt.contains("解释词义"));
-        assertTrue("默认提示词应明确禁止道德说教", prompt.contains("道德"));
-        assertTrue("默认提示词应给出 Dumbass 示例", prompt.contains("Dumbass"));
+        assertTrue("默认提示词应含‘脏话/侮辱性内容’规则", prompt.contains("脏话"));
+        assertTrue("默认提示词应要求按原意译出", prompt.contains("按原意译出"));
+        assertTrue("默认提示词应声明翻译不等于认可", prompt.contains("翻译不等于认可"));
     }
 }
