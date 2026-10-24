@@ -56,11 +56,11 @@ public class StructurableTextFactoryTest {
         TextContentNode text = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");
         List<Object> nodes = list(new NoCopyContainer.ParagraphContentNode(
-                list(new TextContentNode(""))), text, emoji);
+                list(new TextContentNode("first"))), text, emoji);
         AnnotatedStructurableText original = new AnnotatedStructurableText(nodes);
 
         // 返回 null 是 forTranslation 的“不替换”协议，所有 Hook 调用方保留 original。
-        assertNull(StructurableTextFactory.forTranslation(original, "你好"));
+        assertNull(StructurableTextFactory.forTranslation(original, "第一\n你好"));
         assertSame(nodes, original.getContent());
         assertSame(emoji, original.getContent().get(2));
         assertEquals("hello", text.getContent());
@@ -144,7 +144,9 @@ public class StructurableTextFactoryTest {
         List<Object> nodes = ((AnnotatedStructurableText) out).getContent();
         assertEquals(2, nodes.size());
         assertSame(mention, nodes.get(0));
-        assertEquals(translation, ((TextContentNode) nodes.get(1)).getContent());
+        // body 以空格开头：该前导空白属于原节点结构，留在标记外，重建时从原节点取，
+        // 因此译文前仍带一个空格。正文本身不得丢失。
+        assertEquals(" " + translation, ((TextContentNode) nodes.get(1)).getContent());
         assertEquals("ExampleUser", ((TextContentNode) mention.getContent().get(0)).getContent());
     }
 

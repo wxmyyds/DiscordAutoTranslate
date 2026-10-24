@@ -49,6 +49,15 @@ public final class InlineIconInjector {
     /** 占位字符：不换行空格。提供一个真实字符位置供 span 附着，且自身不触发换行。 */
     private static final String PLACEHOLDER = "\u00A0";
 
+    /**
+     * 点击前置字符：零宽非断行空格（U+FEFF）。
+     *
+     * <p>它不占视觉宽度、不触发换行，只用来给点击 span 多一个字符位置：
+     * 宿主解析出的 offset 可能落在图标前一格，只有 span 覆盖到那一格才能命中。
+     * 由于这一格是我们自己插入的，不会影响任何真实内容的点击。</p>
+     */
+    private static final String CLICK_LEAD = "\uFEFF";
+
     private InlineIconInjector() {
     }
 
@@ -122,6 +131,9 @@ public final class InlineIconInjector {
                 return rendered;
             }
 
+            // 先放点击前置字符，再放图标占位符：两者各自占一个字符格。
+            int leadStart = ssb.length();
+            ssb.append(CLICK_LEAD);
             int start = ssb.length();
             ssb.append(PLACEHOLDER);
             int end = start + PLACEHOLDER.length();
@@ -129,7 +141,11 @@ public final class InlineIconInjector {
 
             Object clickSpan = IconClickSpanFactory.create(hostCl, messageId);
             if (clickSpan != null) {
-                ssb.setSpan(clickSpan, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                // 点击 span 必须比图标往前多覆盖一个字符，否则手指落在图标靠左部分时
+                // 宿主算出的 offset 是图标前一格，getSpans 取不到任何 span，
+                // 最终退化为消息点击（详见 InlineIconGeometry.clickRange）。
+                int[] click = InlineIconGeometry.clickRange(leadStart, end);
+                ssb.setSpan(clickSpan, click[0], click[1], Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
             // 启动/续接旋转动画（仅翻译中状态）。
             icon.bindHost(host);

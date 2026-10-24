@@ -5,6 +5,7 @@ import com.wxmyyds.discordautotranslate.core.Http;
 import com.wxmyyds.discordautotranslate.core.JsonPath;
 import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
+import com.wxmyyds.discordautotranslate.core.Segments;
 import com.wxmyyds.discordautotranslate.core.TranslationException;
 import com.wxmyyds.discordautotranslate.core.XLog;
 
@@ -42,8 +43,15 @@ public final class JsonApiEngine implements Scheduler.Engine {
         validate();
 
         // 1) 渲染请求体
+        // 带分段标记的请求需要模型知道标记规则；追加在系统提示词末尾，
+        // 而不改动用户配置的提示词本身（避免影响配置版本与既有判定）。
+        String systemPrompt = cfg.systemPrompt;
+        if (Segments.isSegmented(text)) {
+            systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()
+                    ? "" : systemPrompt + "\n\n") + Segments.RULE;
+        }
         JsonTemplate.RenderResult rendered = JsonTemplate.render(
-                cfg.bodyTemplate, text, cfg.targetLang, cfg.model, cfg.systemPrompt);
+                cfg.bodyTemplate, text, cfg.targetLang, cfg.model, systemPrompt);
         if (rendered.hasUnknownPlaceholders()) {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "请求模板含未知占位符：" + String.join(", ", rendered.unknownPlaceholders));
