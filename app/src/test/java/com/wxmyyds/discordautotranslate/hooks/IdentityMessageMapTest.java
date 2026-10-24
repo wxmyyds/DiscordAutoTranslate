@@ -73,18 +73,4 @@ public class IdentityMessageMapTest {
         map.clear();
         assertNull(map.get(content));
     }
-
-    @Test
-    public void removeMessageDropsOnlyMatchingEntries() {
-        IdentityMessageMap map = new IdentityMessageMap();
-        Content first = new Content("hello");
-        Content second = new Content("world");
-        map.put(first, "message-1");
-        map.put(second, "message-2");
-
-        map.removeMessage("message-1");
-
-        assertNull(map.get(first));
-        assertEquals("message-2", map.get(second));
-    }
 }

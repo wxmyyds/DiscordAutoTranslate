@@ -39,12 +39,6 @@ public final class Http {
         public boolean isSuccess() {
             return status >= 200 && status < 300;
         }
-
-        /** 响应体摘要，用于日志（不记录完整正文，需求 §风险 5）。 */
-        public String brief() {
-            String b = body == null ? "" : body;
-            return "HTTP " + status + " len=" + b.length();
-        }
     }
 
     /** 请求头。 */
@@ -94,10 +88,6 @@ public final class Http {
                 }
             }
             return null;
-        }
-
-        public int size() {
-            return pairs.size();
         }
     }
 
