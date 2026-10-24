@@ -53,35 +53,20 @@ public final class TranslationCache {
     private final int maxEntries;
     private final LinkedHashMap<String, String> lru;
 
-    // 统计，供诊断日志使用
-    private long hits;
-    private long misses;
-    private long evictions;
-
     TranslationCache(int maxEntries) {
         this.maxEntries = Math.max(1, maxEntries);
         // accessOrder=true 实现 LRU
         this.lru = new LinkedHashMap<String, String>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
-                if (size() > TranslationCache.this.maxEntries) {
-                    evictions++;
-                    return true;
-                }
-                return false;
+                return size() > TranslationCache.this.maxEntries;
             }
         };
     }
 
     @Nullable
     public synchronized String get(String key) {
-        String v = lru.get(key);
-        if (v != null) {
-            hits++;
-        } else {
-            misses++;
-        }
-        return v;
+        return lru.get(key);
     }
 
     public synchronized void put(String key, String translated) {
@@ -91,21 +76,7 @@ public final class TranslationCache {
         lru.put(key, translated);
     }
 
-    public synchronized int size() {
-        return lru.size();
-    }
-
     public synchronized void clear() {
         lru.clear();
-        hits = 0;
-        misses = 0;
-        evictions = 0;
-    }
-
-    /** 诊断摘要：命中/未命中/淘汰计数。 */
-    public synchronized String stats() {
-        return "cache[size=" + lru.size() + "/" + maxEntries
-                + ", hits=" + hits + ", misses=" + misses
-                + ", evictions=" + evictions + "]";
     }
 }

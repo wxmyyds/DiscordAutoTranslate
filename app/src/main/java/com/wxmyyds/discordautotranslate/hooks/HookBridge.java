@@ -5,7 +5,6 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.EnglishDetector;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
@@ -58,6 +57,19 @@ public final class HookBridge {
 
     /** 按引用身份反查消息 ID；Discord StructurableText 的 equals() 是按内容比较。 */
     private final IdentityMessageMap contentIdentityToMessageId = new IdentityMessageMap();
+
+    /**
+     * 仅用于图标注入的内容身份映射（键 ← 内容实例）。
+     *
+     * <p>帖子预览的标题是普通 String、不经 toSpannable；图标改挂在卡片内唯一走
+     * toSpannable 的 footer 上。footer 不能进入替换身份映射（否则译文会错误地
+     * 写进 footer），因此单独一张表，只被图标注入器读取。</p>
+     */
+    private final IdentityMessageMap iconOnlyContentToKey = new IdentityMessageMap();
+
+    /** 允许注入行内图标的 Embed 状态键：每张卡片只标一段，避免逐段各挂一个图标。 */
+    private final java.util.Set<String> embedIconKeys =
+            java.util.Collections.newSetFromMap(boundedMap(1024));
 
     private volatile Config.Snapshot config = Config.read(null);
     private volatile Scheduler.Engine engine = new JsonApiEngine(config);
@@ -120,6 +132,8 @@ public final class HookBridge {
         rawContent.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
+        iconOnlyContentToKey.clear();
+        embedIconKeys.clear();
     }
 
     private static <K, V> Map<K, V> boundedMap(int maxEntries) {
@@ -156,6 +170,114 @@ public final class HookBridge {
             return null;
         }
         return contentIdentityToMessageId.get(structurableText);
+    }
+
+    // ------------------------------------------------------- Embed 状态键
+
+    /**
+     * 为 Embed 文本生成独立的状态键。
+     *
+     * <p>格式：{@code 行消息ID + "\u0000embed\u0000" + 内容哈希}。它与正文共用
+     * 同一套翻译管线（StateStore/Scheduler/缓存/重渲染/替换），但：
+     * <ul>
+     *   <li>与正文的状态条目、与同消息内不同 Embed 文本（标题/描述/字段）
+     *       互不覆盖——每段文本按内容哈希各占一条；</li>
+     *   <li>哈希与 {@link #onMessageBound} 完全同口径，保证键与条目一致；</li>
+     *   <li>分隔符含 {@code U+0000}，真实雪花 ID 不可能包含，可安全区分
+     *       Embed 键与正文键。</li>
+     * </ul>
+     *
+     * @return 状态键；文本为空或类型未知时返回 null（调用方应跳过）
+     */
+    @Nullable
+    public String embedStateKey(String rowMessageId, @Nullable Object structurable) {
+        TextExtractor.Result ex = TextExtractor.extract(structurable);
+        if (ex == null || ex.text.trim().isEmpty()) {
+            return null;
+        }
+        return stateKey(rowMessageId, contentHashOf(ex, config));
+    }
+
+    /**
+     * 按裸文本生成 Embed 状态键（用于不经 StructurableText 渲染的文本，
+     * 例如原生帖子预览的标题）。
+     *
+     * <p>与 {@link #embedStateKey} 的约定：同一段纯文本两者生成的键<b>必须相等</b>
+     * （登记侧与替换侧各用其一），单测锁定该不变量。</p>
+     */
+    @Nullable
+    public String embedTextStateKey(String rowMessageId, @Nullable String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) {
+            return null;
+        }
+        return stateKey(rowMessageId, contentHashOf(rawText, config));
+    }
+
+    /** 是否为 Embed 状态键。 */
+    public static boolean isEmbedKey(@Nullable String key) {
+        return key != null && key.contains(EMBED_KEY_PREFIX);
+    }
+
+    /**
+     * 取 Embed 状态键中的行消息 ID 部分；非 Embed 键原样返回。
+     *
+     * <p>同一个 Embed 视图承载同一条消息的多段文本（标题/描述/字段），
+     * 各段键不同但行 ID 相同——复用校验按“行未变即仍有效”放宽，
+     * 行 ID 变化（视图被复用到其他消息）则仍然拒绝。</p>
+     */
+    public static String embedRowOf(@Nullable String key) {
+        if (key == null) {
+            return key;
+        }
+        int i = key.indexOf(EMBED_KEY_PREFIX);
+        return i >= 0 ? key.substring(0, i) : key;
+    }
+
+    /** 标记某 Embed 状态键为所在卡片的图标承载段（每张卡片只标一段）。 */
+    public void markEmbedIconKey(String key) {
+        if (key != null) {
+            embedIconKeys.add(key);
+        }
+    }
+
+    /** 该 Embed 状态键当前是否允许注入行内图标。 */
+    public boolean isEmbedIconKey(@Nullable String key) {
+        return key != null && embedIconKeys.contains(key);
+    }
+
+    /**
+     * 登记「仅用于图标」的内容身份：该内容实例反查出的键只驱动图标注入，
+     * 不参与 toSpannable 的译文替换（替换仍走 {@link #resolveMessageId}）。
+     */
+    public void rememberIconOnlyContent(String key, @Nullable Object content) {
+        if (key == null || content == null) {
+            return;
+        }
+        iconOnlyContentToKey.put(content, key);
+    }
+
+    /** 反查仅图标身份映射；未登记返回 null。 */
+    @Nullable
+    public String resolveIconOnlyKey(@Nullable Object content) {
+        if (content == null) {
+            return null;
+        }
+        return iconOnlyContentToKey.get(content);
+    }
+
+    private static String stateKey(String rowMessageId, String contentHash) {
+        return rowMessageId + EMBED_KEY_PREFIX + contentHash;
+    }
+
+    /** 与 {@link #onMessageBound} 同口径的内容哈希（含分段标记协议版本）。 */
+    private static String contentHashOf(TextExtractor.Result ex, Config.Snapshot cfg) {
+        String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
+        return Scheduler.contentHash(hashInput, cfg.version());
+    }
+
+    /** 裸文本的内容哈希：与 PrimitiveStructurableText 提取出的纯文本同口径。 */
+    private static String contentHashOf(String rawText, Config.Snapshot cfg) {
+        return Scheduler.contentHash(rawText, cfg.version());
     }
 
     // ---------------------------------------------------------------- 渲染拦截
@@ -198,22 +320,13 @@ public final class HookBridge {
      * <p>真正的文本替换发生在 {@code TextUtilsKt.toSpannable}，
      * 它会按当前状态自行决定是否替换。</p>
      *
-     * @param invocationTarget 调用 {@code method} 的接收者（正文视图或回复预览容器）
-     */
-    public void requestRerender(@Nullable Object invocationTarget, @Nullable Method method,
-                                @Nullable Object[] args) {
-        requestRerender(null, null, invocationTarget, method, args);
-    }
-
-    /**
-     * 带身份校验的重渲染投递。
-     *
      * <p>排队期间视图可能已被 RecyclerView 复用到其他消息，因此执行前必须
      * 再校验一次：绑定已变成其他消息则跳过，不能把旧译文渲染到新消息上。
      * 绑定未知（{@code null}，通常是映射表 LRU 淘汰）不视为复用。</p>
      *
      * @param contentView 用于校验复用的正文视图，可为 null（不校验）
      * @param messageId   期望绑定的消息 ID，可为 null（不校验）
+     * @param invocationTarget 调用 {@code method} 的接收者（正文视图或回复预览容器）
      */
     public void requestRerender(@Nullable View contentView, @Nullable String messageId,
                                 @Nullable Object invocationTarget, @Nullable Method method,
@@ -261,402 +374,8 @@ public final class HookBridge {
             RERENDERING.remove();
         }
         // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
-        postInvalidateRow(messageId, view);
+        RowRefresher.postInvalidateRow(this::messageIdOf, messageId, view);
     }
-
-    /**
-     * 把行刷新投递到下一轮消息队列，并按消息去重。
-     *
-     * <p>{@code notifyItemChanged} is posted after leaving the current host layout pass,
-     * avoiding a RecyclerView notification while it is computing a layout.</p>
-     */
-    private static void postInvalidateRow(@Nullable String messageId, @Nullable View view) {
-        if (view == null) {
-            return;
-        }
-        final String key = messageId != null
-                ? messageId
-                : Integer.toHexString(System.identityHashCode(view));
-        if (!PENDING_ROW_REFRESH.add(key)) {
-            return; // 同一帧内已经安排过，避免重复通知造成多次重绑。
-        }
-        boolean posted = view.post(() -> {
-            String currentBound = HookBridge.get().messageIdOf(view);
-            if (messageId != null
-                    && !RerenderRegistry.stillBound(messageId, currentBound)) {
-                PENDING_ROW_REFRESH.remove(key);
-                return;
-            }
-            PENDING_ROW_REFRESH.remove(key);
-            invalidateRow(messageId, view);
-            requestLayoutChain(view);
-        });
-        if (!posted) {
-            PENDING_ROW_REFRESH.remove(key);
-            // 视图未附着：滚动重新绑定时仍会走正常渲染，无需强制刷新。
-            XLog.d("row refresh skipped: view not attached");
-        }
-    }
-
-    /** 已安排但尚未执行的行刷新；避免同一帧内重复 notifyItemChanged。 */
-    private static final java.util.Set<String> PENDING_ROW_REFRESH =
-            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
-
-    /**
-     * Refresh the outer chat row containing a content item in the nested accessories list.
-     * The nested adapter can rebind the text holder, but the outer ChatListView row must also
-     * be notified so MessageView's height is recalculated in the chat list.
-     */
-    private static boolean invalidateRow(@Nullable String messageId, @Nullable View view) {
-        if (view == null) {
-            return false;
-        }
-        String bound = HookBridge.get().messageIdOf(view);
-        if (messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
-            return false;
-        }
-        try {
-            android.view.ViewParent contentRecycler = findRecyclerView(view);
-            if (contentRecycler == null) {
-                return false;
-            }
-            Object contentHolder = Reflect.call(
-                    findInheritedMethod(contentRecycler.getClass(), "findContainingViewHolder",
-                            1, View.class), contentRecycler, view);
-            if (contentHolder == null
-                    || Reflect.getField(contentHolder, "messageContentView") != view) {
-                return false;
-            }
-            Object contentAdapter = Reflect.call(
-                    findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
-            android.view.ViewParent rowRecycler = findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS);
-            if (contentAdapter == null || rowRecycler == null) {
-                return false;
-            }
-            Object rowAdapter = Reflect.call(
-                    findInheritedMethod(rowRecycler.getClass(), "getAdapter", 0), rowRecycler);
-            Object rowHolder = Reflect.call(
-                    findInheritedMethod(rowRecycler.getClass(), "findContainingViewHolder",
-                            1, View.class), rowRecycler, view);
-            if (rowAdapter == null || rowHolder == null) {
-                return false;
-            }
-            Object itemView = Reflect.getField(rowHolder, "itemView");
-            if (!Reflect.isInstanceOfName(itemView, MESSAGE_VIEW_CLASS)) {
-                return false;
-            }
-            Object bindingPositionValue = Reflect.call(
-                    findInheritedMethod(rowHolder.getClass(), "getBindingAdapterPosition", 0),
-                    rowHolder);
-            Object absolutePositionValue = Reflect.call(
-                    findInheritedMethod(rowHolder.getClass(), "getAbsoluteAdapterPosition", 0),
-                    rowHolder);
-            Object bindingAdapter = Reflect.call(
-                    findInheritedMethod(rowHolder.getClass(), "getBindingAdapter", 0), rowHolder);
-            int bindingPosition = bindingPositionValue instanceof Integer
-                    ? (Integer) bindingPositionValue : -1;
-            int absolutePosition = absolutePositionValue instanceof Integer
-                    ? (Integer) absolutePositionValue : -1;
-            int notifyPosition = absolutePosition >= 0 ? absolutePosition
-                    : (bindingAdapter == rowAdapter ? bindingPosition : -1);
-            if (notifyPosition < 0) {
-                return false;
-            }
-            invalidateMessageContentBindCache(contentHolder);
-            // The content view is an item in the nested MessageAccessoriesView RecyclerView.
-            // Notify it as well as the outer chat row so both layout levels recalculate.
-            int contentPosition = -1;
-            Object contentPosValue = Reflect.call(
-                    findInheritedMethod(contentHolder.getClass(), "getBindingAdapterPosition", 0),
-                    contentHolder);
-            if (contentPosValue instanceof Integer) {
-                contentPosition = (Integer) contentPosValue;
-            }
-            if (contentPosition >= 0) {
-                Method notifyContent = findInheritedMethod(
-                        contentAdapter.getClass(), "notifyItemChanged", 1, int.class);
-                if (notifyContent != null) {
-                    try {
-                        notifyContent.invoke(contentAdapter, contentPosition);
-                    } catch (Throwable t) {
-                        XLog.d("notify inner content failed: "
-                                + t.getClass().getSimpleName());
-                    }
-                }
-            }
-            Method notifyItemChanged = findInheritedMethod(
-                    rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
-            if (notifyItemChanged == null) {
-                return false;
-            }
-            try {
-                notifyItemChanged.invoke(rowAdapter, notifyPosition);
-                // 不做同步重绑，避免直接重跑宿主绑定管线。
-                scheduleRelayoutAfterLayout(view);
-                return true;
-            } catch (Throwable t) {
-                Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
-                        && t.getCause() != null ? t.getCause() : t;
-                XLog.d("notify outer row failed: " + cause.getClass().getSimpleName());
-                return false;
-            }
-        } catch (Throwable t) {
-            XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
-            return false;
-        }
-    }
-
-    /**
-     * 把一次强制重新测量推到当前帧布局结束之后。
-     *
-     * <p>{@code View.post()} defers the request until the current host layout pass ends.</p>
-     */
-    private static void scheduleRelayoutAfterLayout(@Nullable final View view) {
-        if (view == null) {
-            return;
-        }
-        try {
-            view.post(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        if (!view.isAttachedToWindow()) {
-                            return;
-                        }
-                        // 布局已结束，此时 requestLayout 不会被丢弃。
-                        for (View v = view; v != null; ) {
-                            v.forceLayout();
-                            android.view.ViewParent parent = v.getParent();
-                            v = parent instanceof View ? (View) parent : null;
-                        }
-                        requestLayoutChain(view);
-                        forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
-                        relayoutContentSelf(view);
-                        view.invalidate();
-                        dispatchRecyclerLayout(findRecyclerView(view));
-                        dispatchRecyclerLayout(findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
-                    } catch (Throwable t) {
-                        XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
-                    }
-                }
-            });
-        } catch (Throwable t) {
-            XLog.d("schedule relayout failed: " + t.getClass().getSimpleName());
-        }
-    }
-
-    private static boolean invalidateMessageContentBindCache(Object holder) {
-        for (Class<?> cls = holder.getClass(); cls != null; cls = cls.getSuperclass()) {
-            try {
-                java.lang.reflect.Field field = cls.getDeclaredField("lastMessageContent");
-                field.setAccessible(true);
-                field.set(holder, null);
-                return true;
-            } catch (NoSuchFieldException ignored) {
-                // 继续沿父类查找：字段声明可能在基类上。
-            } catch (Throwable t) {
-                XLog.w("cannot invalidate message bind cache: "
-                        + t.getClass().getSimpleName(), t);
-                return false;
-            }
-        }
-        XLog.w("lastMessageContent field not found; row rebind may be skipped");
-        return false;
-    }
-
-    /**
-     * 沿继承链查找方法：{@code getAdapter}/{@code notifyItemChanged} 等声明在
-     * {@code RecyclerView} 或其 {@code Adapter} 基类上，子类的
-     * {@code getDeclaredMethods()} 看不到它们。
-     */
-    @Nullable
-    private static Method findInheritedMethod(@Nullable Class<?> cls, String namePrefix,
-                                              int paramCount, Class<?>... firstParams) {
-        for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
-            Method m = Reflect.findMethod(c, namePrefix, paramCount, firstParams);
-            if (m != null) {
-                return m;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 沿父链找到最近的 RecyclerView（按类名判断，避免编译期依赖）。
-     */
-    @Nullable
-    private static android.view.ViewParent findRecyclerView(View view) {
-        android.view.ViewParent parent = view.getParent();
-        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
-            if (Reflect.isInstanceOfName(parent,
-                    "androidx.recyclerview.widget.RecyclerView")) {
-                return parent;
-            }
-            parent = parent.getParent();
-        }
-        return null;
-    }
-
-    /** Finds an ancestor RecyclerView by its concrete host class name. */
-    @Nullable
-    private static android.view.ViewParent findAncestorByClassName(View view, String className) {
-        android.view.ViewParent parent = view.getParent();
-        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
-            if (Reflect.isInstanceOfName(parent, className)) {
-                return parent;
-            }
-            parent = parent.getParent();
-        }
-        return null;
-    }
-
-    /**
-     * 对视图及其父链请求重新布局。
-     *
-     * <p>{@code View.invalidate()} only redraws. A text change rebuilds the text layout,
-     * but {@code View.getHeight()} updates during measure/layout.</p>
-     *
-     * <p><b>为什么先 forceLayout()</b>：仅调 {@code requestLayout()} 时，
-     * 若该 View 的 {@code PFLAG_FORCE_LAYOUT} 未置位且测量参数未变，
-     * 父级会在 {@code measureChildWithMargins} 中直接用缓存尺寸而不再下探。
-     * {@code forceLayout()} 会置位该标记并清掉测量缓存，使下一次 measure
-     * 真正跑到这个 View。</p>
-     *
-     * <p>沿父链向上传播的原因：中文正文高度变化后，承载它的
-     * {@code MessageAccessoriesView}（一个 RecyclerView）与最外层
-     * {@code MessageView} 的测量结果都需要重新计算，只刷单层不足以让
-     * 宿主行高更新。</p>
-     *
-     * <p>深度上有界（{@link #RELAYOUT_MAX_DEPTH}），避免无界传播。</p>
-     */
-    /** Requests a relayout on the specified ancestor. */
-    private static boolean forceRelayoutAncestor(@Nullable View view, String className) {
-        if (view == null) {
-            return false;
-        }
-        try {
-            android.view.ViewParent parent = view.getParent();
-            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
-                View parentView = (View) parent;
-                if (Reflect.isInstanceOfName(parentView, className)) {
-                    parentView.forceLayout();
-                    parentView.requestLayout();
-                    return true;
-                }
-                parent = parent.getParent();
-            }
-        } catch (Throwable t) {
-            XLog.d("force relayout ancestor failed: " + t.getClass().getSimpleName());
-        }
-        return false;
-    }
-
-    /**
-     * 让内容视图按自身当前文本重新测量并布局，不依赖父级 RecyclerView。
-     *
-     * <p>Use the current measured width and an {@link View.MeasureSpec#UNSPECIFIED}
-     * height so the new text can determine the content view's required height.</p>
-     *
-     * <p>只改这个子视图自身的尺寸，不改任何数据或文本内容。</p>
-     */
-    private static void relayoutContentSelf(@Nullable View view) {
-        if (view == null || !view.isAttachedToWindow()) {
-            return;
-        }
-        try {
-            int width = view.getWidth();
-            if (width <= 0) {
-                width = view.getMeasuredWidth();
-            }
-            if (width <= 0) {
-                return;
-            }
-            int widthSpec = View.MeasureSpec.makeMeasureSpec(
-                    width, View.MeasureSpec.EXACTLY);
-            int heightSpec = View.MeasureSpec.makeMeasureSpec(
-                    0, View.MeasureSpec.UNSPECIFIED);
-            view.forceLayout();
-            view.measure(widthSpec, heightSpec);
-            int newHeight = view.getMeasuredHeight();
-            int oldHeight = view.getHeight();
-            if (newHeight > 0 && newHeight != oldHeight) {
-                view.layout(view.getLeft(), view.getTop(),
-                        view.getLeft() + width, view.getTop() + newHeight);
-            }
-            // 父级（内层 RecyclerView）自身高度也需跟着收缩，否则空白还在。
-            android.view.ViewParent parent = view.getParent();
-            if (parent instanceof View) {
-                View parentView = (View) parent;
-                parentView.forceLayout();
-                parentView.requestLayout();
-            }
-        } catch (Throwable t) {
-            XLog.d("content self relayout failed: " + t.getClass().getSimpleName());
-        }
-    }
-
-    private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
-        if (recycler == null) {
-            return;
-        }
-        try {
-            Object suppressed = Reflect.getField(recycler, "mLayoutSuppressed");
-            Object interceptDepth = Reflect.getField(recycler, "mInterceptRequestLayoutDepth");
-            Object computing = Reflect.call(findInheritedMethod(
-                    recycler.getClass(), "isComputingLayout", 0), recycler);
-            if (!Boolean.FALSE.equals(suppressed)
-                    || !(interceptDepth instanceof Integer)
-                    || ((Integer) interceptDepth) != 0
-                    || Boolean.TRUE.equals(computing)) {
-                return;
-            }
-            Method dispatchLayout = findInheritedMethod(
-                    recycler.getClass(), "dispatchLayout", 0);
-            if (dispatchLayout != null) {
-                dispatchLayout.invoke(recycler);
-            }
-        } catch (Throwable t) {
-            Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
-                    && t.getCause() != null ? t.getCause() : t;
-            XLog.d("dispatchLayout failed: " + cause.getClass().getSimpleName());
-        }
-    }
-
-    private static void requestLayoutChain(@Nullable View view) {
-        if (view == null) {
-            return;
-        }
-        try {
-            view.forceLayout();
-            view.requestLayout();
-            android.view.ViewParent parent = view.getParent();
-            for (int depth = 0;
-                 depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
-                View parentView = (View) parent;
-                parentView.forceLayout();
-                parentView.requestLayout();
-                parent = parent.getParent();
-            }
-        } catch (Throwable t) {
-            // 布局请求失败不影响主流程：下一次滚动仍会正确重绑。
-            XLog.d("requestLayoutChain failed: " + t.getClass().getSimpleName());
-        }
-    }
-
-    private static final String CHAT_LIST_VIEW_CLASS =
-            "com.discord.chat.presentation.list.ChatListView";
-    private static final String MESSAGE_VIEW_CLASS =
-            "com.discord.chat.presentation.message.MessageView";
-
-    /**
-     * 父链传播的最大深度。
-     *
-     * <p>实测消息正文视图到外层 ChatListView 的层级较深，原先 12 层的
-     * 上限可能在到达 ChatListView 之前就截断，导致 requestLayout 没有传到
-     * 真正负责布局的那一层——表现为“高度不更新，滚动一次才恢复”。
-     * 这里放宽到 32（仍为有界值，避免异常情况下的无界传播）。</p>
-     */
-    private static final int RELAYOUT_MAX_DEPTH = 32;
 
     /**
      * 启用分段标记时附加到缓存键的后缀。
@@ -665,6 +384,9 @@ public final class HookBridge {
      * 的消息会带上它，因此单节点消息的缓存与旧版本保持兼容。</p>
      */
     private static final String SEGMENT_CACHE_SUFFIX = "\u0000seg1";
+
+    /** Embed 状态键的分隔符；真实消息 ID（雪花 ID）不可能包含 U+0000。 */
+    private static final String EMBED_KEY_PREFIX = "\u0000embed\u0000";
 
     // ---------------------------------------------------------------- 翻译流程
 
@@ -689,8 +411,7 @@ public final class HookBridge {
         // 否则已缓存的旧译文会继续走回退路径、格式照旧丢失。
         // 单节点消息不受影响，其缓存与旧版本完全兼容。
         String requestText = ex.segmented != null ? ex.segmented : ex.text;
-        String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
-        String hash = Scheduler.contentHash(hashInput, cfg.version());
+        String hash = contentHashOf(ex, cfg);
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
         rawContent.put(messageId, structurableText);
         if (contentView != null) {

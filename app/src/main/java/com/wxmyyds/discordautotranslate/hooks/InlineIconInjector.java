@@ -22,12 +22,14 @@ import com.wxmyyds.discordautotranslate.core.XLog;
  *
  * <h3>注入范围（需求：只处理正常消息正文的可翻译文本）</h3>
  * <ol>
- *   <li><b>必须来自正常消息正文</b>：只有 {@code MessageContentView.setMessageContent}
- *       路径会设置 {@link #CURRENT_HOST}（渲染宿主）。回复引用
- *       （{@code MessageViewReplyPreview}）与 Embed 直接调用 {@code toSpannable}，
- *       不会设置宿主，因此天然被排除。</li>
+ *   <li><b>必须有渲染宿主</b>：{@code MessageContentView.setMessageContent} 与
+ *       Embed 绑定（{@code EmbedHooks}）都会在调用链内设置 {@link #CURRENT_HOST}；
+ *       回复引用（{@code MessageViewReplyPreview}）不设置宿主，天然被排除。</li>
  *   <li><b>必须有可翻译文本</b>：{@code TextExtractor} 的 {@code textNodeCount > 0}。
  *       纯图片、纯表情、纯提及消息的文本节点数为 0，不注入。</li>
+ *   <li><b>Embed 每卡片只挂一个图标</b>：只有 {@code HookBridge.markEmbedIconKey}
+ *       标记的主段（富 Embed 的描述/标题/首字段）允许注入；帖子预览的标题是
+ *       String，图标经「仅图标」身份映射挂在 footer 上，不参与文本替换。</li>
  * </ol>
  *
  * <h3>宿主 View 的传递</h3>
@@ -90,14 +92,23 @@ public final class InlineIconInjector {
         try {
             View host = CURRENT_HOST.get();
             if (host == null) {
-                return rendered; // 非正常消息正文（回复引用 / Embed 等）：不注入
+                return rendered; // 回复引用等无宿主路径：不注入
             }
             Context context = rawContext instanceof Context ? (Context) rawContext : null;
             if (!(rendered instanceof SpannableStringBuilder) || context == null) {
                 return rendered;
             }
             String messageId = HookBridge.get().resolveMessageId(structurable);
+            boolean iconAllowed = messageId != null
+                    && (!HookBridge.isEmbedKey(messageId)
+                    || HookBridge.get().isEmbedIconKey(messageId));
             if (messageId == null) {
+                // 帖子预览：图标承载在 footer 等另一段内容上（仅图标身份，
+                // 不参与文本替换）。
+                messageId = HookBridge.get().resolveIconOnlyKey(structurable);
+                iconAllowed = messageId != null;
+            }
+            if (!iconAllowed) {
                 return rendered;
             }
             StateStore.Entry entry = StateStore.get().peek(messageId);
@@ -160,8 +171,9 @@ public final class InlineIconInjector {
         }
     }
 
+    /** 状态 → 图标 Drawable。Embed/投票路径共用。 */
     @Nullable
-    private static Drawable iconFor(Context context, StateStore.Status status) {
+    static Drawable iconFor(Context context, StateStore.Status status) {
         switch (status) {
             case TRANSLATING:
                 return ModuleResources.progressIcon(context);

@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -85,74 +84,13 @@ public final class MemoryPrefs implements SharedPreferences {
         return values.containsKey(key);
     }
 
+    /**
+     * 本类只用于构造只读快照（{@link Config#read}），不承载持久化编辑；
+     * 与旧 {@code Config.Defaults} 一致，调用 {@code edit()} 视为编程错误。
+     */
     @Override
     public Editor edit() {
-        return new Editor() {
-            private final Map<String, Object> pending = new HashMap<>();
-            private final Set<String> removals = new HashSet<>();
-
-            @Override
-            public Editor putString(String key, @Nullable String value) {
-                pending.put(key, value);
-                return this;
-            }
-
-            @Override
-            public Editor putStringSet(String key, @Nullable Set<String> values) {
-                pending.put(key, values);
-                return this;
-            }
-
-            @Override
-            public Editor putInt(String key, int value) {
-                pending.put(key, value);
-                return this;
-            }
-
-            @Override
-            public Editor putLong(String key, long value) {
-                pending.put(key, value);
-                return this;
-            }
-
-            @Override
-            public Editor putFloat(String key, float value) {
-                pending.put(key, value);
-                return this;
-            }
-
-            @Override
-            public Editor putBoolean(String key, boolean value) {
-                pending.put(key, value);
-                return this;
-            }
-
-            @Override
-            public Editor remove(String key) {
-                removals.add(key);
-                return this;
-            }
-
-            @Override
-            public Editor clear() {
-                removals.addAll(values.keySet());
-                return this;
-            }
-
-            @Override
-            public boolean commit() {
-                apply();
-                return true;
-            }
-
-            @Override
-            public void apply() {
-                for (String k : removals) {
-                    values.remove(k);
-                }
-                values.putAll(pending);
-            }
-        };
+        throw new UnsupportedOperationException();
     }
 
     @Override

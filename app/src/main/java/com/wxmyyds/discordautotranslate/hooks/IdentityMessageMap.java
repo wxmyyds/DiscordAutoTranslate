@@ -39,19 +39,6 @@ final class IdentityMessageMap {
         return values.get(new IdentityKey(content, null));
     }
 
-    synchronized void removeMessage(String messageId) {
-        if (messageId == null) {
-            return;
-        }
-        expungeCollected();
-        Iterator<Map.Entry<IdentityKey, String>> it = values.entrySet().iterator();
-        while (it.hasNext()) {
-            if (messageId.equals(it.next().getValue())) {
-                it.remove();
-            }
-        }
-    }
-
     synchronized void clear() {
         values.clear();
         while (collected.poll() != null) {

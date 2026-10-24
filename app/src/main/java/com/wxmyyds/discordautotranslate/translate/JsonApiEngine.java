@@ -40,7 +40,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
         if (text == null || text.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
         }
-        validate();
+        validateConfig(cfg);
 
         // 1) 渲染请求体
         // 带分段标记的请求需要模型知道标记规则；追加在系统提示词末尾，
@@ -87,11 +87,6 @@ public final class JsonApiEngine implements Scheduler.Engine {
     @Override
     public void cancel(Thread worker) {
         Http.cancelRequestOn(worker);
-    }
-
-    /** 配置校验：任一必需项缺失都给出具体提示（需求 §5.5、§8）。 */
-    private void validate() throws TranslationException {
-        validateConfig(cfg);
     }
 
     /**

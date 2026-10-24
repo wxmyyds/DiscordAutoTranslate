@@ -11,8 +11,10 @@ import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.TranslationCache;
 import com.wxmyyds.discordautotranslate.core.XLog;
+import com.wxmyyds.discordautotranslate.hooks.EmbedHooks;
 import com.wxmyyds.discordautotranslate.hooks.HookBridge;
 import com.wxmyyds.discordautotranslate.hooks.InlineIconSpan;
+import com.wxmyyds.discordautotranslate.hooks.PollHooks;
 import com.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import com.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
 import com.wxmyyds.discordautotranslate.hooks.MessageHooks;
@@ -202,7 +204,11 @@ public class ModuleEntry extends XposedModule {
                     + created.size() + "/" + MessageHooks.MIN_REQUIRED_HOOKS);
         }
         hooks.addAll(created);
-        XLog.i("installed " + created.size() + " hooks");
+        // Embed 翻译是增强能力：目标版本缺少对应类时静默降级，不影响核心 Hook 数。
+        hooks.addAll(EmbedHooks.install(this, cl));
+        // 投票卡片翻译同为增强能力，独立降级。
+        hooks.addAll(PollHooks.install(this, cl));
+        XLog.i("installed " + hooks.size() + " hooks");
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
