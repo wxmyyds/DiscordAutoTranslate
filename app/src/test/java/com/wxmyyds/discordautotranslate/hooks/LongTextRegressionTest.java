@@ -36,9 +36,10 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>URL 链接不进请求、不翻译，节点原样保留（逐字符一致）；</li>
  *   <li>带标记译文的校验是全有或全无：标记残缺/错序/夹带/占位符 → 整条保留原文；</li>
- *   <li>标记校验失败时引擎自动用无标记纯文本重发一次（重试译文经引擎
- *       防损坏校验），渲染层对无标记译文走整段回填；</li>
- *   <li>协议完好时每个标题拿到自己的片段，空行结构来自原节点。</li>
+ *   <li>单链路：请求恒为无标记纯文本，引擎返回前做防损坏校验
+ *       （残留标记/占位符/长度比例，见 {@code Segments.plainTextViolation}）；
+ *       渲染层按「空行段落块」对齐回填，段落块多于片段数时整条保留原文；</li>
+ *   <li>结构对齐时每个标题拿到自己的片段，空行结构来自原节点。</li>
  * </ul>
  */
 public class LongTextRegressionTest {
@@ -242,10 +243,10 @@ public class LongTextRegressionTest {
 
     @Test
     public void completelyMarkerlessOutputFallsBackToWholeTextBackfill() {
-        // 完全无标记的输出（模型丢光标记，或引擎无标记重试的产物）：
-        // 渲染层不再拒绝，走整段回填。防损坏由引擎负责——残留标记、占位符、
-        // 长度异常（疑似复读/丢失）的无标记译文在 Segments.translateWithFallback
-        // 一侧被拒（见 SegmentsTest）；带残缺标记的输出在这里仍然保留原文。
+        // 完全无标记的输出（模型丢光标记，或单链路无标记请求的产物）：
+        // 段落块数不多于片段数时走按行回填。防损坏由引擎负责——残留标记、
+        // 占位符、长度异常（疑似复读/丢失）的无标记译文在引擎一侧被拒
+        // （见 SegmentsTest）；带残缺标记的输出在这里仍然保留原文。
         StringBuilder spam = new StringBuilder();
         for (int i = 0; i < 40; i++) {
             spam.append("🔥🔥🔥 FREE CRACK 🔥🔥🔥\n");
@@ -260,6 +261,72 @@ public class LongTextRegressionTest {
         LinkContentNode link = (LinkContentNode) out.get(2);
         assertEquals(URLS[0],
                 ((TextContentNode) link.getContent().get(0)).getContent());
+    }
+
+    // ---------------------------------------------------------------- 单链路无标记回填（2026-10 二次上报）
+
+    @Test
+    public void markerlessStructurePreservingTranslationMapsEveryBlockExactly() {
+        // 单链路请求无标记纯文本；模型保结构返回时译文按空行分成 15 个
+        // 段落块，与 15 个标题片段一一对应。旧实现按裸行切分：空行与
+        // URL 链接留下的占位空格行也被当成片段，一半标题被置空、其余
+        // 串位、最后节点堆叠多块译文（内容块重复、消息膨胀、URL 与
+        // 正文错误关联）。
+        List<Object> nodes = reportedMessageTree();
+        StringBuilder translation = new StringBuilder();
+        for (int i = 0; i < 15; i++) {
+            if (i > 0) {
+                translation.append("\n \n\n"); // 镜像请求文本结构：URL 链接只贡献空格行
+            }
+            translation.append("第").append(i + 1).append("块标题译文");
+        }
+        List<Object> out = ContentNodes.replaceText(nodes, translation.toString());
+
+        assertNotNull(out);
+        assertEquals("节点树规模不变（结构全保留）", nodes.size(), out.size());
+        int headingIndex = 0;
+        int linkIndex = 0;
+        for (Object n : out) {
+            if (n instanceof HeadingContentNode) {
+                headingIndex++;
+                assertEquals("第" + headingIndex + " 个标题必须拿到自己的段落块",
+                        "第" + headingIndex + "块标题译文",
+                        ((TextContentNode) ((HeadingContentNode) n).getContent().get(0))
+                                .getContent());
+            } else if (n instanceof LinkContentNode) {
+                assertEquals("URL 必须逐字符保留且仍与自己的标题相邻",
+                        URLS[linkIndex % 3],
+                        ((TextContentNode) ((LinkContentNode) n).getContent().get(0))
+                                .getContent());
+                linkIndex++;
+            } else if (n instanceof TextContentNode) {
+                assertEquals("组间空行节点原样保留", "\n\n",
+                        ((TextContentNode) n).getContent());
+            }
+        }
+        assertEquals(15, headingIndex);
+        assertEquals(15, linkIndex);
+    }
+
+    @Test
+    public void markerlessDuplicatedBlocksKeepOriginalEntirely() {
+        // 模型复读：译文出现 20 个段落块（原文只有 15 个标题片段）→
+        // 拒绝回填，整条保留原文。旧实现把多出的块全部堆进最后一个
+        // 标题节点，表现为内容块异常重复、消息长度膨胀。
+        StringBuilder duplicated = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            if (i > 0) {
+                duplicated.append("\n\n");
+            }
+            duplicated.append("第").append(i + 1).append("块复读内容");
+        }
+        List<Object> nodes = reportedMessageTree();
+        assertNull(ContentNodes.replaceText(nodes, duplicated.toString()));
+        HeadingContentNode first = (HeadingContentNode) nodes.get(0);
+        assertEquals(TITLES[0], ((TextContentNode) first.getContent().get(0)).getContent());
+        LinkContentNode third = (LinkContentNode) nodes.get(2);
+        assertEquals(URLS[0],
+                ((TextContentNode) third.getContent().get(0)).getContent());
     }
 
     // ---------------------------------------------------------------- 混合格式的长文本

@@ -435,4 +435,37 @@ public class SegmentsTest {
             fail("unexpected: " + other);
         }
     }
+
+    @Test
+    public void plainTextViolationGuardsForSinglePath() {
+        // 单链路引擎在返回译文前调用该校验：任何一项不过都判失败，
+        // 由用户点图标重试，绝不把损坏内容送进节点树。
+        assertNotNull("残留标记必须拦截",
+                Segments.plainTextViolation("译文里残留</s2>字面量", "hello world"));
+        assertNotNull("模板占位符必须拦截",
+                Segments.plainTextViolation("SENSENOVA_6_8_FLASH_LITE_XXXXXX", "hello world"));
+        assertNotNull("空译文必须拦截",
+                Segments.plainTextViolation("  ", "hello world"));
+
+        // 长度比例校验只对 ≥40 字符的原文生效。
+        StringBuilder source = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            source.append("paragraph ").append(i).append(' ');
+        }
+        String longSource = source.toString();
+        assertTrue(longSource.length() >= 40);
+        StringBuilder flood = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            flood.append(longSource); // 10 倍长度：复读刷屏
+        }
+        assertNotNull("复读（长度暴涨）必须拦截",
+                Segments.plainTextViolation(flood.toString(), longSource));
+        assertNotNull("内容大面积丢失必须拦截",
+                Segments.plainTextViolation("丢了", longSource));
+
+        assertNull("正常译文必须放行",
+                Segments.plainTextViolation("你好世界", "hello world"));
+        assertNull("短原文不做比例校验",
+                Segments.plainTextViolation("很长很长的译文比原文还长好几倍", "hi"));
+    }
 }

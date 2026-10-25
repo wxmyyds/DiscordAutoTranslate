@@ -41,8 +41,17 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
         validateConfig(cfg);
         // 单一链路（用户决策）：一次无标记纯文本请求，不重试、不降级。
-        // 失败由调度器的既有错误重试处理；译文按行回填到各文本节点。
-        return requestOnce(text);
+        // 失败由调度器的既有错误重试处理；译文按段落块回填到各文本节点。
+        String translated = requestOnce(text);
+        // 防损坏校验不是第二条请求链路：只检查这一次的响应（残留标记、
+        // 占位符、长度比例异常）。不合格直接判失败，宁可显示原文也不把
+        // 复读/残缺内容送进节点树。
+        String violation = Segments.plainTextViolation(translated, text);
+        if (violation != null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "译文未通过防损坏校验：" + violation);
+        }
+        return translated;
     }
 
     /**

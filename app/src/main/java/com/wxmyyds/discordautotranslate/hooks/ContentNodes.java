@@ -94,9 +94,9 @@ public final class ContentNodes {
      * <p>译文优先按分段标记（{@code <sN>…</sN>}）回填：每个文本节点拿到自己
      * 对应的片段，于是换行结构与加粗/标题等样式容器都按原样保留。译文里
      * <b>带有标记但校验不过</b>（残缺/错序/夹带标记/占位符）= 协议被模型破坏，
-     * 整条保留原文；<b>无标记</b>译文（引擎在分段失败后用无标记重试的产物，
-     * 已通过引擎防损坏校验）与单段消息一样走整段回填。URL 链接与 URL 文本块
-     * 不参与翻译，原样保留。</p>
+     * 整条保留原文；<b>无标记</b>译文（单链路无标记请求的标准形态）按空行
+     * 段落块对齐回填，段落块多于可翻译片段同样整条保留原文，绝不让复读或
+     * 错位内容进入节点树。URL 链接与 URL 文本块不参与翻译，原样保留。</p>
      *
      * @param nodes        原始节点列表
      * @param translated   译文（可能是带标记的模型原文，也可能是纯文本）
@@ -126,13 +126,19 @@ public final class ContentNodes {
                 return null;
             }
             // 无标记译文：单链路（无标记纯文本请求）的标准形态，
-            // 或单段请求——都走整段回填：按行切分分配到各节点。
+            // 或单段请求。按「空行段落块」对齐到各可翻译片段；
+            // 译文段落块多于片段数 = 模型新增/复读内容，拒绝回填保留原文。
             String plain = normalize(Segments.strip(translated));
             if (plain.isEmpty()) {
                 // 剔除后什么都不剩：不能清空消息，保留原文。
                 return null;
             }
             parts = splitTranslation(plain, targetCount);
+            if (parts == null) {
+                XLog.d("markerless translation has more paragraph blocks than "
+                        + targetCount + " targets; keeping original text");
+                return null;
+            }
         }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
         // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
@@ -498,14 +504,40 @@ public final class ContentNodes {
     /**
      * 把译文切分成与原文本节点数量一致的片段。
      *
-     * <p>模型通常会把多段内容合并返回，此处按换行优先切分；不足时补空串。
-     * 切分只是尽力保持段落结构，即使不完美也不影响可读性。</p>
+     * <p>回填消费片段的口径是「空行切分的非空白非 URL 段落块」（见
+     * {@link TextExtractor#countSegments}），切分必须先按同一口径对齐：
+     * 模型保结构返回时（译文段落块数 == 片段数）每块精确落到自己的节点，
+     * URL 链接因此仍与正确的段落相邻。此前按裸换行行数切分，空行与
+     * 占位空格行也被当成片段，导致段落串位、部分节点被置空、多余行
+     * 全部堆进最后一个节点（实测：内容块重复堆叠、消息膨胀、URL 与
+     * 正文错误关联）。</p>
+     *
+     * <p>段落块<b>多于</b>片段数：模型输出里出现了原文没有的段落
+     * （复读/自增内容），任何分配都会错位或膨胀，返回 null 让调用方
+     * 整条保留原文。段落块不足时退回旧的按行分配：行数足够按行切、
+     * 不足则首段承载全部（不硬切句子）。</p>
+     *
+     * @return 片段列表；段落块数超过 parts 时返回 null（拒绝回填）
      */
+    @Nullable
     static List<String> splitTranslation(String translated, int parts) {
         List<String> out = new ArrayList<>(parts);
         if (parts <= 1) {
             out.add(translated);
             return out;
+        }
+        List<String> chunks = new ArrayList<>();
+        for (String chunk : BlankLines.split(translated).chunks) {
+            String trimmed = chunk.trim();
+            if (!trimmed.isEmpty() && !TextExtractor.isUrlLike(trimmed)) {
+                chunks.add(trimmed);
+            }
+        }
+        if (chunks.size() == parts) {
+            return chunks;
+        }
+        if (chunks.size() > parts) {
+            return null;
         }
         String[] lines = translated.split("\n", -1);
         if (lines.length >= parts) {

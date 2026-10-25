@@ -1025,6 +1025,26 @@ public class ContentNodesTest {
         assertEquals("", parts.get(2));
     }
 
+    @Test
+    public void splitByParagraphBlocksWhenCountsMatch() {
+        // 段落块数与片段数一致：每块整体落到一个片段（块内单换行保留），
+        // 不再按裸行切——按行切会把第二行并进第一片段、空行后的内容堆到尾部。
+        List<String> parts = ContentNodes.splitTranslation("第一块\n第二行\n\n第二块", 2);
+        assertEquals(2, parts.size());
+        assertEquals("第一块\n第二行", parts.get(0));
+        assertEquals("第二块", parts.get(1));
+    }
+
+    @Test
+    public void splitRejectsWhenMoreParagraphBlocksThanTargets() {
+        // 译文段落块多于片段数 = 模型新增/复读内容：拒绝回填（null），
+        // 不得把多出的块堆进最后一个节点。
+        assertNull(ContentNodes.splitTranslation("A\n\nB\n\nC", 2));
+        // URL 块与空段落不算块：URL 回显不触发拒绝。
+        assertEquals(Arrays.asList("甲", "乙"),
+                ContentNodes.splitTranslation("甲\n\nhttps://gofile.io/d/abc\n\n乙", 2));
+    }
+
     // ---------------------------------------------------------------- 行数与尾部空白
 
     @Test

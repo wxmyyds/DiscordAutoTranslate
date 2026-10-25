@@ -319,6 +319,10 @@ public final class Segments {
     /**
      * 无标记译文的防损坏校验：非空、无残留标记、无占位符、长度比例合理。
      *
+     * <p>单链路（无标记纯文本请求）在引擎侧返回前调用：复读刷屏（长度
+     * 暴涨）、内容大面积丢失（长度骤减）、标记泄漏与模板占位符都在这里
+     * 拦下，判失败由用户手动重试，而不是把损坏译文送进节点树。</p>
+     *
      * <p>长度比例只对较长的原文（≥40 字符）生效：正常中英互译长度在
      * 0.25×～3× 之间，复读刷屏会显著超出，内容丢失会显著不足；
      * 过短的文本比例噪声太大，不做校验。</p>
@@ -326,7 +330,7 @@ public final class Segments {
      * @return 违规描述；合格返回 null
      */
     @Nullable
-    static String plainTextViolation(@Nullable String translated, String source) {
+    public static String plainTextViolation(@Nullable String translated, String source) {
         if (translated == null || translated.trim().isEmpty()) {
             return "译文为空";
         }
