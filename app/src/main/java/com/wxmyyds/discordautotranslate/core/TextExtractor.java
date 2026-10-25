@@ -318,8 +318,11 @@ public final class TextExtractor {
                 // 片段计数与消费（ContentNodes.countTextNodes/rebuild）同口径：
                 // 空白块与 URL 块不算可翻译片段。
                 counters[3] += countSegments(s);
-                if (!styled) {
-                    // 无样式：整段原样进请求（与纯文本形态一致）。
+                if (!styled || BlankLines.isBlank(s)) {
+                    // 无样式，或样式容器内的纯空白节点（实测 ** … ** 的尾随
+                    // 空格会被宿主拆成这样的节点，此时 lead > tail，
+                    // substring(lead, tail) 会越界）：整段原样进请求，
+                    // 空白不属于任何可翻译片段。
                     out.append(s);
                     counters[0]++;
                     return;

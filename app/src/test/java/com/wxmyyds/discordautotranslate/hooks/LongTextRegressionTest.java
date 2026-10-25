@@ -308,6 +308,21 @@ public class LongTextRegressionTest {
     }
 
     @Test
+    public void extractHandlesWhitespaceOnlyTextNodeInsideStyledContainer() {
+        // 实测（消息 1563773063701725295）：** LINK … URL ** 的尾随空格被宿主
+        // 拆成样式容器内的全空白文本节点，提取在 substring(lead, tail) 上越界
+        // 崩溃（日志 "expanded render hook failed"），正文翻译从未发起、消息
+        // 保持英文。空白节点必须原样进请求、不占片段，提取不得抛异常。
+        TextExtractor.Result r = TextExtractor.extract(
+                new AnnotatedStructurableText(repeatedAdTree()));
+
+        assertNotNull(r);
+        assertTrue(r.text.contains("https://clck.ru/3Wfv9G"));
+        assertTrue(r.text.contains("LINK GEMINI 4 ARGON"));
+        assertEquals("7 组 ×（2 个标题 + 1 个加粗行）各占一个片段", 21, r.segmentCount);
+    }
+
+    @Test
     public void deduplicatedTranslationOfRepeatedBlocksKeepsOriginal() {
         // 模型对重复块去重（21 个段落只回 3 块）：无法确定哪块对应哪一组，
         // 拒绝回填、整条保留原文。提示词已明确要求逐个翻译重复段落，
