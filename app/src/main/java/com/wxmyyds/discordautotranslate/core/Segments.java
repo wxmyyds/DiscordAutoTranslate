@@ -273,6 +273,15 @@ public final class Segments {
                 XLog.i("marked request timed out; falling back to plain text");
                 return plainRetry(requestText, null, rt);
             }
+            // 推理型模型会在带标记请求上长时间思考（实测 55s/196KB 帧全部是
+            // 思考内容），正文一个字没出就被截断，提取结果为空。纯文本请求
+            // 任务简单、实测秒级返回正文，同样立即降级。
+            if (te.kind() == TranslationException.Kind.EMPTY
+                    && isSegmented(requestText)) {
+                XLog.i("marked request returned no content (reasoning model?); "
+                        + "falling back to plain text");
+                return plainRetry(requestText, null, rt);
+            }
             throw te;
         }
         if (!isSegmented(requestText)) {

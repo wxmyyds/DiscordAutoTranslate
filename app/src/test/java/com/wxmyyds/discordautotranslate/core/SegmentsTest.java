@@ -375,6 +375,30 @@ public class SegmentsTest {
     }
 
     @Test
+    public void markedRequestEmptyResponseFallsBackToPlainText() throws Exception {
+        // 实测：推理型模型在带标记请求上思考 55s/196KB 帧却不出正文，
+        // 提取结果为空；纯文本请求秒级返回正文。空译文同样立即降级。
+        final List<String> sent = new ArrayList<>();
+        Segments.RoundTrip rt = new Segments.RoundTrip() {
+            @Override
+            public String roundTrip(String text) throws Exception {
+                sent.add(text);
+                if (sent.size() == 1) {
+                    throw new TranslationException(TranslationException.Kind.EMPTY,
+                            "提取到的译文为空");
+                }
+                return "你好世界";
+            }
+        };
+        String out = Segments.translateWithFallback(
+                "<s1>hello</s1>\n<s2>world</s2>", rt);
+
+        assertEquals("你好世界", out);
+        assertEquals(2, sent.size());
+        assertEquals("重试必须发送无标记纯文本", "hello\nworld", sent.get(1));
+    }
+
+    @Test
     public void plainRequestTimeoutPropagates() {
         // 无标记请求超时 = 真网络/供应商问题，不能无限降级。
         TimeoutFirstRoundTrip rt = new TimeoutFirstRoundTrip("不应到达");
