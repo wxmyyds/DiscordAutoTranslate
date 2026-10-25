@@ -11,7 +11,6 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -70,13 +69,11 @@ public final class PollHooks {
         Class<?> holder = Reflect.loadClass(cl, CLS_POLL_HOLDER);
         Class<?> accessory = Reflect.loadClass(cl, CLS_POLL_ACCESSORY);
         if (holder == null || accessory == null) {
-            XLog.d("PollViewHolder/PollMessageAccessory not found; poll translation disabled");
             return handles;
         }
         Method bind = Reflect.findMethodAt(holder, "bind",
                 POLL_BIND_PARAM_COUNT, 0, accessory);
         if (bind == null) {
-            XLog.w("PollViewHolder.bind not found (paramCount=" + POLL_BIND_PARAM_COUNT + ")");
             return handles;
         }
         handles.add(module.hook(bind)
@@ -86,28 +83,27 @@ public final class PollHooks {
                     if (!HookBridge.get().isRerendering()) {
                         try {
                             registerPollTexts(chain, bind);
-                        } catch (Throwable t) {
-                            XLog.w("poll bind hook failed", t);
+                        } catch (Throwable ignored) {
+                            // 登记失败不影响宿主绑定。
                         }
                     }
                     // 无状态替换：每次 bind（含重渲染与滑回）都按当前译文重建。
                     Object[] renderArgs = chain.getArgs().toArray();
                     try {
                         renderArgs[0] = translatePollAccessory(renderArgs[0]);
-                    } catch (Throwable t) {
-                        XLog.w("poll accessory rebuild failed", t);
+                    } catch (Throwable ignored) {
+                        // 替换失败保留宿主原文。
                     }
                     Object result = chain.proceed(renderArgs);
                     // 图标同样无状态追加：bind 后问题文本已定型，随当前状态着色。
                     try {
                         attachQuestionIcon(chain.getArg(0),
                                 asView(Reflect.getField(chain.getThisObject(), "itemView")));
-                    } catch (Throwable t) {
-                        XLog.w("poll question icon failed", t);
+                    } catch (Throwable ignored) {
+                        // 图标失败不影响宿主渲染。
                     }
                     return result;
                 }));
-        XLog.i("hooked PollViewHolder.bind");
         return handles;
     }
 
@@ -189,7 +185,6 @@ public final class PollHooks {
         }
         RerenderRegistry.register(key, view, holder, bind, args);
         HookBridge.get().onMessageBound(view, key, wrapped);
-        XLog.d("poll text registered msg=" + messageId);
     }
 
     // ------------------------------------------------------------------ 重建
@@ -364,7 +359,6 @@ public final class PollHooks {
         questionText.setText(ssb);
         icon.bindHost(questionText);
         questionText.setOnTouchListener(new PollIconTouch(key));
-        XLog.d("poll question icon attached status=" + entry.status);
     }
 
     /** 取投票问题文本视图：{@code pollView.binding.questionText}。 */
@@ -401,7 +395,6 @@ public final class PollHooks {
                     return hitIcon(tv, event);
                 case MotionEvent.ACTION_UP:
                     if (hitIcon(tv, event)) {
-                        XLog.d("poll icon clicked key=" + key);
                         HookBridge.get().onIconClicked(key);
                         tv.performClick();
                         return true;

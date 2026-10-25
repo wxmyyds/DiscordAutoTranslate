@@ -6,7 +6,6 @@ import com.wxmyyds.discordautotranslate.core.Protocols;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.Segments;
 import com.wxmyyds.discordautotranslate.core.TranslationException;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 /**
  * JSON 翻译引擎（需求 §5.5）。
@@ -69,7 +68,6 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
-        XLog.d("POST " + XLog.safeUrl(url) + " text=" + XLog.text(text));
         // Compatible 协议请求体带 stream:true，按 SSE 读取（读到 [DONE] 为止）；
         // Responses 协议保持非流式。
         boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);

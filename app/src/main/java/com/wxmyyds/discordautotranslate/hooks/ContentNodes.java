@@ -6,7 +6,6 @@ import com.wxmyyds.discordautotranslate.core.BlankLines;
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.Segments;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -109,7 +108,6 @@ public final class ContentNodes {
         }
         int targetCount = countTextNodes(nodes, 0);
         if (targetCount == 0) {
-            XLog.d("no translatable TextContentNode found; nothing to substitute");
             return null;
         }
         // URL 链接在请求里是定位标记：先按译文中的 URL 出现位置把译文
@@ -126,12 +124,6 @@ public final class ContentNodes {
         AlignmentPlan plan = buildPlan(nodes);
         List<String> parts = alignTranslation(plain, plan);
         if (parts == null || parts.size() != targetCount) {
-            XLog.d("markerless backfill refused: targets=" + targetCount
-                    + " lines=" + plain.split("\n", -1).length
-                    + " urlMarks=" + plan.urls.size()
-                    + " paragraphs=" + plan.paragraphCount()
-                    + " unsafeParagraphs=" + plan.unsafe.cardinality()
-                    + " head=" + XLog.text(plain));
             return null;
         }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
@@ -144,8 +136,6 @@ public final class ContentNodes {
         // 容器复制失败可能丢弃已重建的子节点；不得把其他已清空的文本节点
         // 作为部分成功的结果交给宿主。只允许整棵树替换成功。
         if (replacement.failed || replacement.next != targetCount) {
-            XLog.d("node replacement aborted: targets=" + targetCount
-                    + " visited=" + replacement.next);
             return null;
         }
         // 片段全部非空，但原树尾部的空行/空白节点仍会随结构保留；
@@ -438,7 +428,6 @@ public final class ContentNodes {
         Class<?> cls = node.getClass();
         Method copy = findCopyMethod(cls);
         if (copy == null) {
-            XLog.d("no copy() on " + cls.getSimpleName());
             return null;
         }
         // 逐个参数：内容字段用新列表，其他字段用 componentN 原值。
@@ -469,7 +458,6 @@ public final class ContentNodes {
             ctor.setAccessible(true);
             return ctor.newInstance(text);
         } catch (Throwable t) {
-            XLog.w("createTextNode failed for " + original.getClass().getSimpleName(), t);
             return null;
         }
     }
@@ -522,8 +510,6 @@ public final class ContentNodes {
             for (java.util.Map.Entry<String, Integer> e : expected.entrySet()) {
                 int actual = countOccurrences(plain, e.getKey());
                 if (actual != e.getValue()) {
-                    XLog.d("align refused: url marker expected " + e.getValue()
-                            + " actual " + actual + " url=" + e.getKey());
                     return null;
                 }
             }
@@ -533,7 +519,6 @@ public final class ContentNodes {
             if (viaMarkers != null) {
                 return viaMarkers;
             }
-            XLog.d("style-marker alignment failed; falling back to structure-only");
             plain = stripStyleTags(plain);
         }
         if (plan.urls.isEmpty()) {
@@ -554,8 +539,6 @@ public final class ContentNodes {
                     plan.groupIds.subList(segStart, segEnd),
                     plan.unsafeIn(segStart, segEnd));
             if (spanParts == null) {
-                XLog.d("align refused: span " + u + " segs=[" + segStart + "," + segEnd
-                        + ") " + XLog.text(plain.substring(from, at)));
                 return null;
             }
             copySpan(spanParts, parts, segStart);
@@ -566,8 +549,6 @@ public final class ContentNodes {
                 plan.groupIds.subList(segStart, plan.groupIds.size()),
                 plan.unsafeIn(segStart, plan.groupIds.size()));
         if (tailParts == null) {
-            XLog.d("align refused: tail span segs=[" + segStart + ","
-                    + plan.groupIds.size() + ") " + XLog.text(plain.substring(from)));
             return null;
         }
         copySpan(tailParts, parts, segStart);
@@ -737,10 +718,6 @@ public final class ContentNodes {
             }
             return out;
         }
-        XLog.d("align span refused: segs=" + segs + " chunks=" + chunks.size()
-                + " lines=" + lines.length + " paragraphs=" + paraCount
-                + " unsafe=" + unsafe.cardinality()
-                + " head=" + XLog.text(span));
         return null;
     }
 

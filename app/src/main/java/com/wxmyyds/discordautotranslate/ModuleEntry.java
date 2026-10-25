@@ -10,7 +10,6 @@ import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.TranslationCache;
-import com.wxmyyds.discordautotranslate.core.XLog;
 import com.wxmyyds.discordautotranslate.hooks.EmbedHooks;
 import com.wxmyyds.discordautotranslate.hooks.HookBridge;
 import com.wxmyyds.discordautotranslate.hooks.InlineIconSpan;
@@ -46,10 +45,6 @@ public class ModuleEntry extends XposedModule {
     /** 固定包名，scope.list 已限定，仍做二次校验（框架可能回传同进程内的其他包）。 */
     private static final String TARGET_PACKAGE = "com.discord";
 
-    /** 已确认适配的 Discord 版本（smali/com/discord/BuildConfig.smali）。 */
-    private static final String ADAPTED_VERSION_NAME = "340.13";
-    private static final int ADAPTED_VERSION_CODE = 340013;
-
     /** 当前代次持有的 hook 句柄，热重载时用于清理。 */
     private final List<XposedInterface.HookHandle> hooks = new java.util.ArrayList<>();
 
@@ -60,12 +55,7 @@ public class ModuleEntry extends XposedModule {
 
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
-        XLog.attach(this);
         ModuleResources.attach(this);
-        XLog.i("onModuleLoaded process=" + param.getProcessName()
-                + " systemServer=" + param.isSystemServer()
-                + " api=" + getApiVersion()
-                + " framework=" + getFrameworkName() + " " + getFrameworkVersion());
         // 目标进程才需要初始化；其他进程立即停止接收回调，减少无谓开销。
         if (param.isSystemServer()) {
             detach();
@@ -75,12 +65,10 @@ public class ModuleEntry extends XposedModule {
     @Override
     public void onPackageReady(@NonNull XposedModuleInterface.PackageReadyParam param) {
         if (!TARGET_PACKAGE.equals(param.getPackageName())) {
-            XLog.d("skip package " + param.getPackageName());
             return;
         }
         if (installed) {
             // 防止重复安装（需求 §风险 6：不得重复注册 Hook）。
-            XLog.w("already installed, skip duplicate onPackageReady");
             return;
         }
         targetClassLoader = param.getClassLoader();
@@ -88,10 +76,9 @@ public class ModuleEntry extends XposedModule {
         try {
             install(param.getClassLoader());
             installed = true;
-        } catch (Throwable t) {
-            // Hook 失败不能导致 Discord 崩溃（需求 §5.1）。仅记录诊断信息。
+        } catch (Throwable ignored) {
+            // Hook 失败不能导致 Discord 崩溃（需求 §5.1）：模块保持不激活，宿主正常渲染。
             installed = false;
-            XLog.e("install hooks failed, module inactive in this process", t);
         }
     }
 
@@ -101,12 +88,11 @@ public class ModuleEntry extends XposedModule {
      */
     @Override
     public boolean onHotReloading(@NonNull XposedModuleInterface.HotReloadingParam param) {
-        XLog.i("onHotReloading: releasing old generation resources");
         try {
             release();
             return true;
-        } catch (Throwable t) {
-            XLog.e("onHotReloading failed, reject reload", t);
+        } catch (Throwable ignored) {
+            // 释放失败：拒绝本次热重载，让框架保留旧代次。
             return false;
         }
     }
@@ -117,16 +103,12 @@ public class ModuleEntry extends XposedModule {
      */
     @Override
     public void onHotReloaded(@NonNull XposedModuleInterface.HotReloadedParam param) {
-        XLog.attach(this);
-        XLog.i("onHotReloaded: rebuilding generation, oldHooks="
-                + param.getOldHookHandles().size());
-
-        // 先移除框架记录的旧 Hook（默认实现即如此，这里显式写出以便诊断）。
+        // 先移除框架记录的旧 Hook（默认实现即如此，这里显式执行以免句柄泄漏）。
         for (XposedInterface.HookHandle h : param.getOldHookHandles()) {
             try {
                 h.unhook();
-            } catch (Throwable t) {
-                XLog.w("unhook old hook failed: " + h.getId(), t);
+            } catch (Throwable ignored) {
+                // 单个 unhook 失败不影响其余清理。
             }
         }
 
@@ -164,24 +146,19 @@ public class ModuleEntry extends XposedModule {
         // 重新安装 Hook。
         ClassLoader cl = targetClassLoader;
         if (cl == null) {
-            XLog.w("no cached classloader after hot reload; will install on next onPackageReady");
             return;
         }
         try {
             install(cl);
             installed = true;
-            XLog.i("hot reload rebuild finished");
-        } catch (Throwable t) {
-            XLog.e("reinstall after hot reload failed, module inactive until restart", t);
+        } catch (Throwable ignored) {
+            // 重装失败：模块保持不激活，等待下次 onPackageReady 或重启。
         }
     }
 
     // ------------------------------------------------------------ 安装与卸载
 
     private void install(ClassLoader cl) {
-        // 记录目标 Discord 版本，便于诊断（需求 §9.1）。
-        logTargetVersion(cl);
-
         StructurableTextFactory.init(cl);
         Scheduler.MainThread.install();
         reloadConfig();
@@ -191,8 +168,6 @@ public class ModuleEntry extends XposedModule {
         List<XposedInterface.HookHandle> created = MessageHooks.install(this, cl);
         if (created.size() < MessageHooks.MIN_REQUIRED_HOOKS) {
             // 半安装状态会让模块“看似已启用、实际不工作”；回滚并等待重启。
-            XLog.e("only " + created.size() + " hooks installed; rolling back partial install",
-                    null);
             for (XposedInterface.HookHandle handle : created) {
                 try {
                     handle.unhook();
@@ -208,7 +183,6 @@ public class ModuleEntry extends XposedModule {
         hooks.addAll(EmbedHooks.install(this, cl));
         // 投票卡片翻译同为增强能力，独立降级。
         hooks.addAll(PollHooks.install(this, cl));
-        XLog.i("installed " + hooks.size() + " hooks");
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
@@ -221,11 +195,10 @@ public class ModuleEntry extends XposedModule {
                 Class<?> declaring = target == null ? null : target.getDeclaringClass();
                 ClassLoader loader = declaring == null ? null : declaring.getClassLoader();
                 if (loader != null) {
-                    XLog.i("recovered target classloader from old hook " + handle.getId());
                     return loader;
                 }
-            } catch (Throwable t) {
-                XLog.w("cannot recover classloader from old hook", t);
+            } catch (Throwable ignored) {
+                // 反推失败按 null 处理，走下一次 onPackageReady 的正常路径。
             }
         }
         return null;
@@ -236,22 +209,18 @@ public class ModuleEntry extends XposedModule {
         for (XposedInterface.HookHandle h : hooks) {
             try {
                 h.unhook();
-            } catch (Throwable t) {
-                XLog.w("unhook failed: " + h.getId(), t);
+            } catch (Throwable ignored) {
+                // 尽力解绑，不中断后续清理。
             }
         }
         hooks.clear();
         Scheduler.MainThread.clear();
         // 等待线程真正结束再返回 true，否则旧代次线程会继续存活（需求 §5.1）。
-        boolean stopped = Scheduler.resetAndAwait(2000L);
-        if (!stopped) {
-            XLog.w("scheduler threads did not stop within 2s; hot reload continues");
-        }
+        Scheduler.resetAndAwait(2000L);
         HookBridge.get().reset();
         TranslationCache.reset();
         RerenderRegistry.clear();
         ModuleResources.reset();
-        XLog.detach();
         installed = false;
     }
 
@@ -260,26 +229,8 @@ public class ModuleEntry extends XposedModule {
             final SharedPreferences prefs = getRemotePreferences(Config.GROUP);
             Config.Snapshot snapshot = Config.read(prefs);
             HookBridge.get().updateConfig(snapshot);
-            XLog.i("config loaded: enabled=" + snapshot.enabled
-                    + " url=" + XLog.safeUrl(snapshot.apiUrl)
-                    + " key=" + XLog.redact(snapshot.apiKey));
-        } catch (Throwable t) {
-            XLog.w("getRemotePreferences failed, using defaults", t);
-        }
-    }
-
-    private void logTargetVersion(ClassLoader cl) {
-        try {
-            Class<?> bc = Class.forName("com.discord.BuildConfig", false, cl);
-            Object name = bc.getField("VERSION_NAME").get(null);
-            Object code = bc.getField("VERSION_CODE").get(null);
-            XLog.i("target Discord version=" + name + " code=" + code);
-            if (code instanceof Integer && (Integer) code != ADAPTED_VERSION_CODE) {
-                XLog.w("Discord version differs from adapted " + ADAPTED_VERSION_NAME
-                        + " (" + ADAPTED_VERSION_CODE + "); hooks may not match");
-            }
-        } catch (Throwable t) {
-            XLog.w("cannot read Discord BuildConfig", t);
+        } catch (Throwable ignored) {
+            // 读取失败沿用上次配置（首次则为默认值）。
         }
     }
 }

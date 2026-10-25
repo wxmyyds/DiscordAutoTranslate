@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -92,7 +91,6 @@ public final class MessageHooks {
             installToSpannableHook(module, cl, handles);
             installReplyHook(module, cl, handles);
         } catch (Throwable t) {
-            XLog.e("hook installation aborted, rolling back " + handles.size() + " hooks", t);
             for (XposedInterface.HookHandle handle : handles) {
                 try {
                     handle.unhook();
@@ -104,9 +102,7 @@ public final class MessageHooks {
             return handles;
         }
 
-        XLog.i("hook pipeline armed: " + handles.size() + " hook handles (4 required)");
         if (handles.size() < MIN_REQUIRED_HOOKS) {
-            XLog.w("too few hooks installed; module will not function on this Discord version");
         }
         return handles;
     }
@@ -117,7 +113,6 @@ public final class MessageHooks {
                                         List<XposedInterface.HookHandle> out) {
         Class<?> holder = Reflect.loadClass(cl, CLS_CONTENT_VIEW_HOLDER);
         if (holder == null) {
-            XLog.w("MessageContentViewHolder not found; cannot map view -> message id");
             return;
         }
         Class<?> accessory = Reflect.loadClass(cl, CLS_CONTENT_ACCESSORY);
@@ -127,7 +122,6 @@ public final class MessageHooks {
             bind = Reflect.findMethod(holder, "bind", BIND_PARAM_COUNT);
         }
         if (bind == null) {
-            XLog.w("MessageContentViewHolder.bind not found (paramCount=" + BIND_PARAM_COUNT + ")");
             return;
         }
 
@@ -137,12 +131,11 @@ public final class MessageHooks {
                 .intercept(chain -> {
                     try {
                         bindPre(chain);
-                    } catch (Throwable t) {
-                        XLog.w("bind pre failed", t);
+                    } catch (Throwable ignored) {
+                        // 关联失败只影响本条消息的翻译，不影响宿主。
                     }
                     return chain.proceed();
                 }));
-        XLog.i("hooked MessageContentViewHolder.bind");
     }
 
     /** bind 前置：建立 正文视图 → 消息 ID 关联，并登记内容身份映射。 */
@@ -162,12 +155,9 @@ public final class MessageHooks {
 
         View contentView = asView(Reflect.getField(chain.getThisObject(), "messageContentView"));
         if (contentView == null) {
-            XLog.d("bind: messageContentView field unavailable");
             return;
         }
         HookBridge.get().bindView(contentView, messageId);
-        XLog.d("bind " + messageId + " -> " + contentView.getClass().getSimpleName()
-                + "@" + Integer.toHexString(System.identityHashCode(contentView)));
     }
 
     // ------------------------------------------------- Hook 2: 展开式 setMessageContent
@@ -182,18 +172,14 @@ public final class MessageHooks {
         Class<?> marginsCls = Reflect.loadClass(cl, CLS_MESSAGE_MARGINS);
         Class<?> structurableCls = Reflect.loadClass(cl, CLS_STRUCTURABLE);
         if (contentViewCls == null || marginsCls == null || structurableCls == null) {
-            XLog.w("cannot resolve classes for expanded setMessageContent hook");
             return;
         }
 
         Method expanded = findExpandedSetMessageContent(contentViewCls, marginsCls, structurableCls);
         if (expanded == null) {
-            XLog.w("expanded setMessageContent not found; icon/translation trigger unavailable");
             return;
         }
         final Method target = expanded;
-        XLog.i("resolved expanded setMessageContent: " + target.getName()
-                + " params=" + target.getParameterCount());
 
         out.add(module.hook(expanded)
                 .setId("dat.setMessageContent")
@@ -224,7 +210,6 @@ public final class MessageHooks {
                         }
                     } catch (Throwable t) {
                         // 任何异常都不影响原始渲染（需求 §5.4 优雅降级）。
-                        XLog.w("expanded render hook failed", t);
                     }
                     try {
                         return chain.proceed();
@@ -232,7 +217,6 @@ public final class MessageHooks {
                         InlineIconInjector.exitHost();
                     }
                 }));
-        XLog.i("hooked expanded setMessageContent");
     }
 
     /**
@@ -284,7 +268,6 @@ public final class MessageHooks {
                                                List<XposedInterface.HookHandle> out) {
         Class<?> textUtils = Reflect.loadClass(cl, CLS_TEXT_UTILS);
         if (textUtils == null) {
-            XLog.w("TextUtilsKt not found; translation display disabled");
             return;
         }
         Class<?> structurableCls = Reflect.loadClass(cl, CLS_STRUCTURABLE);
@@ -312,7 +295,6 @@ public final class MessageHooks {
             }
         }
         if (toSpannable == null) {
-            XLog.w("TextUtilsKt.toSpannable(StructurableText, ...) not found");
             return;
         }
         toSpannable.setAccessible(true);
@@ -343,12 +325,10 @@ public final class MessageHooks {
                                         .forTranslation(source, translated);
                                 if (replacement != null) {
                                     renderArgs[0] = replacement;
-                                    XLog.d("toSpannable substituted for " + messageId);
                                 }
                             }
                         }
                     } catch (Throwable t) {
-                        XLog.w("toSpannable preparation failed, using original content", t);
                         renderArgs[0] = source;
                     }
 
@@ -357,11 +337,9 @@ public final class MessageHooks {
                     try {
                         return InlineIconInjector.inject(source, rendered, chain.getArg(1), cl);
                     } catch (Throwable t) {
-                        XLog.w("inline icon injection failed", t);
                         return rendered;
                     }
                 }));
-        XLog.i("hooked TextUtilsKt.toSpannable (" + toSpannable.getParameterCount() + " params)");
     }
 
     // ------------------------------------------------------------- Hook 4: 回复引用
@@ -376,12 +354,10 @@ public final class MessageHooks {
                                          List<XposedInterface.HookHandle> out) {
         Class<?> replyPreview = Reflect.loadClass(cl, CLS_REPLY_PREVIEW);
         if (replyPreview == null) {
-            XLog.d("MessageViewReplyPreview not found; reply content translation disabled");
             return;
         }
         Method configure = Reflect.findMethod(replyPreview, "configureReply", 3);
         if (configure == null) {
-            XLog.w("MessageViewReplyPreview.configureReply not found");
             return;
         }
 
@@ -391,18 +367,17 @@ public final class MessageHooks {
                 .intercept(chain -> {
                     try {
                         replyPre(chain);
-                    } catch (Throwable t) {
-                        XLog.w("configureReply pre failed", t);
+                    } catch (Throwable ignored) {
+                        // 关联失败只影响本条消息的翻译，不影响宿主。
                     }
                     Object result = chain.proceed();
                     try {
                         replyPost(chain, configure);
-                    } catch (Throwable t) {
-                        XLog.w("configureReply post failed", t);
+                    } catch (Throwable ignored) {
+                        // 后处理失败不影响宿主。
                     }
                     return result;
                 }));
-        XLog.i("hooked MessageViewReplyPreview.configureReply");
     }
 
     /** 后置：登记回复引用的重渲染目标，使译文完成后引用内也能更新。 */
@@ -453,7 +428,6 @@ public final class MessageHooks {
         if (replyText != null) {
             HookBridge.get().bindView(replyText, messageId);
         }
-        XLog.d("reply bound to referenced message " + messageId);
     }
 
     /** 从回复引用实例取出其内部正文视图。 */

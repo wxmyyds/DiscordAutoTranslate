@@ -3,7 +3,6 @@ package com.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -48,7 +47,6 @@ public final class IconClickSpanFactory {
         }
         Class<?> iface = Reflect.loadClass(hostCl, CLS_NESTED_CLICKABLE);
         if (iface == null || !iface.isInterface()) {
-            XLog.w("NestedClickableSpan interface not found; inline icon not clickable");
             return null;
         }
         Object highPriority = resolveHighPriority(hostCl);
@@ -74,7 +72,6 @@ public final class IconClickSpanFactory {
                     case "toString":
                         return "InlineIconClickSpan(" + messageId + ")";
                     default:
-                        XLog.d("inline icon click span: unexpected method " + method.getName());
                         return null;
                 }
             }
@@ -83,7 +80,6 @@ public final class IconClickSpanFactory {
         try {
             return Proxy.newProxyInstance(hostCl, new Class<?>[]{iface}, handler);
         } catch (Throwable t) {
-            XLog.w("create inline icon click span failed", t);
             return null;
         }
     }
@@ -105,10 +101,8 @@ public final class IconClickSpanFactory {
                     return c;
                 }
             }
-            XLog.w("TouchPriority.HIGH not found; using default priority");
             return null;
         } catch (Throwable t) {
-            XLog.w("resolve TouchPriority.HIGH failed", t);
             return null;
         }
     }

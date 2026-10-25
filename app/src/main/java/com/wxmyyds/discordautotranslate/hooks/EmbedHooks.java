@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -82,9 +81,7 @@ public final class EmbedHooks {
         installPostPreviewBindHook(module, cl, handles);
         installPostPreviewSetHook(module, cl, handles);
         if (handles.isEmpty()) {
-            XLog.w("no embed hooks installed; embed translation unavailable on this version");
         } else {
-            XLog.i("embed hooks armed: " + handles.size());
         }
         return handles;
     }
@@ -96,13 +93,11 @@ public final class EmbedHooks {
         Class<?> holder = Reflect.loadClass(cl, CLS_EMBED_VIEW_HOLDER);
         Class<?> accessory = Reflect.loadClass(cl, CLS_EMBED_ACCESSORY);
         if (holder == null || accessory == null) {
-            XLog.d("EmbedViewHolder/EmbedMessageAccessory not found; rich embed translation disabled");
             return;
         }
         Method bind = Reflect.findMethodAt(holder, "bind",
                 EMBED_BIND_PARAM_COUNT, 1, accessory);
         if (bind == null) {
-            XLog.w("EmbedViewHolder.bind not found (paramCount=" + EMBED_BIND_PARAM_COUNT + ")");
             return;
         }
         out.add(module.hook(bind)
@@ -117,8 +112,8 @@ public final class EmbedHooks {
                         if (!HookBridge.get().isRerendering()) {
                             try {
                                 richEmbedPre(chain, bind);
-                            } catch (Throwable t) {
-                                XLog.w("embed bind hook failed", t);
+                            } catch (Throwable ignored) {
+                                // 预处理失败不影响宿主绑定。
                             }
                         }
                         return chain.proceed();
@@ -126,7 +121,6 @@ public final class EmbedHooks {
                         InlineIconInjector.exitHost();
                     }
                 }));
-        XLog.i("hooked EmbedViewHolder.bind");
     }
 
     /**
@@ -189,7 +183,6 @@ public final class EmbedHooks {
         }
         RerenderRegistry.register(key, view, holder, bind, args);
         HookBridge.get().onMessageBound(view, key, text);
-        XLog.d("embed text registered msg=" + messageId + " via " + getter);
         return key;
     }
 
@@ -233,13 +226,11 @@ public final class EmbedHooks {
         Class<?> holder = Reflect.loadClass(cl, CLS_POST_PREVIEW_HOLDER);
         Class<?> model = Reflect.loadClass(cl, CLS_POST_PREVIEW);
         if (holder == null || model == null) {
-            XLog.d("PostPreviewEmbedViewHolder/PostPreviewEmbed not found; post preview translation disabled");
             return;
         }
         Method bind = Reflect.findMethodAt(holder, "bind",
                 POST_PREVIEW_BIND_PARAM_COUNT, 0, model);
         if (bind == null) {
-            XLog.w("PostPreviewEmbedViewHolder.bind not found");
             return;
         }
         out.add(module.hook(bind)
@@ -253,8 +244,8 @@ public final class EmbedHooks {
                         if (!HookBridge.get().isRerendering()) {
                             try {
                                 postPreviewPre(chain, bind);
-                            } catch (Throwable t) {
-                                XLog.w("post preview bind hook failed", t);
+                            } catch (Throwable ignored) {
+                                // 预处理失败不影响宿主绑定。
                             }
                         }
                         return chain.proceed();
@@ -262,7 +253,6 @@ public final class EmbedHooks {
                         InlineIconInjector.exitHost();
                     }
                 }));
-        XLog.i("hooked PostPreviewEmbedViewHolder.bind");
     }
 
     /**
@@ -303,14 +293,12 @@ public final class EmbedHooks {
         Object footer = Reflect.call(Reflect.findMethod(
                 model.getClass(), "getFooter", 0), model);
         HookBridge.get().rememberIconOnlyContent(key, footer);
-        XLog.d("post preview title registered msg=" + messageId);
     }
 
     private static void installPostPreviewSetHook(XposedModule module, ClassLoader cl,
                                                   List<XposedInterface.HookHandle> out) {
         Class<?> viewCls = Reflect.loadClass(cl, CLS_POST_PREVIEW_VIEW);
         if (viewCls == null) {
-            XLog.d("PostPreviewEmbedView not found; post preview substitution disabled");
             return;
         }
         Method set = null;
@@ -327,7 +315,6 @@ public final class EmbedHooks {
             break;
         }
         if (set == null) {
-            XLog.w("setPostPreviewEmbed not found (paramCount=" + POST_PREVIEW_SET_PARAM_COUNT + ")");
             return;
         }
         out.add(module.hook(set)
@@ -337,12 +324,11 @@ public final class EmbedHooks {
                     Object[] renderArgs = chain.getArgs().toArray();
                     try {
                         substitutePostPreviewTitle(renderArgs);
-                    } catch (Throwable t) {
-                        XLog.w("post preview substitution failed", t);
+                    } catch (Throwable ignored) {
+                        // 替换失败保留宿主原标题。
                     }
                     return chain.proceed(renderArgs);
                 }));
-        XLog.i("hooked PostPreviewEmbedView.setPostPreviewEmbed");
     }
 
     /**

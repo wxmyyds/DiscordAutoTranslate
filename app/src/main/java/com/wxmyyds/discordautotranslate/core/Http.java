@@ -73,7 +73,6 @@ public final class Http {
                 int idx = line.indexOf(':');
                 if (idx <= 0) {
                     // 只记录行号与原因：该行可能包含未正确分隔的 Authorization 值。
-                    XLog.d("ignore malformed header line (line=" + lineNo + ")");
                     continue;
                 }
                 h.add(line.substring(0, idx).trim(), line.substring(idx + 1).trim());

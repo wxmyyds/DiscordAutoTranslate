@@ -105,10 +105,6 @@ public final class Config {
     public static final String KEY_MAX_CONCURRENCY = "max_concurrency";
     public static final int DEF_MAX_CONCURRENCY = 4;
 
-    public static final String KEY_VERBOSE_LOG = "verbose_log";
-    // 详细日志默认关闭；正文日志始终脱敏，不允许 verbose 解除脱敏。
-    public static final boolean DEF_VERBOSE_LOG = false;
-
     private Config() {
     }
 
@@ -125,7 +121,6 @@ public final class Config {
         public final String protocol;
         public final int timeoutMs;
         public final int maxConcurrency;
-        public final boolean verboseLog;
 
         Snapshot(SharedPreferences p) {
             enabled = readBoolean(p, KEY_ENABLED, DEF_ENABLED);
@@ -138,7 +133,6 @@ public final class Config {
             protocol = readProtocol(p);
             timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
-            verboseLog = readBoolean(p, KEY_VERBOSE_LOG, DEF_VERBOSE_LOG);
         }
 
         /**
@@ -242,8 +236,8 @@ public final class Config {
         }
         try {
             return new Snapshot(prefs);
-        } catch (Throwable t) {
-            XLog.w("read config failed, fallback to defaults", t);
+        } catch (Throwable ignored) {
+            // 读取失败回落默认值快照，绝不让配置异常拖垮宿主进程。
             return new Snapshot(new MemoryPrefs());
         }
     }

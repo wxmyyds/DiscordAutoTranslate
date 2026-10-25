@@ -11,7 +11,6 @@ import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
 import com.wxmyyds.discordautotranslate.core.TranslationCache;
 import com.wxmyyds.discordautotranslate.core.TranslationException;
-import com.wxmyyds.discordautotranslate.core.XLog;
 import com.wxmyyds.discordautotranslate.translate.JsonApiEngine;
 
 import java.lang.reflect.Method;
@@ -89,14 +88,12 @@ public final class HookBridge {
         }
         Config.Snapshot old = this.config;
         this.config = c;
-        XLog.setVerbose(c.verboseLog);
 
         // 并发上限即时生效（需求 §5.7 普通配置变更尽量即时生效）。
         Scheduler.get().setMaxConcurrency(c.maxConcurrency);
 
         // version() 已包含密钥/额外请求头指纹：凭据变更同样会使缓存与在途结果失效。
         if (old == null || !old.version().equals(c.version())) {
-            XLog.i("translation config changed, invalidating cached state");
             StateStore.get().onNewGeneration();
             TranslationCache.get().clear();
         }
@@ -336,7 +333,6 @@ public final class HookBridge {
         }
         String bound = messageIdOf(contentView);
         if (contentView != null && messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
-            XLog.d("rerender skipped: view rebound to another message");
             return;
         }
         Runnable task = () -> {
@@ -368,7 +364,6 @@ public final class HookBridge {
         try {
             method.invoke(invocationTarget, args);
         } catch (Throwable t) {
-            XLog.w("rerender failed: " + t.getClass().getSimpleName(), t);
             return;
         } finally {
             RERENDERING.remove();
@@ -421,7 +416,6 @@ public final class HookBridge {
 
         if (!cfg.enabled) {
             // 总开关关闭：不发起新翻译，保留已有译文（需求 §2.7）。
-            XLog.d("auto-translate disabled, skip " + messageId);
             return;
         }
         if (entry.status == StateStore.Status.TRANSLATING
@@ -440,7 +434,6 @@ public final class HookBridge {
             entry.translatedText = cached;
             entry.status = StateStore.Status.TRANSLATED;
             entry.showingOriginal = false;
-            XLog.d("cache hit for " + messageId);
             RerenderRegistry.rerender(messageId);
             return;
         }
@@ -448,7 +441,6 @@ public final class HookBridge {
         if (!cfg.isUsable()) {
             entry.status = StateStore.Status.FAILED;
             entry.lastError = "API 未配置";
-            XLog.d("api not configured, skip " + messageId);
             RerenderRegistry.rerender(messageId);
             return;
         }
@@ -456,13 +448,10 @@ public final class HookBridge {
         EnglishDetector.Verdict v = EnglishDetector.evaluate(
                 ex.text, ex.textNodeCount, ex.opaqueNodeCount, ex.codeHeavy);
         if (!v.shouldTranslate) {
-            XLog.d("skip " + messageId + " reason=" + v.reason);
             return;
         }
 
         entry.status = StateStore.Status.TRANSLATING;
-        XLog.i("translate start " + messageId + " " + v.reason
-                + " text=" + XLog.text(ex.text));
         // 立即重渲染，让「翻译中」旋转图标显示出来。
         RerenderRegistry.rerender(messageId);
 
@@ -504,14 +493,12 @@ public final class HookBridge {
         if (error != null || translated == null || translated.isEmpty()) {
             cur.status = StateStore.Status.FAILED;
             cur.lastError = describe(error);
-            XLog.w("translate failed " + id + ": " + cur.lastError);
         } else {
             cur.translatedText = translated;
             cur.status = StateStore.Status.TRANSLATED;
             cur.showingOriginal = false;
             // 写入缓存，供同内容的其它消息复用（需求 §5.6）。
             TranslationCache.get().put(cur.contentHash, translated);
-            XLog.i("translate done " + id + " -> " + XLog.text(translated));
         }
         RerenderRegistry.rerender(id);
     }
@@ -535,7 +522,6 @@ public final class HookBridge {
             return;
         }
         e.showingOriginal = !e.showingOriginal;
-        XLog.d("toggle " + messageId + " showingOriginal=" + e.showingOriginal);
         RerenderRegistry.rerender(messageId);
     }
 
@@ -576,7 +562,6 @@ public final class HookBridge {
         }
         Object structurable = rawContent.get(messageId);
         if (structurable == null) {
-            XLog.d("retry skipped: no raw content for " + messageId);
             return;
         }
 

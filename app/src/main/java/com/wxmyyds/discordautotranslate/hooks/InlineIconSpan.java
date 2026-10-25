@@ -11,7 +11,6 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -319,7 +318,6 @@ public final class InlineIconSpan extends ImageSpan {
         };
         ticker = chain;
         v.postOnAnimation(chain);
-        XLog.d("icon spin start " + messageId);
     }
 
     private void onTick(Runnable self) {

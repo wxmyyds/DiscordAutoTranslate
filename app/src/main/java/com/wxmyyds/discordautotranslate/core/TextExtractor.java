@@ -174,7 +174,6 @@ public final class TextExtractor {
                     counters[2] > 0);
         }
 
-        XLog.d("unknown StructurableText impl: " + cls);
         return null;
     }
 

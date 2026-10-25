@@ -11,7 +11,6 @@ import androidx.annotation.Nullable;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 /**
  * 在消息正文渲染结果末尾注入行内翻译图标。
@@ -138,7 +137,6 @@ public final class InlineIconInjector {
                     tinted, context.getResources().getDisplayMetrics().density,
                     entry.status, messageId);
             if (icon == null) {
-                XLog.w("inline icon: drawable unavailable for " + messageId);
                 return rendered;
             }
 
@@ -161,12 +159,8 @@ public final class InlineIconInjector {
             // 启动/续接旋转动画（仅翻译中状态）。
             icon.bindHost(host);
 
-            XLog.d("inline icon injected msg=" + messageId + " status=" + entry.status
-                    + " showingOriginal=" + entry.showingOriginal
-                    + " widthPx=" + icon.widthPx() + " clickable=" + (clickSpan != null));
             return ssb;
         } catch (Throwable t) {
-            XLog.w("inline icon injection failed", t);
             return rendered;
         }
     }

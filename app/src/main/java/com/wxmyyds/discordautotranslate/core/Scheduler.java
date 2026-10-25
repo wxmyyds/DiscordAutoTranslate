@@ -215,8 +215,8 @@ public final class Scheduler {
             if (worker != null) {
                 try {
                     task.engine.cancel(worker);
-                } catch (Throwable t) {
-                    XLog.w("engine cancellation failed for " + task.key.messageId, t);
+                } catch (Throwable ignored) {
+                    // 取消失败不阻断线程池收尾。
                 }
             }
         }
@@ -252,7 +252,6 @@ public final class Scheduler {
                 permits.reduce(current - target);
             }
         }
-        XLog.i("max concurrency set to " + target);
     }
 
     public int completedCount() {
@@ -299,7 +298,6 @@ public final class Scheduler {
         if (shutdown) return;
         Task existing = inFlight.putIfAbsent(task.key, task);
         if (existing != null) {
-            XLog.d("dedupe: task already in flight for " + messageId + " / " + contentHash);
             return;
         }
         if (shutdown) {
@@ -311,7 +309,6 @@ public final class Scheduler {
         } catch (Throwable t) {
             inFlight.remove(task.key, task);
             if (shutdown) return;
-            XLog.w("submit rejected for " + messageId + ": " + t.getClass().getSimpleName());
             TranslationException error = new TranslationException(
                     TranslationException.Kind.UNKNOWN, "线程池已满或已关闭");
             postResult(task, null, error, false);
@@ -356,7 +353,6 @@ public final class Scheduler {
                         }
                     } else {
                         discarded.incrementAndGet();
-                        XLog.d("discard stale translation result for " + task.key.messageId);
                     }
                 } else if (!accepted) {
                     discarded.incrementAndGet();
@@ -370,7 +366,6 @@ public final class Scheduler {
         try {
             return task.acceptance.isStillValid(task.key.generation, task.key.contentHash);
         } catch (Throwable t) {
-            XLog.w("acceptance check failed for " + task.key.messageId, t);
             return false;
         }
     }
@@ -426,9 +421,6 @@ public final class Scheduler {
             }
             retried.incrementAndGet();
             long backoff = backoffMillis(attempt, attemptFailure);
-            XLog.w("attempt " + attempt + "/" + MAX_ATTEMPTS + " failed for "
-                    + task.key.messageId + " (" + attemptFailure.getClass().getSimpleName()
-                    + "), retry in " + backoff + "ms");
             if (shutdown || !sleepInterruptibly(backoff)) {
                 throw new TranslationException(TranslationException.Kind.CANCELLED,
                         "重试等待被中断", attemptFailure);

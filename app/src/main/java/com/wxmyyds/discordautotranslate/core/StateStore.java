@@ -77,7 +77,6 @@ public final class StateStore {
     public void onNewGeneration() {
         generation.incrementAndGet();
         entries.clear();
-        XLog.i("state store reset, generation=" + generation.get());
     }
 
     /**
@@ -96,7 +95,6 @@ public final class StateStore {
         }
         synchronized (e) {
             if (!contentHash.equals(e.contentHash)) {
-                XLog.d("content changed for " + messageId + " -> invalidate old translation");
                 e.contentHash = contentHash;
                 e.originalText = originalText;
                 e.translatedText = null;

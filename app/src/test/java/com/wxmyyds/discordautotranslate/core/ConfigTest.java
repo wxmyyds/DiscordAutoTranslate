@@ -25,7 +25,6 @@ public class ConfigTest {
     @Test
     public void emptyPrefsUseAllDefaults() {
         Config.Snapshot s = Config.read(new MemoryPrefs());
-        assertFalse(s.verboseLog);
         assertEquals(Config.DEF_ENABLED, s.enabled);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
         assertEquals(Config.DEF_MODEL, s.model);
@@ -166,19 +165,6 @@ public class ConfigTest {
         assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, snapshot.protocol);
         Config.Snapshot defaults = Config.read(new MemoryPrefs());
         assertNotEquals(snapshot.version(), defaults.version());
-    }
-
-    @Test
-    public void verboseLoggingStillNeverIncludesMessageBody() {
-        String sensitive = "unique-private-message-body";
-        XLog.setVerbose(false);
-        assertFalse(XLog.text(sensitive).contains(sensitive));
-        XLog.setVerbose(true);
-        try {
-            assertFalse(XLog.text(sensitive).contains(sensitive));
-        } finally {
-            XLog.setVerbose(false);
-        }
     }
 
     /** 超时与并发为 0 或负数时回落默认值（否则请求会直接失败）。 */

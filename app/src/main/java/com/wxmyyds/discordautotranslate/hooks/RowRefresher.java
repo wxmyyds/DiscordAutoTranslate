@@ -5,7 +5,6 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 
@@ -61,7 +60,6 @@ final class RowRefresher {
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
             // 视图未附着：滚动重新绑定时仍会走正常渲染，无需强制刷新。
-            XLog.d("row refresh skipped: view not attached");
         }
     }
 
@@ -164,9 +162,8 @@ final class RowRefresher {
                 if (notifyContent != null) {
                     try {
                         notifyContent.invoke(contentAdapter, contentPosition);
-                    } catch (Throwable t) {
-                        XLog.d("notify inner content failed: "
-                                + t.getClass().getSimpleName());
+                    } catch (Throwable ignored) {
+                        // 通知失败则等待下一次 layout。
                     }
                 }
             }
@@ -183,11 +180,9 @@ final class RowRefresher {
             } catch (Throwable t) {
                 Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
                         && t.getCause() != null ? t.getCause() : t;
-                XLog.d("notify outer row failed: " + cause.getClass().getSimpleName());
                 return false;
             }
         } catch (Throwable t) {
-            XLog.d("notifyItemChanged failed: " + t.getClass().getSimpleName());
             return false;
         }
     }
@@ -221,13 +216,13 @@ final class RowRefresher {
                         view.invalidate();
                         dispatchRecyclerLayout(findRecyclerView(view));
                         dispatchRecyclerLayout(findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
-                    } catch (Throwable t) {
-                        XLog.d("posted relayout failed: " + t.getClass().getSimpleName());
+                    } catch (Throwable ignored) {
+                        // 布局派发失败可忽略。
                     }
                 }
             });
-        } catch (Throwable t) {
-            XLog.d("schedule relayout failed: " + t.getClass().getSimpleName());
+        } catch (Throwable ignored) {
+            // 投递重渲染失败不影响宿主。
         }
     }
 
@@ -241,13 +236,10 @@ final class RowRefresher {
             } catch (NoSuchFieldException ignored) {
                 // 继续沿父类查找：字段声明可能在基类上。
             } catch (Throwable t) {
-                XLog.w("cannot invalidate message bind cache: "
-                        + t.getClass().getSimpleName(), t);
                 return false;
             }
         }
         // 仅正文 holder 有该缓存；Embed holder 无 bind 早退缓存，找不到属正常。
-        XLog.d("lastMessageContent field not found; holder has no bind cache to invalidate");
         return false;
     }
 
@@ -330,8 +322,8 @@ final class RowRefresher {
                 }
                 parent = parent.getParent();
             }
-        } catch (Throwable t) {
-            XLog.d("force relayout ancestor failed: " + t.getClass().getSimpleName());
+        } catch (Throwable ignored) {
+            // 已尽力向上查找，失败按 false 处理。
         }
         return false;
     }
@@ -375,9 +367,9 @@ final class RowRefresher {
                 parentView.forceLayout();
                 parentView.requestLayout();
             }
-        } catch (Throwable t) {
-            XLog.d("content self relayout failed: " + t.getClass().getSimpleName());
-        }
+        } catch (Throwable ignored) {
+                // 布局请求失败可忽略。
+            }
     }
 
     private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
@@ -403,7 +395,6 @@ final class RowRefresher {
         } catch (Throwable t) {
             Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
                     && t.getCause() != null ? t.getCause() : t;
-            XLog.d("dispatchLayout failed: " + cause.getClass().getSimpleName());
         }
     }
 
@@ -424,7 +415,6 @@ final class RowRefresher {
             }
         } catch (Throwable t) {
             // 布局请求失败不影响主流程：下一次滚动仍会正确重绑。
-            XLog.d("requestLayoutChain failed: " + t.getClass().getSimpleName());
         }
     }
 

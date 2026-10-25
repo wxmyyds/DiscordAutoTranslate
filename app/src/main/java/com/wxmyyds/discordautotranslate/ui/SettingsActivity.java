@@ -66,7 +66,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private EditText timeoutInput;
     private EditText concurrencyInput;
     private CheckBox enabledInput;
-    private CheckBox verboseInput;
     private TextView statusText;
     private TextView resultText;
     private EditText testTextInput;
@@ -182,9 +181,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         concurrencyInput = addField(root, "最大并发", String.valueOf(Config.DEF_MAX_CONCURRENCY),
                 InputType.TYPE_CLASS_NUMBER);
 
-        verboseInput = new CheckBox(this);
-        verboseInput.setText("详细日志");
-        root.addView(verboseInput, matchWrap());
 
         testTextInput = addField(root, "测试文本（“测试翻译”使用）",
                 ApiTester.DEFAULT_TEST_TEXT,
@@ -287,7 +283,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         systemPromptInput.setText(snapshot.systemPrompt);
         timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
         concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
-        verboseInput.setChecked(snapshot.verboseLog);
     }
 
     private void save() {
@@ -320,7 +315,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             editor.putString(Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt);
             editor.putInt(Config.KEY_TIMEOUT_MS, snapshot.timeoutMs);
             editor.putInt(Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency);
-            editor.putBoolean(Config.KEY_VERBOSE_LOG, snapshot.verboseLog);
         } catch (Throwable t) {
             updateStatus("保存失败：" + t.getClass().getSimpleName());
             return;
@@ -396,7 +390,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
         memoryPrefs.put(Config.KEY_MAX_CONCURRENCY,
                 parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
-        memoryPrefs.put(Config.KEY_VERBOSE_LOG, verboseInput.isChecked());
         return Config.read(memoryPrefs);
     }
 
