@@ -21,24 +21,22 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 长重复文本翻译故障的复现回归（2026-10 用户上报）。
  *
  * <p>原文特征：5 组重复的「标题 + URL」块，共 15 个标题、15 个 URL。
- * 实测故障：小模型在 30 段重复内容上破坏分段协议，旧实现把损坏输出
- * （内容复读、尾部 🔥 刷屏、&lt;s22&gt; 泄漏、SENSENOVA_XXXXXX 占位符、
- * URL 字符损坏 IJYuv3wZ→lJYuv3wZ）切分后直接回填显示。</p>
+ * 实测故障：小模型在长重复内容上输出损坏译文（内容复读、尾部 🔥 刷屏、
+ * 标记泄漏、SENSENOVA_XXXXXX 占位符、URL 字符损坏 IJYuv3wZ→lJYuv3wZ），
+ * 旧实现切分后直接回填显示。</p>
  *
- * <p>修复后的契约：</p>
+ * <p>单链路契约：</p>
  * <ul>
- *   <li>URL 链接不进请求、不翻译，节点原样保留（逐字符一致）；</li>
- *   <li>带标记译文的校验是全有或全无：标记残缺/错序/夹带/占位符 → 整条保留原文；</li>
- *   <li>单链路：请求恒为无标记纯文本，引擎返回前做防损坏校验
- *       （残留标记/占位符/长度比例，见 {@code Segments.plainTextViolation}）；
- *       渲染层三级对齐回填（段落块 1:1 → 非空行 1:1 → 段落级：每段译文
+ *   <li>URL 链接不翻译，原样进请求当定位标记，节点原样保留（逐字符一致）；
+ *       译文丢失/多份回显/挪动 URL 时整条拒绝；</li>
+ *   <li>请求恒为无标记纯文本，引擎返回前做防损坏校验（残留标记/占位符/
+ *       长度比例，见 {@code Segments.plainTextViolation}）；</li>
+ *   <li>渲染层三级对齐回填（段落块 1:1 → 非空行 1:1 → 段落级：每段译文
  *       进本段首片段、段内其余置空），模型跨段落合并/增删内容时才整条
  *       保留原文——不做跨段启发式分配（那是乱序与内容丢失的来源）；</li>
  *   <li>结构对齐时每个标题拿到自己的片段，空行结构来自原节点。</li>
@@ -78,91 +76,25 @@ public class LongTextRegressionTest {
         return nodes;
     }
 
-    /** 构造 1..parts 的合规带标记译文，第 i 段内容为「第i段标题」。 */
-    private static String wellFormedResponse(int parts) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 1; i <= parts; i++) {
-            if (i > 1) {
-                sb.append('\n');
-            }
-            sb.append("<s").append(i).append(">第").append(i).append("段标题</s").append(i).append('>');
-        }
-        return sb.toString();
-    }
-
-    private static List<Integer> markerNumbers(String segmented) {
-        Matcher m = Pattern.compile("<s(\\d+)>").matcher(segmented);
-        List<Integer> nums = new ArrayList<>();
-        while (m.find()) {
-            nums.add(Integer.parseInt(m.group(1)));
-        }
-        return nums;
-    }
-
     @Test
-    public void segmentedRequestNumbersHeadingsOnlyAndExcludesUrls() {
-        // 请求文本：15 个标题各占一个连续编号的标记；URL 一律不进请求。
+    public void plainRequestCarriesTitlesAndUrlMarkers() {
+        // 单链路请求正文：15 个标题各占一个片段，URL 全部作为定位标记进请求
+        // （模型按规则 6 原样保留，回填按它切分对齐并删除回显）。
         TextExtractor.Result r = TextExtractor.extract(
                 new AnnotatedStructurableText(reportedMessageTree()));
 
         assertNotNull(r);
-        assertNotNull(r.segmented);
-        List<Integer> nums = markerNumbers(r.segmented);
-        assertEquals("15 个标题各占一个标记", 15, nums.size());
-        for (int i = 0; i < 15; i++) {
-            assertEquals("编号必须连续", Integer.valueOf(i + 1), nums.get(i));
-        }
+        assertEquals("15 个标题各占一个片段", 15, r.segmentCount);
         for (String url : URLS) {
-            assertFalse("带标记文本不得包含 URL（标记文本已弃用，仅作库保留）：" + url,
-                    r.segmented.contains(url));
+            assertTrue("URL 必须作为定位标记进请求：" + url, r.text.contains(url));
         }
-        // 纯文本（单链路请求正文）现在携带 URL 定位标记：模型必须原样保留它，
-        // 回填按它切分对齐并删除回显，显示永远用原链接节点。
-        assertTrue(r.text.contains(URLS[2]));
         assertTrue(r.text.contains("FREE CLAUDE CODE CRACK"));
     }
 
     @Test
-    public void wellFormedResponseTranslatesHeadingsAndKeepsUrlsVerbatim() {
-        List<Object> nodes = reportedMessageTree();
-        List<Object> out = ContentNodes.replaceText(nodes, wellFormedResponse(15));
-
-        assertNotNull(out);
-        assertEquals("节点树规模不变（结构全保留）", nodes.size(), out.size());
-        int headingIndex = 0;
-        int linkIndex = 0;
-        for (int i = 0; i < out.size(); i++) {
-            Object n = out.get(i);
-            if (n instanceof HeadingContentNode) {
-                headingIndex++;
-                HeadingContentNode h = (HeadingContentNode) n;
-                assertEquals("标题 level 必须保留", 1, h.component2());
-                assertEquals("第" + headingIndex + " 个标题拿到自己的片段",
-                        "第" + headingIndex + "段标题",
-                        ((TextContentNode) h.getContent().get(0)).getContent());
-            } else if (n instanceof LinkContentNode) {
-                String url = ((TextContentNode) ((LinkContentNode) n).getContent().get(0))
-                        .getContent();
-                assertEquals("URL 必须逐字符保留", URLS[linkIndex % 3], url);
-                assertSame("URL 链接节点必须原样复用", nodes.get(i), n);
-                linkIndex++;
-            } else if (n instanceof TextContentNode) {
-                assertEquals("组间空行节点原样保留", "\n\n",
-                        ((TextContentNode) n).getContent());
-            } else if (n instanceof NewLineContentNode) {
-                // 换行节点保持类型即可
-            } else {
-                throw new AssertionError("unexpected node: " + n);
-            }
-        }
-        assertEquals(15, headingIndex);
-        assertEquals(15, linkIndex);
-    }
-
-    @Test
-    public void repeatedIdenticalSourcesStillGetSequentialMarkers() {
-        // 全部 15 个标题完全相同（原文本就是高度重复）：标记仍然 1..15，
-        // 回填按位置对齐，不会因为内容重复而串位。
+    public void repeatedIdenticalSourcesAlignByPosition() {
+        // 全部 15 个标题完全相同（原文本就是高度重复）：回填按位置对齐，
+        // 不会因为内容重复而串位或被去重。
         List<Object> nodes = new ArrayList<>();
         for (int i = 0; i < 15; i++) {
             nodes.add(new TextContentNode(TITLES[0]));
@@ -172,84 +104,30 @@ public class LongTextRegressionTest {
                 nodes.add(new TextContentNode("\n\n"));
             }
         }
-        TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(nodes));
-        assertNotNull(r);
-        List<Integer> nums = markerNumbers(r.segmented);
-        assertEquals(15, nums.size());
+        StringBuilder translation = new StringBuilder();
         for (int i = 0; i < 15; i++) {
-            assertEquals(Integer.valueOf(i + 1), nums.get(i));
+            if (i > 0) {
+                translation.append("\n\n");
+            }
+            // 镜像请求文本结构：标题 + 换行 + URL 定位标记。
+            translation.append("固定标题译文").append('\n').append(URLS[0]);
         }
+        List<Object> out = ContentNodes.replaceText(nodes, translation.toString());
 
-        List<Object> out = ContentNodes.replaceText(nodes, wellFormedResponse(15));
         assertNotNull(out);
-        assertEquals("第7段标题",
+        assertEquals("第 7 个标题按位置拿到自己的片段", "固定标题译文",
                 ((TextContentNode) out.get(6 * 4)).getContent());
         assertEquals(URLS[0],
                 ((TextContentNode) ((LinkContentNode) out.get(6 * 4 + 2)).getContent().get(0))
                         .getContent());
     }
 
-    // ---------------------------------------------------------------- 损坏输出必须整条回退
-
-    private static void assertKeepsOriginal(String corrupted) {
-        List<Object> nodes = reportedMessageTree();
-        assertNull(ContentNodes.replaceText(nodes, corrupted));
-        // 原节点树未被改动：标题与 URL 全部原样。
-        HeadingContentNode first = (HeadingContentNode) nodes.get(0);
-        assertEquals(TITLES[0], ((TextContentNode) first.getContent().get(0)).getContent());
-        LinkContentNode third = (LinkContentNode) nodes.get(2);
-        assertEquals(URLS[0],
-                ((TextContentNode) third.getContent().get(0)).getContent());
-    }
-
-    @Test
-    public void truncatedTailMissingLaterMarkersKeepsOriginal() {
-        // 模型只输出前 9 段：后半内容丢失，必须整条回退。
-        assertKeepsOriginal(wellFormedResponse(9));
-    }
-
-    @Test
-    public void duplicatedGroupRenumberedKeepsOriginal() {
-        // 模型复读前 3 段并改写编号（实测形态）。
-        assertKeepsOriginal(
-                "<s1>第1段标题</s1>\n<s2>第2段标题</s2>\n<s3>第3段标题</s3>\n"
-                        + "<s4>第1段标题</s4>\n<s5>第2段标题</s5>");
-    }
-
-    @Test
-    public void strayMarkerInsideContentKeepsOriginal() {
-        // <s22> 泄漏进段内容：回填后会作为字面量显示给用户。
-        assertKeepsOriginal(wellFormedResponse(15).replaceFirst("</s1>", " <s22>泄漏</s22></s1>"));
-    }
-
-    @Test
-    public void hallucinatedPlaceholderKeepsOriginal() {
-        // SENSENOVA_..._XXXXXX 模板占位符：模型幻觉，不是译文。
-        assertKeepsOriginal(wellFormedResponse(15).replaceFirst("第5段标题",
-                "SENSENOVA_6_8_FLASH_LITE_YYYMMDD_HHMMSS_XXXXXX"));
-    }
-
-    @Test
-    public void outOfOrderMarkersKeepsOriginal() {
-        // 错序：编号与原文位置无法对齐。
-        assertKeepsOriginal(
-                "<s1>第1段标题</s1>\n<s3>第3段标题</s3>\n<s2>第2段标题</s2>\n"
-                        + wellFormedResponse(15).substring(wellFormedResponse(15)
-                        .indexOf("<s4>")));
-    }
-
-    @Test
-    public void emptySegmentKeepsOriginal() {
-        // 空段 = 模型丢弃了该段内容。
-        assertKeepsOriginal(wellFormedResponse(15).replaceFirst("第7段标题", "  "));
-    }
-
     @Test
     public void completelyMarkerlessSpamWithMismatchedStructureKeepsOriginal() {
         // 40 行单换行刷屏（原文 15 个标题片段）：段落块与行数都对不上，
-        // 整条保留原文。防损坏由引擎负责——残留标记、占位符、长度异常
-        // （疑似复读/丢失）的无标记译文在引擎一侧被拒（见 SegmentsTest）；
-        // 带残缺标记的输出在这里同样保留原文。
+        // 整条保留原文。残留标记、占位符、长度异常（疑似复读/丢失）的
+        // 译文在引擎一侧被拒（见 SegmentsTest）；结构对不上的译文在
+        // 渲染层在这里被拒。
         StringBuilder spam = new StringBuilder();
         for (int i = 0; i < 40; i++) {
             spam.append("🔥🔥🔥 FREE CRACK 🔥🔥🔥\n");
@@ -713,7 +591,7 @@ public class LongTextRegressionTest {
                 new TextContentNode("\n"),
                 new LinkContentNode(list(new TextContentNode(URLS[1])), new Object()));
         List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1>加粗标题</s1>\n\n<s2>运行</s2> <s3>现在</s3>");
+                "加粗标题\n运行\n现在 " + URLS[1]);
 
         assertNotNull(out);
         StrongContentNode strong = (StrongContentNode) out.get(0);
@@ -759,8 +637,8 @@ public class LongTextRegressionTest {
                 new AnnotatedStructurableText(nodes));
 
         assertNotNull(r);
-        // 单可翻译块：不启用分段标记，请求走纯文本路径。
-        assertNull("单文本块不启用标记", r.segmented);
+        // 单可翻译块：请求就是纯文本本身。
+        assertEquals("单文本块消息只有一个片段", 1, r.segmentCount);
         assertEquals("纯文本携带 URL 定位标记",
                 " https://codex-relay.codes/register?aff=oqr0 \n "
                         + "https://api.yzmao.cn/sign-up?aff=IpHK \n"

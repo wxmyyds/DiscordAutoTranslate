@@ -269,9 +269,9 @@ public final class HookBridge {
         return rowMessageId + EMBED_KEY_PREFIX + contentHash;
     }
 
-    /** 与 {@link #onMessageBound} 同口径的内容哈希（含分段标记协议版本）。 */
+    /** 与 {@link #onMessageBound} 同口径的内容哈希（含多片段缓存命名空间）。 */
     private static String contentHashOf(TextExtractor.Result ex, Config.Snapshot cfg) {
-        String hashInput = ex.segmented != null ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
+        String hashInput = ex.segmentCount >= 2 ? ex.text + SEGMENT_CACHE_SUFFIX : ex.text;
         return Scheduler.contentHash(hashInput, cfg.version());
     }
 
@@ -378,13 +378,14 @@ public final class HookBridge {
     }
 
     /**
-     * 启用分段标记时附加到缓存键的后缀。
+     * 多片段消息附加到缓存键的后缀。
      *
-     * <p>含 {@code U+0000} 保证不会与任何真实正文混淆；只有存在 ≥2 个文本节点
-     * 的消息会带上它，因此单节点消息的缓存与旧版本保持兼容。</p>
+     * <p>含 {@code U+0000} 保证不会与任何真实正文混淆；只有存在 ≥2 个可翻译
+     * 片段的消息会带上它，因此单片段消息的缓存与旧版本保持兼容。</p>
      *
-     * <p>版本随分段协议的译文形态变化升级：seg2 对应「标记校验失败时引擎
-     * 无标记重试」的版本，同时失效 seg1 时期（可能含损坏/被拒译文）的旧缓存。</p>
+     * <p>版本随回填协议的译文形态变化升级：seg2 对应「单链路无标记请求 +
+     * 渲染层结构对齐回填」的版本，同时失效 seg1 时期（可能含损坏/被拒译文）
+     * 的旧缓存。</p>
      */
     private static final String SEGMENT_CACHE_SUFFIX = "\u0000seg2";
 
@@ -403,7 +404,7 @@ public final class HookBridge {
         }
         long t0 = System.currentTimeMillis();
         TextExtractor.Result ex = TextExtractor.extract(structurableText);
-        XLog.d("extract+mark " + messageId + " in "
+        XLog.d("extract " + messageId + " in "
                 + (System.currentTimeMillis() - t0) + "ms");
         if (ex == null || ex.text.trim().isEmpty()) {
             return;

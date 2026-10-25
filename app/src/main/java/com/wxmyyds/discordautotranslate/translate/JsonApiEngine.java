@@ -57,13 +57,11 @@ public final class JsonApiEngine implements Scheduler.Engine {
     /**
      * 发送一次请求并返回协议提取后的译文。
      *
-     * <p>按协议构造请求体（请求文本若带分段标记会追加分段协议说明到系统
-     * 提示词末尾；单链路下请求恒为无标记纯文本，该分支不触发），发送后
-     * 按协议提取译文。</p>
+     * <p>按协议构造请求体并发送，之后按协议提取译文。</p>
      */
     private String requestOnce(String text) throws Exception {
-        // 1) 按协议构造请求体（无标记请求不追加分段协议说明）
-        String body = buildBody(text);
+        // 1) 按协议构造请求体（单链路：无标记纯文本，直接使用用户配置的提示词）
+        String body = Protocols.requestBody(cfg.protocol, text, cfg.systemPrompt, cfg.model);
         Http.Headers headers = buildHeaders();
 
         // 2) 发送（任务被取消时通过线程中断尽早退出）
@@ -93,16 +91,6 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }
         return translated.trim();
-    }
-
-    /** 构造一次请求体：请求文本带分段标记时追加分段协议说明（单链路下不触发）。 */
-    private String buildBody(String text) throws Exception {
-        String systemPrompt = cfg.systemPrompt;
-        if (Segments.isSegmented(text)) {
-            systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()
-                    ? "" : systemPrompt + "\n\n") + Segments.RULE;
-        }
-        return Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model);
     }
 
     /**

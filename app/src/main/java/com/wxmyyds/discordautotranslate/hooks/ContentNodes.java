@@ -91,16 +91,15 @@ public final class ContentNodes {
     /**
      * 把节点列表中的自然语言文本片段替换为译文。
      *
-     * <p>译文优先按分段标记（{@code <sN>…</sN>}）回填：每个文本节点拿到自己
-     * 对应的片段，于是换行结构与加粗/标题等样式容器都按原样保留。译文里
-     * <b>带有标记但校验不过</b>（残缺/错序/夹带标记/占位符）= 协议被模型破坏，
-     * 整条保留原文；<b>无标记</b>译文（单链路无标记请求的标准形态）按空行
-     * 段落块对齐回填，段落块多于可翻译片段同样整条保留原文，绝不让复读或
-     * 错位内容进入节点树。URL 链接与 URL 文本块不参与翻译，原样保留。</p>
+     * <p>译文按结构对齐回填：URL 链接与 URL 文本块不参与翻译，原样保留；
+     * 译文先按 URL 定位标记切分成间隔，再逐间隔对齐到可翻译片段
+     * （段落块 1:1 → 非空行 1:1 → 段落级：每段译文进本段首片段、段内其余
+     * 置空）。模型跨段落合并/增删内容导致结构对不上时整条保留原文，
+     * 绝不让复读或错位内容进入节点树。</p>
      *
      * @param nodes        原始节点列表
-     * @param translated   译文（可能是带标记的模型原文，也可能是纯文本）
-     * @return 新的节点列表；无需变化、协议校验失败或任一节点重建失败时返回
+     * @param translated   无标记译文（引擎侧已通过防损坏校验）
+     * @return 新的节点列表；无需变化、对齐失败或任一节点重建失败时返回
      *         null，调用方应保留原文
      */
     @Nullable
@@ -113,40 +112,27 @@ public final class ContentNodes {
             XLog.d("no translatable TextContentNode found; nothing to substitute");
             return null;
         }
-        // 优先按分段标记回填：模型逐段翻译并保留 <sN> 标记时，
-        // 每个段落块拿到自己的片段，样式容器与换行结构自然保留。
-        List<String> parts = Segments.parse(translated, targetCount);
-        if (parts == null) {
-            // targetCount >= 2 等价于「本次请求带分段标记」。译文里仍有标记
-            // 但校验不过（残缺/错序/夹带标记/占位符）= 协议被破坏且损坏形态
-            // 可识别，整条保留原文，绝不把损坏译文塞回节点树。
-            if (targetCount >= 2 && Segments.isSegmented(translated)) {
-                XLog.d("segment protocol violated (parts=" + targetCount
-                        + "); keeping original text");
-                return null;
-            }
-            // 无标记译文：单链路（无标记纯文本请求）的标准形态。
-            // URL 链接在请求里是定位标记：先按译文中的 URL 出现位置把译文
-            // 切成若干间隔，每个间隔再独立三级对齐（段落块 1:1 → 非空行 1:1
-            // → 段落级：每段译文进本段首片段，段内其余置空——有格式的内联
-            // 消息只能这样落位）。URL 丢失/改坏/多份回显或间隔对不上时
-            // 整条保留原文。
-            String plain = normalize(Segments.strip(translated));
-            if (plain.isEmpty()) {
-                // 剔除后什么都不剩：不能清空消息，保留原文。
-                return null;
-            }
-            AlignmentPlan plan = buildPlan(nodes);
-            parts = alignTranslation(plain, plan);
-            if (parts == null || parts.size() != targetCount) {
-                XLog.d("markerless backfill refused: targets=" + targetCount
-                        + " lines=" + plain.split("\n", -1).length
-                        + " urlMarks=" + plan.urls.size()
-                        + " paragraphs=" + plan.paragraphCount()
-                        + " unsafeParagraphs=" + plan.unsafe.cardinality()
-                        + " head=" + XLog.text(plain));
-                return null;
-            }
+        // URL 链接在请求里是定位标记：先按译文中的 URL 出现位置把译文
+        // 切成若干间隔，每个间隔再独立三级对齐（段落块 1:1 → 非空行 1:1
+        // → 段落级：每段译文进本段首片段，段内其余置空——有格式的内联
+        // 消息只能这样落位）。URL 丢失/改坏/多份回显或间隔对不上时
+        // 整条保留原文。strip 是防御性的：正常链路下引擎校验已保证译文
+        // 无分段标记，模型幻觉出的标记在这里被剥离而不是显示为字面量。
+        String plain = normalize(Segments.strip(translated));
+        if (plain.isEmpty()) {
+            // 剔除后什么都不剩：不能清空消息，保留原文。
+            return null;
+        }
+        AlignmentPlan plan = buildPlan(nodes);
+        List<String> parts = alignTranslation(plain, plan);
+        if (parts == null || parts.size() != targetCount) {
+            XLog.d("markerless backfill refused: targets=" + targetCount
+                    + " lines=" + plain.split("\n", -1).length
+                    + " urlMarks=" + plan.urls.size()
+                    + " paragraphs=" + plan.paragraphCount()
+                    + " unsafeParagraphs=" + plan.unsafe.cardinality()
+                    + " head=" + XLog.text(plain));
+            return null;
         }
         // 按节点出现的位置分配片段，不能以实例身份为键：共享节点的后一次
         // 空片段会覆盖前一次译文，造成文字全部消失但 emoji 仍保留。
@@ -796,8 +782,6 @@ public final class ContentNodes {
     static final class AlignmentPlan {
         /** 每个可翻译片段的段落组号（0 起，与片段枚举同序）。 */
         final List<Integer> groupIds = new ArrayList<>();
-        /** 每个可翻译片段的样式标记号（0=无标记；>0 对应请求里的 {@code <xN>…</xN>}）。 */
-        final List<Integer> segStyleId = new ArrayList<>();
         /** 按树序的 URL 定位标记（原样 URL 文本）。 */
         final List<String> urls = new ArrayList<>();
         /** 与 {@code urls} 平行：该 URL 之前的可翻译片段数（间隔边界）。 */
@@ -919,7 +903,6 @@ public final class ContentNodes {
                         styleId = w.styleSeq[0];
                         w.plan.styleMarkers++;
                     }
-                    w.plan.segStyleId.add(styleId);
                     w.plan.tokens.add(new PlanToken(segIndex, styleId));
                 }
                 w.sep.append(s, tail, s.length());

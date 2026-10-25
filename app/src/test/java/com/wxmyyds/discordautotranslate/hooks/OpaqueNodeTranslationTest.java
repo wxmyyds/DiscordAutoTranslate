@@ -118,7 +118,7 @@ public class OpaqueNodeTranslationTest {
         UserOrRoleMentionContentNode mention = new UserOrRoleMentionContentNode(
                 list(new TextContentNode("Alice")));
         List<Object> out = ContentNodes.replaceText(list(new TextContentNode("hello"),
-                mention, new TextContentNode("welcome")), "<s1>你好</s1><s2>欢迎</s2>");
+                mention, new TextContentNode("welcome")), "你好\n欢迎");
 
         assertNotNull(out);
         assertEquals("你好", ((TextContentNode) out.get(0)).getContent());

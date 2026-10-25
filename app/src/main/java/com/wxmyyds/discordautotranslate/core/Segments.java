@@ -2,46 +2,26 @@ package com.wxmyyds.discordautotranslate.core;
 
 import androidx.annotation.Nullable;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 分段标记协议：让一次请求同时保真「段落结构」与「内联样式」。
+ * 译文净化与防损坏校验。
  *
- * <p><b>要解决的问题</b>：一条消息的正文往往由多个 {@code TextContentNode} 组成，
- * 它们之间靠 {@code NewLineContentNode} / {@code LineBreakContentNode} 分隔，
- * 并各自嵌在 {@code Strong} / {@code Heading} / {@code BlockQuote} 等样式容器里。
- * 旧实现把整条译文塞进第一个文本节点、其余置空，于是：</p>
+ * <p><b>历史背景</b>：本类曾实现「分段标记协议」——请求给每个可翻译文本节点
+ * 套 {@code <sN>…</sN>} 标记、译文按编号一一取回。单链路重构（一次无标记
+ * 纯文本请求 + 渲染层按结构对齐回填，见 {@code ContentNodes}）后，请求侧
+ * 机器已删除，这里只保留两件事：</p>
  * <ul>
- *   <li>被置空的文本节点连同其外层样式容器一起被当作尾部空白裁掉——<b>样式丢失</b>；</li>
- *   <li>中间的换行节点同样被裁掉——<b>多行被合并成一行</b>。</li>
+ *   <li>{@link #plainTextViolation}：引擎侧防损坏校验——残留标记、模板占位符、
+ *       长度比例异常（复读/大面积丢失）的译文直接判失败，宁可显示原文也不把
+ *       损坏内容送进节点树；</li>
+ *   <li>{@link #strip}：防御性剥离译文中的分段标记。正常链路下引擎校验已
+ *       保证译文无标记，这里是渲染侧的最后防线（标记若不剥离，会作为
+ *       {@code <s1>} 字面量直接显示在消息里）。</li>
  * </ul>
- *
- * <p><b>做法</b>：发出请求时给每个可翻译文本节点套上 {@code <sN>…</sN>} 标记
- * （{@code N} 从 1 开始，按出现顺序编号），节点之间的结构字符（换行、列表项符号、
- * 提及/表情留下的空格）留在标记之外。模型逐段翻译并保留标记，回填时按编号
- * 一一取回，于是每个文本节点都拿到自己的译文片段，样式容器与换行结构自然保留。</p>
- *
- * <p><b>边界</b>：只有当一条消息存在 ≥2 个可翻译文本节点时才加标记；单节点消息
- * 保持原样，避免给常见情况引入无意义的标记噪音。解析是全有或全无：任何缺号、
- * 重复、错序、空段、标记夹带或占位符都判定协议被模型破坏，调用方必须保留
- * 原文（不替换），绝不能把损坏的译文显示给用户。</p>
  */
 public final class Segments {
-
-    /** 附在系统提示词末尾的协议说明；仅在本次请求含标记时追加。 */
-    public static final String RULE =
-            "The input is split into segments, each wrapped as <sN>...</sN> where N is a number.\n"
-            + "Translate the text inside every segment and keep the segment structure exactly:\n"
-            + "1. Keep every <sN> tag and its number unchanged; do not merge, drop, reorder, "
-            + "renumber, or add tags.\n"
-            + "2. Translate each segment in place; the segments together form one message, "
-            + "so keep the overall meaning, tone and terminology consistent across them.\n"
-            + "3. Keep the characters outside the tags (line breaks, list markers, spaces) "
-            + "where they are.\n"
-            + "4. Output only the tagged translation, nothing else.";
 
     /** 形如 {@code <s3>} 的开标记。 */
     private static final Pattern OPEN = Pattern.compile("<s\\s*(\\d+)\\s*>");
@@ -57,50 +37,15 @@ public final class Segments {
      */
     private static final Pattern PLACEHOLDER_RUN = Pattern.compile("X{4,}");
 
-    /** 单次请求回调：发送给定文本并返回协议提取后的译文；失败抛异常。 */
-    public interface RoundTrip {
-        String roundTrip(String text) throws Exception;
-    }
-
-    /** {@link #tryParse} 的结果：要么 parts 非空，要么 violation 说明拒绝原因。 */
-    public static final class Result {
-        /** 按编号顺序排列的片段；协议违规时为 null。 */
-        @Nullable
-        public final List<String> parts;
-        /** 违规原因（供日志定位）；解析成功时为 null。 */
-        @Nullable
-        public final String violation;
-
-        Result(@Nullable List<String> parts, @Nullable String violation) {
-            this.parts = parts;
-            this.violation = violation;
-        }
-
-        public boolean ok() {
-            return parts != null;
-        }
-    }
-
     private Segments() {
-    }
-
-    /** 包住第 {@code index} 段（从 1 开始）的文本。 */
-    public static String wrap(int index, String content) {
-        String tag = "<s" + index + ">";
-        return tag + content + "</s" + index + ">";
-    }
-
-    /** 文本里是否已含本协议的标记（用于决定是否追加 {@link #RULE}）。 */
-    public static boolean isSegmented(@Nullable String text) {
-        return text != null && OPEN.matcher(text).find();
     }
 
     /**
      * 去掉文本中所有分段标记，只保留译文内容。
      *
-     * <p>用于解析失败后的回退：此时标记不会被回填消费，若原样送去渲染，
-     * {@code <s1>} 会作为字面量直接显示在消息里。标记之间的内容按顺序拼接，
-     * 保留标记外的字符（换行等），使回退结果与无标记请求基本一致。</p>
+     * <p>标记之间的内容按顺序拼接，保留标记外的字符（换行等）。
+     * 正常链路下引擎校验已保证译文无标记；若模型凭空幻觉出标记，
+     * 这里负责不让它们以字面量显示给用户。</p>
      */
     public static String strip(@Nullable String text) {
         if (text == null || text.isEmpty()) {
@@ -141,179 +86,6 @@ public final class Segments {
         Matcher m = Pattern.compile("</s\\s*" + index + "\\s*>").matcher(text);
         m.region(closeStart, text.length());
         return m.lookingAt() ? m.end() : closeStart;
-    }
-
-    /**
-     * 从译文里解析出 {@code parts} 个片段。
-     *
-     * @see #tryParse
-     */
-    @Nullable
-    public static List<String> parse(@Nullable String translated, int parts) {
-        return tryParse(translated, parts).parts;
-    }
-
-    /**
-     * 请求文本里有多少个分段标记（请求由本模块生成，形态规整，
-     * 数量即 {@link TextExtractor} 提取侧给出的段数）。
-     */
-    public static int markCount(@Nullable String text) {
-        if (text == null) {
-            return 0;
-        }
-        Matcher m = OPEN.matcher(text);
-        int n = 0;
-        while (m.find()) {
-            n++;
-        }
-        return n;
-    }
-
-    /**
-     * 严格解析并报告违规原因。
-     *
-     * <p>编号必须按 {@code 1..parts} 的文档顺序逐一出现，每段内容非空、
-     * 不夹带标记碎片、不含模板占位符，末段之后也不得残留标记碎片。
-     * 任何一条不满足即协议被模型破坏——此时输出不可信（实测：内容复读、
-     * 尾部乱码、标记泄漏、占位符幻觉），调用方必须安全回退。</p>
-     *
-     * @return 成功时 parts 非空；失败时 violation 说明原因
-     */
-    public static Result tryParse(@Nullable String translated, int parts) {
-        if (translated == null || parts <= 0) {
-            return new Result(null, "empty input");
-        }
-        Matcher open = OPEN.matcher(translated);
-        String[] slots = new String[parts + 1];
-        int found = 0;
-        int searchFrom = 0;
-        int tailFrom = 0;
-        while (open.find(searchFrom)) {
-            int index;
-            try {
-                index = Integer.parseInt(open.group(1));
-            } catch (NumberFormatException e) {
-                return new Result(null, "bad index");
-            }
-            if (index < 1 || index > parts) {
-                return new Result(null, "index " + index + " out of range 1.." + parts);
-            }
-            if (index != found + 1) {
-                return new Result(null, "index " + index + " out of order (expected "
-                        + (found + 1) + ")");
-            }
-            int contentStart = open.end();
-            int close = findClose(translated, index, contentStart);
-            if (close < 0) {
-                return new Result(null, "missing close tag for <s" + index + ">");
-            }
-            String content = translated.substring(contentStart, close);
-            if (content.trim().isEmpty()) {
-                // 被标记的段落在提取侧永不为空（空段落不占标记）；
-                // 空段 = 模型丢弃了该段内容。
-                return new Result(null, "segment " + index + " is empty");
-            }
-            if (STRAY_MARKER.matcher(content).find()) {
-                return new Result(null, "stray marker inside segment " + index);
-            }
-            if (PLACEHOLDER_RUN.matcher(content).find()) {
-                return new Result(null, "placeholder run inside segment " + index);
-            }
-            slots[index] = content.trim();
-            found++;
-            searchFrom = close;
-            tailFrom = skipClose(translated, index, close);
-        }
-        if (found != parts) {
-            return new Result(null, "found " + found + " of " + parts + " segments");
-        }
-        if (STRAY_MARKER.matcher(translated).region(tailFrom, translated.length()).find()) {
-            return new Result(null, "stray marker after last segment");
-        }
-        List<String> out = new ArrayList<>(parts);
-        for (int i = 1; i <= parts; i++) {
-            if (slots[i] == null) {
-                return new Result(null, "segment " + i + " missing");
-            }
-            out.add(slots[i]);
-        }
-        return new Result(out, null);
-    }
-
-    /**
-     * 分段请求的完整翻译策略：标记协议校验失败或请求超时，自动降级一次
-     * 无标记纯文本请求。
-     *
-     * <p>小模型在多段消息上经常丢失或改写标记（实测 parts=12 的消息回得
-     * 支离破碎），直接整条放弃会让消息永远显示原文。</p>
-     *
-     * <p><b>超时降级</b>的依据是实测：同一供应商用聊天客户端直发<b>纯文本</b>
-     * 长文响应很快，而模块的<b>带标记</b>长文（&lt;sN&gt; 标记 + 协议指令）
-     * 稳定 15s 无响应——标记+长内容会让小模型生成失控，非流式接口在生成
-     * 完成前不回任何字节，读超时随之触发。因此带标记请求超时后立即改发
-     * 无标记请求（等价于聊天客户端验证过的快路径），而不是让调度器把注定
-     * 超时的标记请求原样重试三遍。</p>
-     *
-     * <p>两种降级的重试译文都要通过 {@link #plainTextViolation} 防损坏校验，
-     * 不合格则抛 {@link TranslationException}（PARSE）——宁可显示原文也
-     * 不显示损坏内容。</p>
-     *
-     * @param requestText 本次请求文本（可能带分段标记）
-     * @param rt          单次请求回调（内部处理协议/认证/提取）
-     * @return 校验通过的译文（带标记或无标记）
-     */
-    public static String translateWithFallback(String requestText, RoundTrip rt)
-            throws Exception {
-        String translated;
-        try {
-            translated = rt.roundTrip(requestText);
-        } catch (TranslationException te) {
-            if (te.kind() == TranslationException.Kind.TIMEOUT
-                    && isSegmented(requestText)) {
-                XLog.i("marked request timed out; falling back to plain text");
-                return plainRetry(requestText, null, rt);
-            }
-            // 推理型模型会在带标记请求上长时间思考（实测 55s/196KB 帧全部是
-            // 思考内容），正文一个字没出就被截断，提取结果为空。纯文本请求
-            // 任务简单、实测秒级返回正文，同样立即降级。
-            if (te.kind() == TranslationException.Kind.EMPTY
-                    && isSegmented(requestText)) {
-                XLog.i("marked request returned no content (reasoning model?); "
-                        + "falling back to plain text");
-                return plainRetry(requestText, null, rt);
-            }
-            throw te;
-        }
-        if (!isSegmented(requestText)) {
-            return translated;
-        }
-        int parts = markCount(requestText);
-        Result r = tryParse(translated, parts);
-        if (r.parts != null) {
-            return translated;
-        }
-        XLog.i("segment protocol violated (" + r.violation
-                + "); retrying once without markers");
-        return plainRetry(requestText, translated, rt);
-    }
-
-    /** 用无标记纯文本重发一次并做防损坏校验；{@code firstAnswer} 仅在理论不可达路径返回。 */
-    private static String plainRetry(String requestText, @Nullable String firstAnswer,
-                                     RoundTrip rt) throws Exception {
-        String plain = strip(requestText);
-        if (plain.trim().isEmpty()) {
-            // 理论上不可达（分段请求必有非空内容）：保守返回首答。
-            return firstAnswer;
-        }
-        long t0 = System.currentTimeMillis();
-        String retried = rt.roundTrip(plain);
-        String violation = plainTextViolation(retried, plain);
-        if (violation != null) {
-            throw new TranslationException(TranslationException.Kind.PARSE,
-                    "无标记重试译文未通过校验：" + violation);
-        }
-        XLog.i("plain retry ok in " + (System.currentTimeMillis() - t0) + "ms");
-        return retried;
     }
 
     /**

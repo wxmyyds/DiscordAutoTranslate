@@ -416,74 +416,75 @@ public class ContentNodesTest {
 
     @Test
     public void preservesNestedFormattingStructure() {
-        // Paragraph > [Text, Emoji, Text]
+        // Paragraph > [Text, Emoji, NewLine, Text]
         List<Object> inner = list(
                 new TextContentNode("Hello "),
                 new EmojiContentNode("123"),
+                new NewLineContentNode(),
                 new TextContentNode("world"));
         List<Object> nodes = list(new ParagraphContentNode(inner));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1><s2>世界</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好\n世界");
 
         assertNotNull(out);
         assertEquals(1, out.size());
         ParagraphContentNode para = (ParagraphContentNode) out.get(0);
 
         // 结构化节点必须原样复用（同一实例），每个文本节点拿到自己的片段。
-        assertEquals(3, para.getContent().size());
+        assertEquals(4, para.getContent().size());
         assertSame("结构化节点必须原样复用", inner.get(1), para.getContent().get(1));
         assertTrue(para.getContent().get(1) instanceof EmojiContentNode);
 
         // 不变量：首尾空白属于原节点结构，重建时从原节点取回。
         // "Hello " 的尾随空格不交给模型，因此译文之后仍保留。
         assertEquals("你好 ", ((TextContentNode) para.getContent().get(0)).getContent());
-        assertEquals("世界", ((TextContentNode) para.getContent().get(2)).getContent());
+        assertEquals("世界", ((TextContentNode) para.getContent().get(3)).getContent());
     }
 
     @Test
     public void sharedTextInstanceDoesNotLoseTranslationToLaterEmptyPart() {
         TextContentNode shared = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");
-        List<Object> nodes = list(shared, emoji, shared);
+        List<Object> nodes = list(shared, emoji, new NewLineContentNode(), shared);
 
-        List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1>你好</s1><s2>你好</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好\n你好");
 
         assertNotNull(out);
         // 同一实例在不同位置按出现顺序各拿一个片段，互不覆盖。
-        assertEquals(3, out.size());
+        assertEquals(4, out.size());
         assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
         assertSame(emoji, out.get(1));
-        assertEquals("你好", ((TextContentNode) out.get(2)).getContent());
+        assertEquals("你好", ((TextContentNode) out.get(3)).getContent());
         assertEquals("hello", shared.getContent());
         assertSame(shared, nodes.get(0));
-        assertSame(shared, nodes.get(2));
+        assertSame(shared, nodes.get(3));
     }
 
     @Test
     public void sharedTextInstanceReceivesSeparateMultilineParts() {
         TextContentNode shared = new TextContentNode("hello");
-        List<Object> out = ContentNodes.replaceText(list(shared, shared),
-                "<s1>第一</s1><s2>第二</s2>");
+        List<Object> out = ContentNodes.replaceText(list(shared, new NewLineContentNode(),
+                        shared),
+                "第一\n第二");
 
         assertNotNull(out);
         assertEquals("第一", ((TextContentNode) out.get(0)).getContent());
-        assertEquals("第二", ((TextContentNode) out.get(1)).getContent());
+        assertEquals("第二", ((TextContentNode) out.get(2)).getContent());
     }
 
     @Test
     public void sharedContainerIsRebuiltSeparatelyAtEachPosition() {
         TextContentNode text = new TextContentNode("hello");
         ParagraphContentNode shared = new ParagraphContentNode(list(text));
-        List<Object> out = ContentNodes.replaceText(list(shared, shared),
-                "<s1>你好</s1><s2>呀</s2>");
+        List<Object> out = ContentNodes.replaceText(
+                list(shared, new NewLineContentNode(), shared), "你好\n呀");
 
         assertNotNull(out);
         // 两个容器位置各自重建，互不影响。
-        assertEquals(2, out.size());
+        assertEquals(3, out.size());
         ParagraphContentNode first = (ParagraphContentNode) out.get(0);
         assertEquals("你好", ((TextContentNode) first.getContent().get(0)).getContent());
-        ParagraphContentNode second = (ParagraphContentNode) out.get(1);
+        ParagraphContentNode second = (ParagraphContentNode) out.get(2);
         assertEquals("呀", ((TextContentNode) second.getContent().get(0)).getContent());
         assertSame(text, shared.getContent().get(0));
         assertEquals("hello", text.getContent());
@@ -500,7 +501,7 @@ public class ContentNodesTest {
         List<Object> nodes = list(container, visible, emoji);
 
         // 旧实现丢弃首片段的译文却把 visible 变为空串，只剩 emoji。
-        assertNull(ContentNodes.replaceText(nodes, "<s1>第一</s1><s2>你好世界</s2>"));
+        assertNull(ContentNodes.replaceText(nodes, "第一\n你好世界"));
         assertEquals("hello world", visible.getContent());
         assertSame(container, nodes.get(0));
         assertSame(visible, nodes.get(1));
@@ -515,7 +516,7 @@ public class ContentNodesTest {
         TextContentNode visible = new TextContentNode("hello");
         List<Object> nodes = list(first, visible, new EmojiContentNode("1"));
 
-        assertNull(ContentNodes.replaceText(nodes, "<s1>第一</s1><s2>你好</s2>"));
+        assertNull(ContentNodes.replaceText(nodes, "第一\n你好"));
         assertEquals("hello", visible.getContent());
     }
 
@@ -526,7 +527,7 @@ public class ContentNodesTest {
                 new NoCopyContainer.ParagraphContentNode(list(new TextContentNode("last")));
         List<Object> nodes = list(new ParagraphContentNode(list(first)), last);
 
-        assertNull(ContentNodes.replaceText(nodes, "<s1>第一</s1><s2>最后</s2>"));
+        assertNull(ContentNodes.replaceText(nodes, "第一\n最后"));
         assertEquals("first", first.getContent());
         assertEquals("last", ((TextContentNode) last.getContent().get(0)).getContent());
     }
@@ -544,7 +545,7 @@ public class ContentNodesTest {
         MissingTextConstructor.TextContentNode last =
                 new MissingTextConstructor.TextContentNode("last", true);
 
-        assertNull(ContentNodes.replaceText(list(first, last), "<s1>第一</s1><s2>最后</s2>"));
+        assertNull(ContentNodes.replaceText(list(first, last), "第一\n最后"));
         assertEquals("first", first.getContent());
         assertEquals("last", last.getContent());
     }
@@ -567,7 +568,7 @@ public class ContentNodesTest {
                 new TextContentNode("para one"),
                 new EmojiContentNode("9"),
                 new TextContentNode("para two"));
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>第一段</s1>\n<s2>第二段</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "第一段\n第二段");
         assertNotNull(out);
         assertEquals("第一段", ((TextContentNode) out.get(0)).getContent());
         assertEquals("第二段", ((TextContentNode) out.get(2)).getContent());
@@ -607,7 +608,8 @@ public class ContentNodesTest {
                 new LinkContentNode(list(new TextContentNode(
                         "https://gofile.io/d/IJYuv3wZ")), ctx));
         List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1># 免费 CLAUDE CODE 破解 🔥 2026 🔥 [OPUS 5.5]</s1>");
+                "# 免费 CLAUDE CODE 破解 🔥 2026 🔥 [OPUS 5.5]\n"
+                        + "https://gofile.io/d/IJYuv3wZ");
 
         assertNotNull(out);
         HeadingContentNode heading = (HeadingContentNode) out.get(0);
@@ -624,11 +626,11 @@ public class ContentNodesTest {
 
     @Test
     public void nonUrlLinkTextStillTranslates() {
-        // 掩码链接的显示文本是自然语言，仍正常翻译。
+        // 掩码链接的显示文本是自然语言，仍正常翻译（模型按行返回时逐行落位）。
         List<Object> nodes = list(
                 new TextContentNode("see "),
                 new LinkContentNode(list(new TextContentNode("this guide")), new Object()));
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>见</s1> <s2>本指南</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "见\n本指南");
 
         assertNotNull(out);
         assertEquals("见 ", ((TextContentNode) out.get(0)).getContent());
@@ -642,7 +644,8 @@ public class ContentNodesTest {
         // 空行结构来自原节点，保持不变。
         List<Object> nodes = list(new TextContentNode(
                 "hello\n\nhttps://gofile.io/d/rfh2yimO\n\nworld"));
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>\n\n<s2>世界</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "你好\n\nhttps://gofile.io/d/rfh2yimO\n\n世界");
 
         assertNotNull(out);
         assertEquals("URL 块逐字符保留，段落结构不变",
@@ -652,16 +655,17 @@ public class ContentNodesTest {
 
     @Test
     public void corruptedLongTextOutputKeepsOriginalEntirely() {
-        // 长重复文本实测故障形态：内容复读 + 标记泄漏 + 占位符幻觉。
-        // 协议被破坏时必须整条保留原文，不得把损坏译文切分后塞回节点树。
+        // 长重复文本实测故障形态：内容复读 + 占位符幻觉。占位符与残留标记
+        // 在引擎侧校验拦截（见 SegmentsTest）；渲染层对缺 URL/结构不符的
+        // 译文同样整条拒绝，不得把损坏译文切分后塞回节点树。
         List<Object> nodes = list(
                 new TextContentNode("title one"), new NewLineContentNode(),
                 new LinkContentNode(list(new TextContentNode("https://gofile.io/d/kUa0UhnS")),
                         new Object()),
                 new NewLineContentNode(),
                 new TextContentNode("title two"));
-        String corrupted = "<s1>复读 复读 <s22>泄漏</s22></s1>\n"
-                + "<s2>🔥🔥🔥 SENSENOVA_6_8_FLASH_LITE_YYYMMDD_HHMMSS_XXXXXX</s2>";
+        String corrupted = "复读 复读 🔥🔥🔥 SENSENOVA_6_8_FLASH_LITE_YYYMMDD_HHMMSS_XXXXXX\n"
+                + "复读 复读";
 
         assertNull(ContentNodes.replaceText(nodes, corrupted));
         assertEquals("title one", ((TextContentNode) nodes.get(0)).getContent());
@@ -674,7 +678,7 @@ public class ContentNodesTest {
                 new TextContentNode("run "),
                 new InlineCodeContentNode("npm install"),
                 new TextContentNode(" now"));
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>运行</s1> <s2>现在</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "运行\n现在");
         assertNotNull(out);
         // 行内代码节点原样保留
         assertSame("行内代码不得被翻译",
@@ -698,7 +702,7 @@ public class ContentNodesTest {
         List<Object> secondItem = list(new TextContentNode("second"));
         List<Object> nodes = list(new BulletListContentNode(
                 3L, false, itemLists(firstItem, secondItem)));
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>第一</s1>\n<s2>第二</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "第一\n第二");
         assertNotNull(out);
         BulletListContentNode b = (BulletListContentNode) out.get(0);
         assertEquals("start 必须保留", Long.valueOf(3L), b.component1());
@@ -728,8 +732,7 @@ public class ContentNodesTest {
         List<Object> nodes = list(original);
 
         List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1>first translated</s1>\n<s2>styled translated</s2>"
-                        + "\n<s3>nested translated</s3>\n<s4>second translated</s4>");
+                "first translated\nstyled translated\nnested translated\nsecond translated");
 
         assertNotNull(out);
         BulletListContentNode rebuilt = (BulletListContentNode) out.get(0);
@@ -841,17 +844,17 @@ public class ContentNodesTest {
         assertSame("原始节点不得被修改", original, nodes.get(0));
     }
 
-    // ---------------------------------------------------------------- 分段标记回填
+    // ---------------------------------------------------------------- 逐节点回填与结构保留
 
     @Test
-    public void segmentMarkersKeepOneLinePerTextNode() {
+    public void perNodeBackfillKeepsOneLinePerTextNode() {
         // 原文两行（hi / hi）各自一个文本节点，中间是换行节点。
         // 旧行为：模型返回「你好 你好」时全塞进第一个节点，换行节点被裁掉 → 两行合一。
-        // 新行为：带标记请求后逐段回填，换行结构保留。
+        // 现行为：非空行数与片段数一致时按行 1:1 回填，换行结构保留。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>\n<s2>你好</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好\n你好");
 
         assertNotNull(out);
         assertEquals("两个文本节点之间的换行必须保留", 3, out.size());
@@ -861,16 +864,16 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void segmentMarkersKeepStrongContainerAndItsText() {
-        // 原文 hello **world** foo：加粗是一个独立容器。
-        // 旧行为：译文只有一行时加粗节点被置空，其容器被当作空白裁掉 → 样式丢失。
+    public void styleMarkersKeepStrongContainerAndItsText() {
+        // 原文 hello **world** foo：加粗是行内样式容器，请求里包 <x1> 标记，
+        // 模型保留标记时译文按标记精确落回样式节点。
         TextContentNode world = new TextContentNode("world");
         StrongContentNode strong = new StrongContentNode(list(world));
         List<Object> nodes = list(new TextContentNode("hello "), strong,
                 new TextContentNode(" foo"));
 
         List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1>你好</s1> <s2>世界</s2> <s3>呀</s3>");
+                "你好 <x1>世界</x1> 呀");
 
         assertNotNull(out);
         assertEquals(3, out.size());
@@ -883,11 +886,11 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void segmentMarkersPreserveHeadingLevel() {
+    public void singleSegmentPreservesHeadingLevel() {
         List<Object> nodes = list(new HeadingContentNode(
                 list(new TextContentNode("Title")), 2));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>标题</s1>");
+        List<Object> out = ContentNodes.replaceText(nodes, "标题");
 
         assertNotNull(out);
         HeadingContentNode h = (HeadingContentNode) out.get(0);
@@ -896,15 +899,15 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void brokenSegmentMarkersKeepOriginalText() {
-        // 模型漏写第二段：协议已破坏，输出不可信（实测会出现复读/乱码/泄漏标记）。
-        // 必须整条保留原文，绝不能把损坏译文切分后硬塞回节点树。
+    public void mismatchedStructureKeepsOriginalText() {
+        // 两个片段只构成一个段落，译文却有 3 个段落块 = 模型新增/复读内容：
+        // 结构对不上，整条保留原文，绝不把多余内容塞进节点树。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
 
-        assertNull(ContentNodes.replaceText(nodes, "<s1>你好</s1>"));
+        assertNull(ContentNodes.replaceText(nodes, "甲\n\n乙\n\n丙"));
 
-        // 原节点树原样保留，标记不会作为字面量显示。
+        // 原节点树原样保留。
         assertEquals("hi", ((TextContentNode) nodes.get(0)).getContent());
         assertEquals("hi", ((TextContentNode) nodes.get(2)).getContent());
     }
@@ -948,7 +951,7 @@ public class ContentNodesTest {
                 new TextContentNode("world"));
 
         List<Object> out = ContentNodes.replaceText(nodes,
-                "<s1>你好</s1>\n\n<s2>世界</s2>");
+                "你好\n\n世界");
 
         assertNotNull(out);
         assertEquals(3, out.size());
@@ -964,7 +967,7 @@ public class ContentNodesTest {
         // 空行必须留在标记外，重建时按原位置拼回。
         List<Object> nodes = list(new TextContentNode("hello\n\nworld"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>\n\n<s2>世界</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好\n\n世界");
 
         assertNotNull(out);
         assertEquals(1, out.size());
@@ -973,12 +976,12 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void modelCollapsingBlankLinesStillKeepsStructure() {
-        // 模型把译文里的空行删掉（实测常见）也不影响结构：
+    public void modelExtraWhitespaceAroundParagraphsStillKeepsStructure() {
+        // 模型在译文段落前后多打空白（实测常见）也不影响结构：
         // 分隔符来自原节点，不是模型输出。
         List<Object> nodes = list(new TextContentNode("hello\n\nworld"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1><s2>世界</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "  你好 \n\n 世界  ");
 
         assertNotNull(out);
         assertEquals("你好\n\n世界", ((TextContentNode) out.get(0)).getContent());
@@ -989,7 +992,7 @@ public class ContentNodesTest {
         // 单个换行不是段落分隔，不得被当作切分点。
         List<Object> nodes = list(new TextContentNode("first\nsecond"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>第一\n第二</s1>");
+        List<Object> out = ContentNodes.replaceText(nodes, "第一\n第二");
 
         assertNotNull(out);
         assertEquals("第一\n第二", ((TextContentNode) out.get(0)).getContent());
@@ -1000,7 +1003,7 @@ public class ContentNodesTest {
         // 节点首尾的空白属于结构（缩进/段落间距），不交给模型，也不会被译文吞掉。
         List<Object> nodes = list(new TextContentNode("  hello  "));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好");
 
         assertNotNull(out);
         assertEquals("  你好  ", ((TextContentNode) out.get(0)).getContent());
@@ -1183,7 +1186,7 @@ public class ContentNodesTest {
         assertEquals("", ContentNodes.normalize("\r\n \t"));
 
         List<Object> nodes = list(new TextContentNode("hello world"));
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好世界\r\n\n</s1>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好世界\r\n\n");
 
         assertNotNull(out);
         assertEquals(1, out.size());
@@ -1210,7 +1213,7 @@ public class ContentNodesTest {
         List<Object> nodes = list(new TextContentNode("hello"), emoji,
                 new NewLineContentNode(), tail);
 
-        List<Object> out = ContentNodes.replaceText(nodes, "<s1>你好</s1>\n<s2>再见</s2>");
+        List<Object> out = ContentNodes.replaceText(nodes, "你好\n再见");
 
         assertNotNull(out);
         assertEquals(4, out.size());
