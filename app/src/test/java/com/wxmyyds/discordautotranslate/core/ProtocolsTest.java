@@ -32,12 +32,12 @@ public class ProtocolsTest {
         // 流式：非流式接口生成完成前零字节返回，慢速供应商上长消息会被
         // 总时长超时掐断；流式下读超时按字节间隔计算。
         assertTrue("Compatible 协议必须请求流式", json.getBoolean("stream"));
-        // 关闭思考的参数组合：不同厂商字段不同，一起发、认哪个用哪个。
+        // 关闭思考（SenseNova 官方文档字段）：reasoning_effort 枚举里的
+        // none 直接关闭思考模式（默认 high），thinking 开关置 disabled。
         // 推理型模型默认档会把输出预算全花在思考上（实测 55s 零正文）。
-        assertEquals(Protocols.REASONING_EFFORT_MINIMAL,
+        assertEquals(Protocols.REASONING_EFFORT_NONE,
                 json.getString("reasoning_effort"));
-        assertFalse(json.getBoolean("enable_thinking"));
-        assertEquals("disabled", json.getJSONObject("thinking").getString("type"));
+        assertEquals(Protocols.THINKING_DISABLED, json.getString("thinking"));
         JSONArray messages = json.getJSONArray("messages");
         assertEquals(2, messages.length());
         assertEquals("system", messages.getJSONObject(0).getString("role"));
@@ -70,7 +70,6 @@ public class ProtocolsTest {
                 "hii", null, "m", false);
         JSONObject json = new JSONObject(body);
         assertFalse(json.has("reasoning_effort"));
-        assertFalse(json.has("enable_thinking"));
         assertFalse(json.has("thinking"));
         assertTrue(json.getBoolean("stream"));
     }

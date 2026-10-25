@@ -42,18 +42,20 @@ public final class Protocols {
     private static final double FREQUENCY_PENALTY = 0.2;
 
     /**
-     * 关闭思考的参数组合（不同厂商字段不同，一起发、服务端认哪个用哪个）：
+     * 关闭思考的参数组合（按 SenseNova 官方文档对齐）：
      * <ul>
-     *   <li>{@code reasoning_effort:"minimal"} —— OpenAI gpt-5 系的最低档
-     *       （o 系不接受 minimal、非推理模型不接受该参数，会 400 触发去参重发）；</li>
-     *   <li>{@code enable_thinking:false} —— Qwen3 系；</li>
-     *   <li>{@code thinking:{"type":"disabled"}} —— GLM 系。</li>
+     *   <li>{@code reasoning_effort:"none"} —— 官方枚举 low/medium/high/max
+     *       之外，{@code none} 直接关闭思考模式（默认 high）；</li>
+     *   <li>{@code thinking:"disabled"} —— 思考模式开关，字符串枚举
+     *       {@code enabled}/{@code disabled}，默认 enabled。</li>
      * </ul>
-     * 翻译任务不需要思考：推理型模型默认档会把输出预算全花在思考上
-     * （实测 55s/196KB 帧零正文）。宽松服务忽略不认识的字段；严格校验的
-     * 服务回 400，引擎侧收到 400 会去参重发一次。
+     * 两个字段同时发送互为保险。翻译任务不需要思考：推理型模型默认档会把
+     * 输出预算全花在思考上（实测 55s/196KB 帧零正文）。其他供应商不认识
+     * 这些字段时通常忽略；严格校验的服务回 400，引擎侧收到 400 会去参
+     * 重发一次。
      */
-    public static final String REASONING_EFFORT_MINIMAL = "minimal";
+    public static final String REASONING_EFFORT_NONE = "none";
+    public static final String THINKING_DISABLED = "disabled";
 
     private static final String SUFFIX_CHAT_COMPLETIONS = "/chat/completions";
     private static final String SUFFIX_RESPONSES = "/responses";
@@ -113,9 +115,8 @@ public final class Protocols {
                 body.put("frequency_penalty", FREQUENCY_PENALTY);
                 body.put("stream", true);
                 if (suppressThinking) {
-                    body.put("reasoning_effort", REASONING_EFFORT_MINIMAL);
-                    body.put("enable_thinking", false);
-                    body.put("thinking", new JSONObject().put("type", "disabled"));
+                    body.put("reasoning_effort", REASONING_EFFORT_NONE);
+                    body.put("thinking", THINKING_DISABLED);
                 }
             }
             return body.toString();
