@@ -20,7 +20,8 @@ public class ProtocolsTest {
 
     // ------------------------------------------------------------ 请求体
 
-    /** Compatible 请求体必须与旧版默认模板逐字段等价，老用户升级后请求行为不变。 */
+    /** Compatible 请求体不带 frequency_penalty：频率惩罚抑制重复 token，
+     * 会让模型跳过/改写广告类消息里大段重复的段落（实测 7 组重复块被压掉若干组）。 */
     @Test
     public void compatibleBodyMatchesLegacyDefaultTemplate() throws Exception {
         String body = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
@@ -28,7 +29,7 @@ public class ProtocolsTest {
         JSONObject json = new JSONObject(body);
         assertEquals(Config.DEF_MODEL, json.getString("model"));
         assertEquals(0, json.getDouble("temperature"), 0.0);
-        assertEquals(0.2, json.getDouble("frequency_penalty"), 0.0);
+        assertFalse("频率惩罚与逐块照译重复内容冲突", json.has("frequency_penalty"));
         // 流式：非流式接口生成完成前零字节返回，慢速供应商上长消息会被
         // 总时长超时掐断；流式下读超时按字节间隔计算。
         assertTrue("Compatible 协议必须请求流式", json.getBoolean("stream"));

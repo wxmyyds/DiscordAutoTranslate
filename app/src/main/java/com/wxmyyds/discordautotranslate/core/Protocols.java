@@ -18,13 +18,13 @@ import java.util.Locale;
  * <ul>
  *   <li>{@link Config#PROTOCOL_OPENAI_COMPATIBLE}：{@code POST /v1/chat/completions}，
  *       请求体为 {@code messages}（system + user）+ {@code temperature:0} +
- *       {@code frequency_penalty:0.2} + {@code stream:true}（采样参数与旧版默认
- *       模板逐字段等价；流式是为避免慢速供应商上长消息被总时长超时掐断），
+ *       {@code stream:true}（流式是为避免慢速供应商上长消息被总时长超时掐断），
  *       译文从 SSE 帧累积 {@code choices.0.delta.content}，非流式 JSON 回退到
- *       {@code choices.0.message.content}。</li>
+ *       {@code choices.0.message.content}。不携带 {@code frequency_penalty}：
+ *       频率惩罚抑制重复 token，而广告/刷屏类原文本身就是大段重复，惩罚会
+ *       促使模型跳过或改写重复段落，与「逐块照译、保留重复」直接冲突。</li>
  *   <li>{@link Config#PROTOCOL_OPENAI_RESPONSES}：{@code POST /v1/responses}，
  *       请求体为 {@code instructions} + {@code input} + {@code temperature:0}。
- *       不携带 {@code frequency_penalty}：OpenAI 官方 Responses 接口不接受该参数。
  *       保持非流式（其流式事件格式不同，暂未支持）。
  *       译文在 {@code output} 数组中按类型扫描（推理模型会把 reasoning 项排在
  *       message 项之前，不能固定取 {@code output.0}）。</li>
@@ -37,9 +37,6 @@ public final class Protocols {
 
     /** 旧版默认模板的采样参数：temperature 0 降低采样随机性（不保证服务端完全确定）。 */
     private static final int TEMPERATURE = 0;
-
-    /** 轻度频率惩罚仅抑制重复，不承担“只翻译”约束；兼容接口需支持此参数。 */
-    private static final double FREQUENCY_PENALTY = 0.2;
 
     private static final String SUFFIX_CHAT_COMPLETIONS = "/chat/completions";
     private static final String SUFFIX_RESPONSES = "/responses";
@@ -82,7 +79,6 @@ public final class Protocols {
                 messages.put(user);
                 body.put("messages", messages);
                 body.put("temperature", TEMPERATURE);
-                body.put("frequency_penalty", FREQUENCY_PENALTY);
                 body.put("stream", true);
             }
             return body.toString();

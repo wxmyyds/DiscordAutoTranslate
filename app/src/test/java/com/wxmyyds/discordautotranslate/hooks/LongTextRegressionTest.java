@@ -346,6 +346,92 @@ public class LongTextRegressionTest {
                 ((TextContentNode) third.getContent().get(0)).getContent());
     }
 
+    // --------------------------------------------- 重复广告消息（2026-10 三次上报）
+
+    /** 7 组重复的「标题 + 加粗链接行 + TELEGRAM 标题」，URL 在加粗行内。 */
+    private static List<Object> repeatedAdTree() {
+        List<Object> nodes = new ArrayList<>();
+        for (int g = 0; g < 7; g++) {
+            nodes.add(new HeadingContentNode(
+                    list(new TextContentNode("FREE GEMINI 4 ARGON")), 1));
+            nodes.add(new TextContentNode("\n\n"));
+            nodes.add(new StrongContentNode(list(
+                    new TextContentNode(" LINK GEMINI 4 ARGON - "),
+                    new LinkContentNode(list(new TextContentNode(
+                            "https://clck.ru/3Wfv9G")), new Object()),
+                    new TextContentNode(" "))));
+            nodes.add(new TextContentNode("\n\n"));
+            nodes.add(new HeadingContentNode(
+                    list(new TextContentNode("TELEGRAM ONLY")), 1));
+            if (g < 6) {
+                nodes.add(new TextContentNode("\n\n"));
+            }
+        }
+        return nodes;
+    }
+
+    @Test
+    public void repeatedAdMessageTranslatesBlockByBlockWhenStructurePreserved() {
+        // 保结构译文（每显示段落一块，共 21 块）→ 片段级 1:1：
+        // 7 个标题、7 个加粗链接行、7 个 TELEGRAM 标题各拿自己的译文，
+        // URL 链接节点逐字保留且位置不变。
+        StringBuilder translation = new StringBuilder();
+        for (int g = 0; g < 7; g++) {
+            if (g > 0) {
+                translation.append("\n\n");
+            }
+            translation.append("免费 GEMINI 4 ARGON")
+                    .append("\n\n链接 GEMINI 4 ARGON -")
+                    .append("\n\n仅限 TELEGRAM");
+        }
+        List<Object> out = ContentNodes.replaceText(repeatedAdTree(), translation.toString());
+
+        assertNotNull(out);
+        int freeHeadings = 0;
+        int onlyHeadings = 0;
+        int boldLines = 0;
+        int urlLinks = 0;
+        for (Object n : out) {
+            if (n instanceof HeadingContentNode) {
+                String t = ((TextContentNode) ((HeadingContentNode) n).getContent().get(0))
+                        .getContent();
+                if (t.startsWith("免费")) {
+                    assertEquals("免费 GEMINI 4 ARGON", t);
+                    freeHeadings++;
+                } else {
+                    assertEquals("仅限 TELEGRAM", t);
+                    onlyHeadings++;
+                }
+            } else if (n instanceof StrongContentNode) {
+                boldLines++;
+                assertEquals("首尾空白属于原节点结构，译文落核心",
+                        " 链接 GEMINI 4 ARGON - ",
+                        ((TextContentNode) ((StrongContentNode) n).getContent().get(0))
+                                .getContent());
+            } else if (n instanceof LinkContentNode) {
+                urlLinks++;
+                assertEquals("URL 必须逐字符保留",
+                        "https://clck.ru/3Wfv9G",
+                        ((TextContentNode) ((LinkContentNode) n).getContent().get(0))
+                                .getContent());
+            }
+        }
+        assertEquals(7, freeHeadings);
+        assertEquals(7, onlyHeadings);
+        assertEquals(7, boldLines);
+        assertEquals(7, urlLinks);
+    }
+
+    @Test
+    public void deduplicatedTranslationOfRepeatedBlocksKeepsOriginal() {
+        // 模型对重复块去重（21 个段落只回 3 块）：无法确定哪块对应哪一组，
+        // 拒绝回填、整条保留原文。提示词已明确要求逐个翻译重复段落，
+        // 且请求不再携带 frequency_penalty（频率惩罚会促使模型跳过重复块）；
+        // 若真机仍出现本形态，日志的 blocks/paragraphs 计数会直接显示。
+        assertNull(ContentNodes.replaceText(repeatedAdTree(),
+                "免费 GEMINI 4 ARGON\n\n链接 GEMINI 4 ARGON -\n\n仅限 TELEGRAM"));
+    }
+
     // ---------------------------------------------------------------- 混合格式的长文本
 
     @Test

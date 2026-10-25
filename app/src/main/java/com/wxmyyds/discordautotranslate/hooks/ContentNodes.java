@@ -137,8 +137,12 @@ public final class ContentNodes {
             List<Integer> groupIds = collectGroupIds(nodes);
             parts = splitTranslation(plain, targetCount, groupIds);
             if (parts == null) {
-                XLog.d("markerless translation structure mismatch (targets="
-                        + targetCount + "); keeping original text");
+                int groups = groupIds.isEmpty() ? 0 : groupIds.get(groupIds.size() - 1) + 1;
+                XLog.d("markerless structure mismatch: targets=" + targetCount
+                        + " blocks=" + translatableChunks(plain).size()
+                        + " lines=" + plain.split("\n", -1).length
+                        + " paragraphs=" + groups
+                        + " head=" + XLog.text(plain));
                 return null;
             }
         }
@@ -537,13 +541,7 @@ public final class ContentNodes {
             out.add(translated);
             return out;
         }
-        List<String> chunks = new ArrayList<>();
-        for (String chunk : BlankLines.split(translated).chunks) {
-            String trimmed = chunk.trim();
-            if (!trimmed.isEmpty() && !TextExtractor.isUrlLike(trimmed)) {
-                chunks.add(trimmed);
-            }
-        }
+        List<String> chunks = translatableChunks(translated);
         if (chunks.size() == parts) {
             return chunks;
         }
@@ -582,6 +580,21 @@ public final class ContentNodes {
             return out;
         }
         return null;
+    }
+
+    /**
+     * 译文的可翻译段落块：空行切分，剔除空白块与 URL 块——与回填消费片段
+     * 的口径（{@link TextExtractor#countSegments}）一致，日志与切分共用。
+     */
+    private static List<String> translatableChunks(String translated) {
+        List<String> chunks = new ArrayList<>();
+        for (String chunk : BlankLines.split(translated).chunks) {
+            String trimmed = chunk.trim();
+            if (!trimmed.isEmpty() && !TextExtractor.isUrlLike(trimmed)) {
+                chunks.add(trimmed);
+            }
+        }
+        return chunks;
     }
 
     /**
