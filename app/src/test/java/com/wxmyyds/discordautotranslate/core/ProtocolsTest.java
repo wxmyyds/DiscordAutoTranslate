@@ -91,6 +91,55 @@ public class ProtocolsTest {
                 Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
     }
 
+    /** 流断在半路（网络中断/服务端断开）：部分 delta 拼出的译文缺尾巴，必须失败。 */
+    @Test
+    public void streamCutMidwayIsRejectedNotPartiallyExtracted() {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"，世\"}}]}\n";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse);
+            fail("残缺流必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
+    /** finish_reason=length：流走完了但生成被 max_tokens 掐断，译文不完整。 */
+    @Test
+    public void finishReasonLengthIsRejectedAsTruncated() {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"finish_reason\":\"length\",\"delta\":{}}]}\n"
+                + "data: [DONE]\n";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse);
+            fail("被截断的生成必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
+    /** 个别实现省略 [DONE] 但给出 finish_reason=stop：生成完整，照常提取。 */
+    @Test
+    public void finishReasonStopWithoutDoneMarkerStillExtracts() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
+    /** 中间帧的 finish_reason 显式为 null：不得被当成 "null" 字符串而误判截断。 */
+    @Test
+    public void explicitNullFinishReasonDoesNotFailTheGate() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你\"},"
+                + "\"finish_reason\":null}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"好\"},"
+                + "\"finish_reason\":null}]}\n"
+                + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
     /**
      * 提示词与原文含引号、换行、反斜杠时必须无损往返（协议层负责 JSON 转义）。
      */

@@ -148,10 +148,20 @@ public final class Protocols {
      * <p>帧形态：{@code data: {"choices":[{"delta":{"content":"片"}}]}}，
      * 以 {@code data: [DONE]} 结束。role 帧/usage 帧的 delta.content 为空，
      * 跳过即可；错误帧没有 content，累积结果为空由引擎报“译文为空”。</p>
+     *
+     * <p><b>完整性把关</b>：流式读取按行进行，连接断在半路时已到达的
+     * 部分 delta 会拼出一份“缺尾巴”的译文——回填显示就是实测的
+     * “翻译后丢失文本”。因此译文只有在生成确有结束信号时才可用：
+     * {@code finish_reason=="stop"}（个别实现省略 [DONE]）或收到
+     * {@code data: [DONE]} 帧；{@code finish_reason} 为 length 等
+     * 非 stop 值说明生成本身被截断，同样必须失败。两者皆无 = 流断在
+     * 半路，拒绝残缺译文，宁可显示原文让用户重试。</p>
      */
     private static String extractStreamedChatText(String responseBody)
             throws TranslationException {
         StringBuilder out = new StringBuilder();
+        String finishReason = null;
+        boolean sawDone = false;
         try {
             for (String rawLine : responseBody.split("\n", -1)) {
                 String line = rawLine.trim();
@@ -159,7 +169,11 @@ public final class Protocols {
                     continue; // 注释行（: keep-alive）与空行
                 }
                 String payload = line.substring("data:".length()).trim();
-                if (payload.isEmpty() || "[DONE]".equals(payload)) {
+                if (payload.isEmpty()) {
+                    continue;
+                }
+                if ("[DONE]".equals(payload)) {
+                    sawDone = true;
                     continue;
                 }
                 JSONObject frame = new JSONObject(payload);
@@ -167,7 +181,13 @@ public final class Protocols {
                 if (choices == null || choices.length() == 0) {
                     continue;
                 }
-                JSONObject delta = choices.getJSONObject(0).optJSONObject("delta");
+                JSONObject choice0 = choices.getJSONObject(0);
+                // 流式中间帧常带显式 null（JSONObject.NULL），不能当 "null" 字符串。
+                Object finish = choice0.opt("finish_reason");
+                if (finish != null && finish != JSONObject.NULL && !finish.toString().isEmpty()) {
+                    finishReason = finish.toString();
+                }
+                JSONObject delta = choice0.optJSONObject("delta");
                 if (delta == null) {
                     continue;
                 }
@@ -179,6 +199,14 @@ public final class Protocols {
         } catch (JSONException e) {
             throw new TranslationException(TranslationException.Kind.PARSE,
                     "流式响应帧不是合法 JSON：" + e.getMessage(), e);
+        }
+        if (finishReason != null && !"stop".equals(finishReason)) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "生成被截断（finish_reason=" + finishReason + "），译文不完整");
+        }
+        if (!sawDone && finishReason == null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "流式响应不完整：未收到结束帧（[DONE]/finish_reason）");
         }
         return out.toString();
     }
