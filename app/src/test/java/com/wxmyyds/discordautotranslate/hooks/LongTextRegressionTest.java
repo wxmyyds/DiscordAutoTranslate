@@ -35,7 +35,9 @@ import java.util.regex.Pattern;
  * <p>修复后的契约：</p>
  * <ul>
  *   <li>URL 链接不进请求、不翻译，节点原样保留（逐字符一致）；</li>
- *   <li>带标记译文的校验是全有或全无，任何违规整条保留原文；</li>
+ *   <li>带标记译文的校验是全有或全无：标记残缺/错序/夹带/占位符 → 整条保留原文；</li>
+ *   <li>标记校验失败时引擎自动用无标记纯文本重发一次（重试译文经引擎
+ *       防损坏校验），渲染层对无标记译文走整段回填；</li>
  *   <li>协议完好时每个标题拿到自己的片段，空行结构来自原节点。</li>
  * </ul>
  */
@@ -237,13 +239,25 @@ public class LongTextRegressionTest {
     }
 
     @Test
-    public void completelyMarkerlessGarbageKeepsOriginal() {
-        // 完全无标记的复读 + 🔥 刷屏：旧实现按行切分后直接显示，正是故障现场。
+    public void completelyMarkerlessOutputFallsBackToWholeTextBackfill() {
+        // 完全无标记的输出（模型丢光标记，或引擎无标记重试的产物）：
+        // 渲染层不再拒绝，走整段回填。防损坏由引擎负责——残留标记、占位符、
+        // 长度异常（疑似复读/丢失）的无标记译文在 Segments.translateWithFallback
+        // 一侧被拒（见 SegmentsTest）；带残缺标记的输出在这里仍然保留原文。
         StringBuilder spam = new StringBuilder();
         for (int i = 0; i < 40; i++) {
             spam.append("🔥🔥🔥 FREE CRACK 🔥🔥🔥\n");
         }
-        assertKeepsOriginal(spam.toString());
+        List<Object> out = ContentNodes.replaceText(reportedMessageTree(), spam.toString());
+
+        assertNotNull("无标记译文必须回填（否则消息永远显示原文）", out);
+        // 首个标题节点承载第一行，URL 链接不受影响。
+        HeadingContentNode first = (HeadingContentNode) out.get(0);
+        assertEquals("🔥🔥🔥 FREE CRACK 🔥🔥🔥",
+                ((TextContentNode) first.getContent().get(0)).getContent());
+        LinkContentNode link = (LinkContentNode) out.get(2);
+        assertEquals(URLS[0],
+                ((TextContentNode) link.getContent().get(0)).getContent());
     }
 
     // ---------------------------------------------------------------- 混合格式的长文本

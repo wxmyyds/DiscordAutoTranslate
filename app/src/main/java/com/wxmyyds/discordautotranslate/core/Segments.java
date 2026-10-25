@@ -46,7 +46,7 @@ public final class Segments {
     /** 形如 {@code <s3>} 的开标记。 */
     private static final Pattern OPEN = Pattern.compile("<s\\s*(\\d+)\\s*>");
 
-    /** 段内容里夹带的标记碎片（开/闭均算）：协议被破坏，会把标记泄漏成字面量。 */
+    /** 段内夹带的标记碎片（开/闭均算）：协议被破坏，会把标记泄漏成字面量。 */
     private static final Pattern STRAY_MARKER = Pattern.compile("</?s\\s*\\d");
 
     /**
@@ -56,6 +56,30 @@ public final class Segments {
      * 这类占位符；正常译文不会出现 4 个以上连续大写 X。</p>
      */
     private static final Pattern PLACEHOLDER_RUN = Pattern.compile("X{4,}");
+
+    /** 单次请求回调：发送给定文本并返回协议提取后的译文；失败抛异常。 */
+    public interface RoundTrip {
+        String roundTrip(String text) throws Exception;
+    }
+
+    /** {@link #tryParse} 的结果：要么 parts 非空，要么 violation 说明拒绝原因。 */
+    public static final class Result {
+        /** 按编号顺序排列的片段；协议违规时为 null。 */
+        @Nullable
+        public final List<String> parts;
+        /** 违规原因（供日志定位）；解析成功时为 null。 */
+        @Nullable
+        public final String violation;
+
+        Result(@Nullable List<String> parts, @Nullable String violation) {
+            this.parts = parts;
+            this.violation = violation;
+        }
+
+        public boolean ok() {
+            return parts != null;
+        }
+    }
 
     private Segments() {
     }
@@ -122,22 +146,42 @@ public final class Segments {
     /**
      * 从译文里解析出 {@code parts} 个片段。
      *
-     * <p>校验是严格的：编号必须按 {@code 1..parts} 的文档顺序逐一出现，
-     * 每段内容非空、不夹带标记碎片、不含模板占位符，末段之后也不得残留
-     * 标记碎片。任何一条不满足都返回 {@code null}——协议已被模型破坏，
-     * 此时输出不可信（实测：内容复读、尾部乱码、标记泄漏、占位符幻觉），
-     * 调用方必须安全回退为保留原文，不能把损坏结果切分后硬塞回节点树。</p>
-     *
-     * @param translated 模型返回的带标记译文
-     * @param parts      期望的片段数（= 原文可翻译段落块数，见
-     *                   {@link TextExtractor#countSegments}）
-     * @return 按编号顺序排列的片段（每段去掉首尾空白——提取侧的块本来就是
-     *         边缘无空白的，段内边缘空白是模型噪音）；任何违规返回 {@code null}
+     * @see #tryParse
      */
     @Nullable
     public static List<String> parse(@Nullable String translated, int parts) {
+        return tryParse(translated, parts).parts;
+    }
+
+    /**
+     * 请求文本里有多少个分段标记（请求由本模块生成，形态规整，
+     * 数量即 {@link TextExtractor} 提取侧给出的段数）。
+     */
+    public static int markCount(@Nullable String text) {
+        if (text == null) {
+            return 0;
+        }
+        Matcher m = OPEN.matcher(text);
+        int n = 0;
+        while (m.find()) {
+            n++;
+        }
+        return n;
+    }
+
+    /**
+     * 严格解析并报告违规原因。
+     *
+     * <p>编号必须按 {@code 1..parts} 的文档顺序逐一出现，每段内容非空、
+     * 不夹带标记碎片、不含模板占位符，末段之后也不得残留标记碎片。
+     * 任何一条不满足即协议被模型破坏——此时输出不可信（实测：内容复读、
+     * 尾部乱码、标记泄漏、占位符幻觉），调用方必须安全回退。</p>
+     *
+     * @return 成功时 parts 非空；失败时 violation 说明原因
+     */
+    public static Result tryParse(@Nullable String translated, int parts) {
         if (translated == null || parts <= 0) {
-            return null;
+            return new Result(null, "empty input");
         }
         Matcher open = OPEN.matcher(translated);
         String[] slots = new String[parts + 1];
@@ -149,33 +193,31 @@ public final class Segments {
             try {
                 index = Integer.parseInt(open.group(1));
             } catch (NumberFormatException e) {
-                return null;
+                return new Result(null, "bad index");
             }
             if (index < 1 || index > parts) {
-                return null; // 越界编号：协议被破坏
+                return new Result(null, "index " + index + " out of range 1.." + parts);
             }
             if (index != found + 1) {
-                // 错序或重复：模型重排/改写了段落，编号与原文位置无法对齐。
-                return null;
+                return new Result(null, "index " + index + " out of order (expected "
+                        + (found + 1) + ")");
             }
             int contentStart = open.end();
             int close = findClose(translated, index, contentStart);
             if (close < 0) {
-                return null;
+                return new Result(null, "missing close tag for <s" + index + ">");
             }
             String content = translated.substring(contentStart, close);
             if (content.trim().isEmpty()) {
                 // 被标记的段落在提取侧永不为空（空段落不占标记）；
                 // 空段 = 模型丢弃了该段内容。
-                return null;
+                return new Result(null, "segment " + index + " is empty");
             }
             if (STRAY_MARKER.matcher(content).find()) {
-                // 段内夹带 <sN> / </sN>：回填后标记会作为字面量显示。
-                return null;
+                return new Result(null, "stray marker inside segment " + index);
             }
             if (PLACEHOLDER_RUN.matcher(content).find()) {
-                // 模型幻觉的模板占位符（XXXXXX 之类）。
-                return null;
+                return new Result(null, "placeholder run inside segment " + index);
             }
             slots[index] = content.trim();
             found++;
@@ -183,21 +225,97 @@ public final class Segments {
             tailFrom = skipClose(translated, index, close);
         }
         if (found != parts) {
-            return null;
+            return new Result(null, "found " + found + " of " + parts + " segments");
         }
         if (STRAY_MARKER.matcher(translated).region(tailFrom, translated.length()).find()) {
-            // 末段之后仍残留标记碎片：模型输出了额外/错位的段，
-            // 正文可能已被挪到段外（会被静默丢弃），整体拒绝。
-            return null;
+            return new Result(null, "stray marker after last segment");
         }
         List<String> out = new ArrayList<>(parts);
         for (int i = 1; i <= parts; i++) {
             if (slots[i] == null) {
-                return null;
+                return new Result(null, "segment " + i + " missing");
             }
             out.add(slots[i]);
         }
-        return out;
+        return new Result(out, null);
+    }
+
+    /**
+     * 分段请求的完整翻译策略：标记协议校验失败时自动降级一次。
+     *
+     * <p>小模型在多段消息上经常丢失或改写标记（实测 parts=12 的消息回得
+     * 支离破碎），直接整条放弃会让消息永远显示原文。策略改为：</p>
+     * <ol>
+     *   <li>按原请求发送；译文通过 {@link #tryParse} 校验则原样返回；</li>
+     *   <li>校验失败则用<b>无标记纯文本</b>重发一次（模型没有协议可破坏，
+     *       走久经验证的整段翻译路径），重试译文须通过
+     *       {@link #plainTextViolation} 防损坏校验；</li>
+     *   <li>重试译文也不合格则抛 {@link TranslationException}（PARSE），
+     *       宁可显示原文也不显示损坏内容。</li>
+     * </ol>
+     *
+     * @param requestText 本次请求文本（可能带分段标记）
+     * @param rt          单次请求回调（内部处理协议/认证/提取）
+     * @return 校验通过的译文（带标记或无标记）
+     */
+    public static String translateWithFallback(String requestText, RoundTrip rt)
+            throws Exception {
+        String translated = rt.roundTrip(requestText);
+        if (!isSegmented(requestText)) {
+            return translated;
+        }
+        int parts = markCount(requestText);
+        Result r = tryParse(translated, parts);
+        if (r.parts != null) {
+            return translated;
+        }
+        XLog.i("segment protocol violated (" + r.violation
+                + "); retrying once without markers");
+        String plain = strip(requestText);
+        if (plain.trim().isEmpty()) {
+            // 理论上不可达（分段请求必有非空内容）：保守返回首答。
+            return translated;
+        }
+        String retried = rt.roundTrip(plain);
+        String violation = plainTextViolation(retried, plain);
+        if (violation != null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "无标记重试译文未通过校验：" + violation);
+        }
+        return retried;
+    }
+
+    /**
+     * 无标记译文的防损坏校验：非空、无残留标记、无占位符、长度比例合理。
+     *
+     * <p>长度比例只对较长的原文（≥40 字符）生效：正常中英互译长度在
+     * 0.25×～3× 之间，复读刷屏会显著超出，内容丢失会显著不足；
+     * 过短的文本比例噪声太大，不做校验。</p>
+     *
+     * @return 违规描述；合格返回 null
+     */
+    @Nullable
+    static String plainTextViolation(@Nullable String translated, String source) {
+        if (translated == null || translated.trim().isEmpty()) {
+            return "译文为空";
+        }
+        if (STRAY_MARKER.matcher(translated).find()) {
+            return "译文中残留分段标记";
+        }
+        if (PLACEHOLDER_RUN.matcher(translated).find()) {
+            return "译文含模板占位符";
+        }
+        int n = source.length();
+        if (n >= 40) {
+            int m = translated.length();
+            if (m * 4 < n) {
+                return "译文长度异常（" + m + "/" + n + "）：疑似内容丢失";
+            }
+            if (m > n * 3) {
+                return "译文长度异常（" + m + "/" + n + "）：疑似复读";
+            }
+        }
+        return null;
     }
 
     /** 找到与开标记配对的下一个 {@code </sN>}。 */

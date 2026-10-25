@@ -5,10 +5,13 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -157,5 +160,181 @@ public class SegmentsTest {
         assertTrue(Segments.RULE.contains("<sN>"));
         assertTrue(Segments.RULE.contains("Keep every"));
         assertTrue(Segments.RULE.contains("outside the tags"));
+    }
+
+    // ------------------------------------------------- 引擎降级重试（translateWithFallback）
+
+    /** 记录每次发送文本的假请求回调。 */
+    private static final class RecordingRoundTrip implements Segments.RoundTrip {
+        final List<String> sent = new ArrayList<>();
+        private final String[] responses;
+
+        RecordingRoundTrip(String... responses) {
+            this.responses = responses;
+        }
+
+        @Override
+        public String roundTrip(String text) {
+            sent.add(text);
+            return responses[Math.min(sent.size() - 1, responses.length - 1)];
+        }
+    }
+
+    /** 第 n 次调用抛异常的假请求回调。 */
+    private static final class ThrowingRoundTrip implements Segments.RoundTrip {
+        int calls;
+
+        @Override
+        public String roundTrip(String text) {
+            calls++;
+            if (calls == 1) {
+                return "无标记首答";
+            }
+            throw new IllegalStateException("network down");
+        }
+    }
+
+    @Test
+    public void markCountCountsProtocolTags() {
+        assertEquals(3, Segments.markCount("<s1>a</s1> <s2>b</s2>\n<s3>c</s3>"));
+        assertEquals(1, Segments.markCount("x <s5>y</s5> z"));
+        assertEquals(0, Segments.markCount("plain text"));
+        assertEquals(0, Segments.markCount(null));
+    }
+
+    @Test
+    public void tryParseReportsViolationReason() {
+        Segments.Result ok = Segments.tryParse("<s1>a</s1><s2>b</s2>", 2);
+        assertTrue(ok.ok());
+        assertNull(ok.violation);
+        assertEquals(Arrays.asList("a", "b"), ok.parts);
+
+        Segments.Result missing = Segments.tryParse("<s1>a</s1>", 2);
+        assertNull(missing.parts);
+        assertNotNull("缺失段必须给出可定位的原因", missing.violation);
+        assertTrue(missing.violation.contains("of 2"));
+
+        Segments.Result order = Segments.tryParse("<s2>b</s2><s1>a</s1>", 2);
+        assertNull(order.parts);
+        assertNotNull(order.violation);
+    }
+
+    @Test
+    public void unsegmentedRequestIsSingleRoundTrip() throws Exception {
+        RecordingRoundTrip rt = new RecordingRoundTrip("你好");
+        assertEquals("你好", Segments.translateWithFallback("hello world", rt));
+        assertEquals(Collections.singletonList("hello world"), rt.sent);
+    }
+
+    @Test
+    public void validSegmentedResponseIsReturnedWithoutRetry() throws Exception {
+        String req = "<s1>hello</s1>\n<s2>world</s2>";
+        RecordingRoundTrip rt = new RecordingRoundTrip("<s1>你好</s1><s2>世界</s2>");
+        assertEquals("<s1>你好</s1><s2>世界</s2>",
+                Segments.translateWithFallback(req, rt));
+        assertEquals("协议完好时不得多发一次请求", 1, rt.sent.size());
+    }
+
+    @Test
+    public void protocolViolationRetriesOnceWithPlainText() throws Exception {
+        // 实测故障形态：模型丢失全部标记。必须用无标记纯文本重发一次。
+        String req = "<s1>hello</s1>\n<s2>world</s2>";
+        RecordingRoundTrip rt = new RecordingRoundTrip("你好世界");
+        String out = Segments.translateWithFallback(req, rt);
+
+        assertEquals("你好世界", out);
+        assertEquals(2, rt.sent.size());
+        assertEquals("重试必须发送无标记纯文本（strip 后的请求）",
+                "hello\nworld", rt.sent.get(1));
+    }
+
+    @Test
+    public void retryRoundTripFailurePropagates() {
+        ThrowingRoundTrip rt = new ThrowingRoundTrip();
+        try {
+            Segments.translateWithFallback("<s1>a</s1><s2>b</s2>", rt);
+            fail("重试的异常必须向上传播");
+        } catch (Exception expected) {
+            assertEquals("network down", expected.getMessage());
+        }
+    }
+
+    @Test
+    public void retryResponseWithStrayMarkerIsRejected() {
+        RecordingRoundTrip rt = new RecordingRoundTrip("首答", "你好 <s3>漏</s3> 世界");
+        try {
+            Segments.translateWithFallback("<s1>a</s1><s2>b</s2>", rt);
+            fail("重试译文残留标记必须拒绝");
+        } catch (TranslationException expected) {
+            assertEquals(TranslationException.Kind.PARSE, expected.kind());
+        } catch (Exception other) {
+            fail("unexpected: " + other);
+        }
+    }
+
+    @Test
+    public void retryResponseWithPlaceholderIsRejected() {
+        RecordingRoundTrip rt = new RecordingRoundTrip("首答",
+                "SENSENOVA_6_8_FLASH_LITE_YYYMMDD_HHMMSS_XXXXXX");
+        try {
+            Segments.translateWithFallback("<s1>a</s1><s2>b</s2>", rt);
+            fail("占位符必须拒绝");
+        } catch (TranslationException expected) {
+            assertEquals(TranslationException.Kind.PARSE, expected.kind());
+        } catch (Exception other) {
+            fail("unexpected: " + other);
+        }
+    }
+
+    @Test
+    public void retryResponseLengthRatioViolationsAreRejected() {
+        // 原文足够长（≥40）时比例校验生效：疑似丢失（过短）与疑似复读（过长）。
+        StringBuilder source = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            source.append("<s").append(i + 1).append(">paragraph number ")
+                    .append(i).append(" with words</s").append(i + 1).append(">\n");
+        }
+        String req = source.toString();
+        assertTrue(Segments.strip(req).length() >= 40);
+
+        RecordingRoundTrip tooShort = new RecordingRoundTrip("x", "短");
+        try {
+            Segments.translateWithFallback(req, tooShort);
+            fail("疑似内容丢失必须拒绝");
+        } catch (TranslationException expected) {
+            assertEquals(TranslationException.Kind.PARSE, expected.kind());
+        } catch (Exception other) {
+            fail("unexpected: " + other);
+        }
+
+        StringBuilder spam = new StringBuilder();
+        for (int i = 0; i < 100; i++) {
+            spam.append("复读写得越长越可疑，");
+        }
+        RecordingRoundTrip tooLong = new RecordingRoundTrip("x", spam.toString());
+        try {
+            Segments.translateWithFallback(req, tooLong);
+            fail("疑似复读必须拒绝");
+        } catch (TranslationException expected) {
+            assertEquals(TranslationException.Kind.PARSE, expected.kind());
+        } catch (Exception other) {
+            fail("unexpected: " + other);
+        }
+    }
+
+    @Test
+    public void retryResponseOfReasonableLengthIsAccepted() throws Exception {
+        StringBuilder source = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            source.append("<s").append(i + 1).append(">paragraph number ")
+                    .append(i).append(" with words</s").append(i + 1).append(">\n");
+        }
+        StringBuilder zh = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            zh.append("第").append(i).append("段中文译文，长度正常。\n");
+        }
+        RecordingRoundTrip rt = new RecordingRoundTrip("x", zh.toString());
+        assertEquals(zh.toString(), Segments.translateWithFallback(source.toString(), rt));
+        assertEquals(2, rt.sent.size());
     }
 }

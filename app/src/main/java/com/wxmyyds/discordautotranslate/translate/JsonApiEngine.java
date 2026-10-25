@@ -40,10 +40,21 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
         }
         validateConfig(cfg);
+        // 分段请求的译文若未通过标记协议校验，自动用无标记纯文本重发一次
+        // （见 Segments.translateWithFallback）：小模型经常丢失/改写标记，
+        // 整条放弃会让消息永远显示原文。渲染层只接受协议完好或无标记的译文。
+        return Segments.translateWithFallback(text, this::requestOnce);
+    }
 
+    /**
+     * 发送一次请求并返回协议提取后的译文。
+     *
+     * <p>按协议构造请求体（带分段标记的请求追加 {@link Segments#RULE} 到
+     * 系统提示词末尾，不改动用户配置的提示词本身），发送后按协议提取译文。
+     * 由 {@link Segments#translateWithFallback} 作为单次请求回调复用。</p>
+     */
+    private String requestOnce(String text) throws Exception {
         // 1) 按协议构造请求体
-        // 带分段标记的请求需要模型知道标记规则；追加在系统提示词末尾，
-        // 而不改动用户配置的提示词本身（避免影响配置版本与既有判定）。
         String systemPrompt = cfg.systemPrompt;
         if (Segments.isSegmented(text)) {
             systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()

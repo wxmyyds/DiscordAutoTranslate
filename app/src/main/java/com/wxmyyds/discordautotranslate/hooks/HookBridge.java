@@ -382,8 +382,11 @@ public final class HookBridge {
      *
      * <p>含 {@code U+0000} 保证不会与任何真实正文混淆；只有存在 ≥2 个文本节点
      * 的消息会带上它，因此单节点消息的缓存与旧版本保持兼容。</p>
+     *
+     * <p>版本随分段协议的译文形态变化升级：seg2 对应「标记校验失败时引擎
+     * 无标记重试」的版本，同时失效 seg1 时期（可能含损坏/被拒译文）的旧缓存。</p>
      */
-    private static final String SEGMENT_CACHE_SUFFIX = "\u0000seg1";
+    private static final String SEGMENT_CACHE_SUFFIX = "\u0000seg2";
 
     /** Embed 状态键的分隔符；真实消息 ID（雪花 ID）不可能包含 U+0000。 */
     private static final String EMBED_KEY_PREFIX = "\u0000embed\u0000";

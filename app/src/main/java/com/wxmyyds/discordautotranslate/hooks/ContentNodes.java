@@ -92,9 +92,11 @@ public final class ContentNodes {
      * 把节点列表中的自然语言文本片段替换为译文。
      *
      * <p>译文优先按分段标记（{@code <sN>…</sN>}）回填：每个文本节点拿到自己
-     * 对应的片段，于是换行结构与加粗/标题等样式容器都按原样保留。模型没有
-     * 完整遵守标记协议时，安全回退为保留原文（不替换）；两者都不改变节点树
-     * 结构。URL 链接与 URL 文本块不参与翻译，原样保留。</p>
+     * 对应的片段，于是换行结构与加粗/标题等样式容器都按原样保留。译文里
+     * <b>带有标记但校验不过</b>（残缺/错序/夹带标记/占位符）= 协议被模型破坏，
+     * 整条保留原文；<b>无标记</b>译文（引擎在分段失败后用无标记重试的产物，
+     * 已通过引擎防损坏校验）与单段消息一样走整段回填。URL 链接与 URL 文本块
+     * 不参与翻译，原样保留。</p>
      *
      * @param nodes        原始节点列表
      * @param translated   译文（可能是带标记的模型原文，也可能是纯文本）
@@ -113,19 +115,19 @@ public final class ContentNodes {
         }
         // 优先按分段标记回填：模型逐段翻译并保留 <sN> 标记时，
         // 每个段落块拿到自己的片段，样式容器与换行结构自然保留。
-        // 校验失败（漏写/改写/合并/错序标记、空段、标记夹带、占位符）时，
-        // 模型输出已不可信（实测：内容复读、尾部乱码、标记泄漏成字面量），
-        // 安全回退 = 整条保留原文，绝不把损坏译文切分后塞回节点树。
         List<String> parts = Segments.parse(translated, targetCount);
         if (parts == null) {
-            // targetCount >= 2 等价于「本次请求带分段标记」：提取侧只在
-            // 标记数 ≥2 时启用分段。此时译文必须完整通过协议校验才允许回填。
-            if (targetCount >= 2) {
+            // targetCount >= 2 等价于「本次请求带分段标记」。译文里仍有标记
+            // 但校验不过（残缺/错序/夹带标记/占位符）= 协议被破坏且损坏形态
+            // 可识别，整条保留原文，绝不把损坏译文塞回节点树。
+            if (targetCount >= 2 && Segments.isSegmented(translated)) {
                 XLog.d("segment protocol violated (parts=" + targetCount
                         + "); keeping original text");
                 return null;
             }
-            // 单段请求本无标记；仍防御性剔除可能混入的标记后整段回填。
+            // 无标记译文：分段请求失败后引擎已用无标记重试并做过防损坏校验
+            // （见 Segments.translateWithFallback），单段请求本就无标记。
+            // 走整段回填的既有路径：按行切分分配到各节点。
             String plain = normalize(Segments.strip(translated));
             if (plain.isEmpty()) {
                 // 剔除后什么都不剩：不能清空消息，保留原文。

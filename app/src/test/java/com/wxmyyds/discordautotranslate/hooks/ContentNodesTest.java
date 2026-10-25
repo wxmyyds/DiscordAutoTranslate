@@ -889,13 +889,18 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void plainMarkerlessTranslationOnMultiNodeKeepsOriginal() {
-        // 分段请求（≥2 段）却返回无标记文本 = 标记全部缺失，同样整体回退。
-        // 旧行为（按行切分塞回）正是长文本复读/乱码直接显示的通道。
+    public void plainMarkerlessTranslationOnMultiNodeBackfillsWhole() {
+        // 无标记译文 = 分段请求失败后引擎用无标记重试的产物（已通过引擎的
+        // 防损坏校验，见 Segments.translateWithFallback），走整段回填：
+        // 首节点承载全部，尾部空节点裁剪。带残缺标记的译文才保留原文。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
 
-        assertNull(ContentNodes.replaceText(nodes, "只有一段译文"));
+        List<Object> out = ContentNodes.replaceText(nodes, "只有一段译文");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("只有一段译文", ((TextContentNode) out.get(0)).getContent());
         assertEquals("hi", ((TextContentNode) nodes.get(0)).getContent());
     }
 
@@ -1023,15 +1028,18 @@ public class ContentNodesTest {
     // ---------------------------------------------------------------- 行数与尾部空白
 
     @Test
-    public void twoOriginalLinesWithOneTranslatedLineKeepOriginal() {
-        // 分段请求只回了一段译文：协议违规，整条保留原文（不替换），
-        // 自然不会出现译文下方的多余空行，也不会丢第二行内容。
+    public void twoOriginalLinesWithOneTranslatedLineLeaveNoExtraBlankLine() {
+        // 引擎无标记重试的译文行数少于原节点数：首节点承载全部，
+        // 其余为空被裁剪，不留下多余空行，也不显示残缺标记。
         List<Object> nodes = list(new TextContentNode("first line"), new NewLineContentNode(),
                 new TextContentNode("second line"));
 
-        assertNull(ContentNodes.replaceText(nodes, "只有一行译文"));
+        List<Object> out = ContentNodes.replaceText(nodes, "只有一行译文");
+
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("只有一行译文", ((TextContentNode) out.get(0)).getContent());
         assertEquals("first line", ((TextContentNode) nodes.get(0)).getContent());
-        assertEquals("second line", ((TextContentNode) nodes.get(2)).getContent());
     }
 
     @Test
