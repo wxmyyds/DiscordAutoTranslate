@@ -483,7 +483,8 @@ public class LongTextRegressionTest {
         List<Object> out = ContentNodes.replaceText(nodes, "普通 斜体 尾巴");
 
         assertNotNull("标记缺失必须回退而不是拒译", out);
-        assertEquals("普通 斜体 尾巴", ((TextContentNode) out.get(0)).getContent());
+        // 首片段承载全部合并译文；原节点的尾随空格由 rebuild 保留。
+        assertEquals("普通 斜体 尾巴 ", ((TextContentNode) out.get(0)).getContent());
         assertEquals("原节点未被动过", "styled text",
                 ((TextContentNode) ((com.wxmyyds.discordautotranslate.hooks
                         .ContentNodesTest.EmphasisContentNode) nodes.get(1))
