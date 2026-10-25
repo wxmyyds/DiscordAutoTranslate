@@ -802,7 +802,14 @@ public final class ContentNodes {
         final List<String> urls = new ArrayList<>();
         /** 与 {@code urls} 平行：该 URL 之前的可翻译片段数（间隔边界）。 */
         final List<Integer> urlSegIndex = new ArrayList<>();
-        /** 段落组号 → 该段落内片段之间夹有不可翻译的可见内容。 */
+        /**
+         * 段落组号 → 段落内夹有不可翻译可见内容的标记。
+         *
+         * <p>历史机制，现已恒为空：URL 升级为定位标记（在段落对齐之前
+         * 切分）；emoji/提及/行内代码是自渲染节点（段落合并时原位保留、
+         * 无内容丢失）。字段保留给 {@link #alignSpanToParts} 的防御性
+         * 检查，不再填充。</p>
+         */
         final java.util.BitSet unsafe = new java.util.BitSet();
         /** 按树序的令牌流：URL 定位标记与可翻译片段。 */
         final List<PlanToken> tokens = new ArrayList<>();
@@ -859,8 +866,6 @@ public final class ContentNodes {
         final AlignmentPlan plan = new AlignmentPlan();
         int group = 0;
         final StringBuilder sep = new StringBuilder();
-        /** 自上一片段以来，分隔里是否夹了不可翻译的可见内容（URL 除外——它是定位标记）。 */
-        boolean sepOpaque;
         /** 样式标记序号（与 TextExtractor.walkNode 同口径递增）。 */
         final int[] styleSeq = new int[1];
     }
@@ -922,7 +927,6 @@ public final class ContentNodes {
             }
             if (CODE_NODES.contains(simple)) {
                 w.sep.append("InlineCodeContentNode".equals(simple) ? ' ' : '\n');
-                w.sepOpaque = true;
                 continue;
             }
             if ("LinkContentNode".equals(simple) && TextExtractor.linkDisplayIsUrl(n)) {
@@ -938,9 +942,7 @@ public final class ContentNodes {
             if (inner != null) {
                 if (BULLET_LIST.equals(simple)) {
                     for (Object item : inner) {
-                        // 项目符号渲染在上一项片段与本项片段之间，同样不可被孤立。
                         w.sep.append("\n• ");
-                        w.sepOpaque = true;
                         if (item instanceof List) {
                             walkPlan((List<?>) item, w, depth + 1, styled);
                         } else if (item != null) {
@@ -954,7 +956,6 @@ public final class ContentNodes {
                 continue;
             }
             w.sep.append(' '); // 提及/emoji 等不透明节点
-            w.sepOpaque = true;
         }
     }
 
@@ -964,20 +965,21 @@ public final class ContentNodes {
         w.plan.tokens.add(new PlanToken(url));
     }
 
-    /** 记录一个可翻译片段：先判断段落递增，再判断是否与上一片段之间夹了可见内容。 */
+    /**
+     * 记录一个可翻译片段：空行分隔推进段落组。
+     *
+     * <p>不再标记 unsafe 段落：URL 已升级为定位标记（在段落对齐之前切分），
+     * emoji/提及/行内代码是自渲染节点（合并译文时原位保留、无内容丢失），
+     * 段落级对齐不需要再因它们拒绝（实测 40 片段消息因 unsafe=3 被整条
+     * 拒绝、保持英文）。{@link AlignmentPlan#unsafe} 保留为
+     * {@link #alignSpanToParts} 的防御性检查，恒为空。</p>
+     */
     private static void addSegment(PlanWalk w) {
         if (!w.plan.groupIds.isEmpty() && countNewlines(w.sep) >= 2) {
             w.group++;
-            // 新段落以本片段开头：之前夹的内容位于本段首片段之前，不会孤立。
-            w.sepOpaque = false;
-        } else if (w.sepOpaque && !w.plan.groupIds.isEmpty()
-                && w.plan.groupIds.get(w.plan.groupIds.size() - 1).equals(w.group)) {
-            // 同一段落里，上一片段与本片段之间夹着不可翻译的可见内容。
-            w.plan.unsafe.set(w.group);
         }
         w.plan.groupIds.add(w.group);
         w.sep.setLength(0);
-        w.sepOpaque = false;
     }
 
     private static int countNewlines(CharSequence s) {

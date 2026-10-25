@@ -514,6 +514,26 @@ public class LongTextRegressionTest {
     }
 
     @Test
+    public void emojiBetweenSegmentsNoLongerBlocksParagraphAlignment() {
+        // 日志实测（消息 1563814381303758918）：targets=40 unsafeParagraphs=3
+        // ——emoji/提及等自渲染节点夹在片段之间曾令段落级对齐整条拒绝
+        // （模型返回的 4 块恰好等于 4 个段落）。这些节点自渲染、合并译文
+        // 时原位保留、无内容丢失，段落对齐不再因它们拒绝。
+        com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmojiContentNode emoji =
+                new com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmojiContentNode("1");
+        List<Object> nodes = list(
+                new TextContentNode("alpha"),
+                emoji,
+                new TextContentNode("beta"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "甲 乙");
+
+        assertNotNull("自渲染节点不得阻断段落级对齐", out);
+        assertEquals("甲 乙", ((TextContentNode) out.get(0)).getContent());
+        assertSame("emoji 原位保留", emoji, out.get(1));
+    }
+
+    @Test
     public void urlMissingFromTranslationKeepsOriginal() {
         // URL 链接是请求里的定位标记，译文必须原样包含（提示词规则 6）。
         // 模型丢掉 URL = 定位失败，无法确定 URL 前后各自的译文边界 →
