@@ -32,9 +32,12 @@ public class ProtocolsTest {
         // 流式：非流式接口生成完成前零字节返回，慢速供应商上长消息会被
         // 总时长超时掐断；流式下读超时按字节间隔计算。
         assertTrue("Compatible 协议必须请求流式", json.getBoolean("stream"));
-        // 思考等级 low：翻译不需要深思考，推理型模型默认档会把输出预算
-        // 全花在思考上（实测 55s 零正文）。
-        assertEquals(Protocols.REASONING_EFFORT_LOW, json.getString("reasoning_effort"));
+        // 关闭思考的参数组合：不同厂商字段不同，一起发、认哪个用哪个。
+        // 推理型模型默认档会把输出预算全花在思考上（实测 55s 零正文）。
+        assertEquals(Protocols.REASONING_EFFORT_MINIMAL,
+                json.getString("reasoning_effort"));
+        assertFalse(json.getBoolean("enable_thinking"));
+        assertEquals("disabled", json.getJSONObject("thinking").getString("type"));
         JSONArray messages = json.getJSONArray("messages");
         assertEquals(2, messages.length());
         assertEquals("system", messages.getJSONObject(0).getString("role"));
@@ -60,13 +63,15 @@ public class ProtocolsTest {
         assertFalse("Responses 协议不携带思考等级参数", json.has("reasoning_effort"));
     }
 
-    /** 引擎在服务端拒绝 reasoning_effort（HTTP 400）后用该形态去参重发。 */
+    /** 引擎在服务端拒绝关闭思考参数（HTTP 400）后用该形态去参重发。 */
     @Test
     public void compatibleBodyWithoutThinkingEffortOmitsTheField() throws Exception {
         String body = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
                 "hii", null, "m", false);
         JSONObject json = new JSONObject(body);
         assertFalse(json.has("reasoning_effort"));
+        assertFalse(json.has("enable_thinking"));
+        assertFalse(json.has("thinking"));
         assertTrue(json.getBoolean("stream"));
     }
 

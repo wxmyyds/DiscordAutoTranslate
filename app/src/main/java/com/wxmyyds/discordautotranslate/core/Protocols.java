@@ -42,12 +42,18 @@ public final class Protocols {
     private static final double FREQUENCY_PENALTY = 0.2;
 
     /**
-     * 思考等级（OpenAI 事实标准字段）。翻译任务不需要深思考：推理型模型
-     * 在默认/高思考下会把输出预算全花在思考上（实测 55s/196KB 帧零正文），
-     * low 档实测秒级返回正文。不支持该字段的服务通常忽略它；个别严格校验的
-     * 服务（如 OpenAI 非推理模型）会回 400，引擎侧收到 400 会去参重发一次。
+     * 关闭思考的参数组合（不同厂商字段不同，一起发、服务端认哪个用哪个）：
+     * <ul>
+     *   <li>{@code reasoning_effort:"minimal"} —— OpenAI gpt-5 系的最低档
+     *       （o 系不接受 minimal、非推理模型不接受该参数，会 400 触发去参重发）；</li>
+     *   <li>{@code enable_thinking:false} —— Qwen3 系；</li>
+     *   <li>{@code thinking:{"type":"disabled"}} —— GLM 系。</li>
+     * </ul>
+     * 翻译任务不需要思考：推理型模型默认档会把输出预算全花在思考上
+     * （实测 55s/196KB 帧零正文）。宽松服务忽略不认识的字段；严格校验的
+     * 服务回 400，引擎侧收到 400 会去参重发一次。
      */
-    public static final String REASONING_EFFORT_LOW = "low";
+    public static final String REASONING_EFFORT_MINIMAL = "minimal";
 
     private static final String SUFFIX_CHAT_COMPLETIONS = "/chat/completions";
     private static final String SUFFIX_RESPONSES = "/responses";
@@ -107,7 +113,9 @@ public final class Protocols {
                 body.put("frequency_penalty", FREQUENCY_PENALTY);
                 body.put("stream", true);
                 if (suppressThinking) {
-                    body.put("reasoning_effort", REASONING_EFFORT_LOW);
+                    body.put("reasoning_effort", REASONING_EFFORT_MINIMAL);
+                    body.put("enable_thinking", false);
+                    body.put("thinking", new JSONObject().put("type", "disabled"));
                 }
             }
             return body.toString();

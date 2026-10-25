@@ -70,9 +70,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
         boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
         Http.Response resp = http.postJson(url, body, headers, sse);
         if (resp.status == 400) {
-            // 个别服务严格校验参数（如 OpenAI 非推理模型不接受
-            // reasoning_effort）：去掉思考等级参数原样重发一次。
-            XLog.d("400 with reasoning_effort; retrying without it");
+            // 个别服务严格校验参数（如 OpenAI 官方不接受未知的
+            // enable_thinking/thinking 字段）：去掉关闭思考参数原样重发一次。
+            XLog.d("400 with thinking-suppression params; retrying without them");
             body = buildBody(text, false);
             resp = http.postJson(url, body, headers, sse);
         }
