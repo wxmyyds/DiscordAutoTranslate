@@ -184,7 +184,10 @@ public final class Protocols {
                     finishReason = finish.toString();
                 }
                 JSONObject delta = choice0.optJSONObject("delta");
-                if (delta == null) {
+                // "content":null（role 帧常见）必须整体跳过：Android org.json 的
+                // optString 会把 NULL 强转成字符串 "null" 混入译文（JVM 单测用的
+                // Crockford 版没有这个行为，只有真机会触发）。
+                if (delta == null || delta.isNull("content")) {
                     continue;
                 }
                 String piece = delta.optString("content", "");

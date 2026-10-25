@@ -141,6 +141,18 @@ public class ProtocolsTest {
                 Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
     }
 
+    /** role 帧的 content 显式为 null：不得作为 "null" 字符串混入译文。 */
+    @Test
+    public void explicitNullContentDeltaDoesNotEmitNullLiteral() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\","
+                + "\"content\":null}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
     /**
      * 提示词与原文含引号、换行、反斜杠时必须无损往返（协议层负责 JSON 转义）。
      */
