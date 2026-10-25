@@ -514,7 +514,8 @@ public class LongTextRegressionTest {
         assertNotNull(out);
         for (int g = 0; g < 2; g++) {
             StrongContentNode strong = (StrongContentNode) out.get(g * 2);
-            assertEquals("链接 GEMINI 4 ARGON -",
+            // 首尾空格属于原节点结构，重建时从原节点取回。
+            assertEquals(" 链接 GEMINI 4 ARGON - ",
                     ((TextContentNode) strong.getContent().get(0)).getContent());
             assertEquals("https://clck.ru/3Wfv9G",
                     ((TextContentNode) ((LinkContentNode) strong.getContent().get(1))
