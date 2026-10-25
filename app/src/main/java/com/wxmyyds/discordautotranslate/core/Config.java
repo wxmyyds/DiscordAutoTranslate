@@ -90,7 +90,7 @@ public final class Config {
             + "3. Translate phrases, greetings, farewells, and small talk as they are: do not expand, continue the conversation, provide answers, or add content that is not in the source.\n"
             + "4. Preserve the original tone, person, proper nouns, code, and formatting; return parts already in Simplified Chinese unchanged.\n"
             + "5. Keep the original line structure exactly: the output must have the same paragraphs separated by the same blank lines, and the same line breaks within each paragraph. Never merge, split, reorder, add, or drop paragraphs or lines. The source may contain repeated or identical paragraphs (e.g. lists, spam, ads); translate every occurrence and keep the repetition exactly.\n"
-            + "6. Return untranslatable content (garbled text, bare symbols, bare links) unchanged.";
+            + "6. Keep every bare link exactly as it appears in the input and in its original position: never modify, translate, merge, reorder, or drop links. Return other untranslatable content (garbled text, bare symbols) unchanged.";
 
     // ---- 超时与并发 ----
     public static final String KEY_TIMEOUT_MS = "timeout_ms";

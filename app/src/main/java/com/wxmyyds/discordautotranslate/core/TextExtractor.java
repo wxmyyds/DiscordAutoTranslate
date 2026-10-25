@@ -23,11 +23,12 @@ public final class TextExtractor {
     /** 提取结果。 */
     public static final class Result {
         /**
-         * 可翻译的纯文本（含换行；结构节点与 URL 链接仅贡献空白分隔）。
+         * 可翻译的纯文本（含换行与 URL 链接定位标记；结构节点仅贡献空白分隔）。
          *
-         * <p>它是无标记请求（分段未启用的消息）的正文，也用于语言检测与
-         * 内容哈希。URL 链接显示文本不进入：模型复述的 URL 回填后会与
-         * 原链接节点重复显示。</p>
+         * <p>它是无标记请求（单链路）的正文，也用于语言检测与内容哈希。
+         * URL 链接显示文本原样进入请求充当定位标记：模型必须原样保留它，
+         * 回填按它切分对齐并删除回显，显示永远用原链接节点——URL 字符
+         * 不会损坏，也不会重复显示。</p>
          */
         public final String text;
         /**
@@ -92,18 +93,30 @@ public final class TextExtractor {
      *
      * <p>裸 URL 消息在 Discord 里渲染为 {@code LinkContentNode}，显示文本就是
      * URL 本身。这类节点整体按不可翻译结构处理（与行内代码同口径）：
-     * 不进请求、回填时不改动，URL 由原节点原样渲染。带自然语言显示文本的
+     * 显示文本原样进请求充当<b>定位标记</b>（模型据此在译文里保留 URL 位置，
+     * 回填按它切分对齐并删除回显，显示永远用原节点）；带自然语言显示文本的
      * 链接（掩码链接）不受影响，仍正常翻译。</p>
      */
     public static boolean linkDisplayIsUrl(Object linkNode) {
+        return urlLinkDisplayText(linkNode) != null;
+    }
+
+    /**
+     * 取链接节点显示文本中的 URL（整段是 URL 形态时返回去空白后的 URL，
+     * 否则返回 null）。URL 文本同时是请求里的定位标记：模型必须原样保留它，
+     * 回填据此确定 URL 前后各自的译文边界。
+     */
+    @Nullable
+    public static String urlLinkDisplayText(Object linkNode) {
         Object inner = Reflect.call(
                 Reflect.findMethod(linkNode.getClass(), "getContent", 0), linkNode);
         if (!(inner instanceof List)) {
-            return false;
+            return null;
         }
         StringBuilder sb = new StringBuilder();
         appendDescendantText((List<?>) inner, sb, 0);
-        return isUrlLike(sb.toString());
+        String s = sb.toString().trim();
+        return isUrlLike(s) ? s : null;
     }
 
     /** 拼接子树内全部 TextContentNode 文本（用于识别链接显示文本），非文本节点跳过。 */
@@ -372,12 +385,14 @@ public final class TextExtractor {
         String name = node.getClass().getSimpleName();
         if (isTextContainer(name)) {
             if ("LinkContentNode".equals(name) && linkDisplayIsUrl(node)) {
-                // 与带标记走法（walkNodeMarked）同口径：URL 链接显示文本
-                // 不进任何请求。纯文本是无标记请求的正文（分段未启用的消息），
-                // 若把 URL 发给模型，模型会在译文里复述它，回填后与原链接
-                // 节点重复显示（实测：URL 出现两遍，第二遍是纯文本）。
+                // URL 链接显示文本原样进请求，充当定位标记：模型看不见 URL
+                // 位置就无法在译文里保真它，回填也无法按 URL 切分对齐
+                // （实测：正文结构对不上被整条拒绝，消息永远显示英文）。
+                // 显示仍由原节点渲染；模型改坏/丢失/合并 URL 时回填拒绝，
+                // 整条保留原文，URL 字符永不损坏显示。
+                String url = urlLinkDisplayText(node);
                 counters[1]++;
-                out.append(' ');
+                out.append(' ').append(url).append(' ');
                 return;
             }
             Object inner = Reflect.call(

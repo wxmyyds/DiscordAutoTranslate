@@ -113,11 +113,12 @@ public class LongTextRegressionTest {
             assertEquals("编号必须连续", Integer.valueOf(i + 1), nums.get(i));
         }
         for (String url : URLS) {
-            assertFalse("URL 不得进入请求文本：" + url, r.segmented.contains(url));
+            assertFalse("带标记文本不得包含 URL（标记文本已弃用，仅作库保留）：" + url,
+                    r.segmented.contains(url));
         }
-        // 纯文本（无标记请求正文/检测/缓存键）同样不含 URL 链接显示文本：
-        // 发给模型的任何文本都不该包含 URL（模型复述会造成重复/损坏）。
-        assertFalse(r.text.contains(URLS[2]));
+        // 纯文本（单链路请求正文）现在携带 URL 定位标记：模型必须原样保留它，
+        // 回填按它切分对齐并删除回显，显示永远用原链接节点。
+        assertTrue(r.text.contains(URLS[2]));
         assertTrue(r.text.contains("FREE CLAUDE CODE CRACK"));
     }
 
@@ -293,9 +294,11 @@ public class LongTextRegressionTest {
         StringBuilder translation = new StringBuilder();
         for (int i = 0; i < 15; i++) {
             if (i > 0) {
-                translation.append("\n \n\n"); // 镜像请求文本结构：URL 链接只贡献空格行
+                translation.append("\n\n");
             }
-            translation.append("第").append(i + 1).append("块标题译文");
+            // 镜像请求文本结构：标题 + 换行 + URL 定位标记。
+            translation.append("第").append(i + 1).append("块标题译文")
+                    .append('\n').append(URLS[i % 3]);
         }
         List<Object> out = ContentNodes.replaceText(nodes, translation.toString());
 
@@ -381,7 +384,7 @@ public class LongTextRegressionTest {
                 translation.append("\n\n");
             }
             translation.append("免费 GEMINI 4 ARGON")
-                    .append("\n\n链接 GEMINI 4 ARGON -")
+                    .append("\n\n链接 GEMINI 4 ARGON - https://clck.ru/3Wfv9G")
                     .append("\n\n仅限 TELEGRAM");
         }
         List<Object> out = ContentNodes.replaceText(repeatedAdTree(), translation.toString());
@@ -439,11 +442,10 @@ public class LongTextRegressionTest {
     // --------------------------------------------- 格式化文本与 URL 混排（2026-10 四次上报）
 
     @Test
-    public void urlBetweenSegmentsIsNotOrphanedByParagraphAlignment() {
-        // 上报形态：URL 夹在同一段落的两个可翻译片段之间（如「描述 URL **加粗**」）。
-        // URL 链接显示文本不进请求，模型只能把整段回成一块；若段落级对齐把
-        // 整块塞进首片段、清空后续片段，URL 就与它的描述分离、视觉上跳到
-        // 相邻段落。修复后这种段落标记 unsafe，拒绝回填、整条保留原文。
+    public void urlMissingFromTranslationKeepsOriginal() {
+        // URL 链接是请求里的定位标记，译文必须原样包含（提示词规则 6）。
+        // 模型丢掉 URL = 定位失败，无法确定 URL 前后各自的译文边界 →
+        // 拒绝回填、整条保留原文。
         List<Object> nodes = list(
                 new StrongContentNode(list(new TextContentNode("bold desc"))),
                 new TextContentNode(" "),
@@ -464,9 +466,64 @@ public class LongTextRegressionTest {
     }
 
     @Test
+    public void urlMarkerSplitsMergedTranslationAroundLinks() {
+        // 上报形态（日志 targets=17 unsafeParagraphs=2 的最小复现）：URL 夹在
+        // 同一段落的两个片段之间，模型把整段回成一行。URL 定位标记让回填
+        // 能按 URL 把这一行切开——两段译文各归其位，URL 链接节点原样保留。
+        LinkContentNode link = new LinkContentNode(list(new TextContentNode(
+                "https://clck.ru/3Wfv9G")), new Object());
+        List<Object> nodes = list(
+                new StrongContentNode(list(new TextContentNode("bold desc"))),
+                new TextContentNode(" "),
+                link,
+                new TextContentNode(" "),
+                new TextContentNode("trailing text"));
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "描述 https://clck.ru/3Wfv9G 尾巴");
+
+        assertNotNull(out);
+        StrongContentNode strong = (StrongContentNode) out.get(0);
+        assertEquals("描述", ((TextContentNode) strong.getContent().get(0)).getContent());
+        assertSame("URL 链接节点原样保留", link, out.get(2));
+        assertEquals("尾巴", ((TextContentNode) out.get(4)).getContent());
+    }
+
+    @Test
+    public void urlEchoedTwiceKeepsOriginal() {
+        // 模型把 URL 回显两份：回填后必然有一份以纯文本显示（实测故障形态），
+        // 必须拒绝。
+        List<Object> nodes = list(
+                new StrongContentNode(list(new TextContentNode("bold desc"))),
+                new TextContentNode(" "),
+                new LinkContentNode(list(new TextContentNode(
+                        "https://clck.ru/3Wfv9G")), new Object()),
+                new TextContentNode(" "),
+                new TextContentNode("trailing text"));
+
+        assertNull(ContentNodes.replaceText(nodes,
+                "描述 https://clck.ru/3Wfv9G https://clck.ru/3Wfv9G 尾巴"));
+    }
+
+    @Test
+    public void urlMovedBeforeItsTextKeepsOriginal() {
+        // URL 被挪到译文开头：与树序不符，首个间隔无法承载它的片段 → 拒绝。
+        List<Object> nodes = list(
+                new StrongContentNode(list(new TextContentNode("bold desc"))),
+                new TextContentNode(" "),
+                new LinkContentNode(list(new TextContentNode(
+                        "https://clck.ru/3Wfv9G")), new Object()),
+                new TextContentNode(" "),
+                new TextContentNode("trailing text"));
+
+        assertNull(ContentNodes.replaceText(nodes,
+                "https://clck.ru/3Wfv9G 描述 尾巴"));
+    }
+
+    @Test
     public void urlOwnParagraphDoesNotBlockParagraphAlignment() {
-        // URL 独占一个段落（前后都是空行）：它不在任何两个片段之间，
-        // 不会孤立——段落级对齐正常工作，URL 原地保留。
+        // URL 独占一个段落（前后都是空行）：译文原样回带 URL，定位标记
+        // 命中，前后段落各自 1:1 对齐，URL 原地保留。
         LinkContentNode link = new LinkContentNode(list(new TextContentNode(
                 "https://clck.ru/3Wfv9G")), new Object());
         List<Object> nodes = list(
@@ -476,7 +533,8 @@ public class LongTextRegressionTest {
                 new TextContentNode("\n\n"),
                 new TextContentNode("para two"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "段落一\n\n段落二");
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "段落一\n\nhttps://clck.ru/3Wfv9G\n\n段落二");
 
         assertNotNull(out);
         assertEquals("段落一", ((TextContentNode) out.get(0)).getContent());
@@ -507,7 +565,7 @@ public class LongTextRegressionTest {
             if (g > 0) {
                 translation.append("\n\n");
             }
-            translation.append("链接 GEMINI 4 ARGON -");
+            translation.append("链接 GEMINI 4 ARGON - https://clck.ru/3Wfv9G");
         }
         List<Object> out = ContentNodes.replaceText(nodes, translation.toString());
 
@@ -567,10 +625,10 @@ public class LongTextRegressionTest {
 
     @Test
     public void urlLinksAreNotDuplicatedInUnsegmentedRequests() {
-        // 实测故障：链接 + 单文本块的消息（分段未启用），纯文本请求里仍带
-        // URL 链接的显示文本 → 模型复述 URL → 整段回填后 URL 出现两遍，
-        // 第二遍是纯文本（不可点击）。修复后纯文本与标记文本同口径排除
-        // URL 链接，请求只含可翻译文本，模型无从复述。
+        // 实测故障：链接 + 单文本块的消息，URL 回显后出现两遍，第二遍是
+        // 纯文本（不可点击）。现在的防重复机制：URL 进请求当定位标记，
+        // 译文原样回带；回填按 URL 切分对齐并删除回显部分，显示永远只有
+        // 原链接节点——回显不会成为额外文本。回显两份/丢失/改坏则拒绝。
         List<Object> nodes = list(
                 new LinkContentNode(list(new TextContentNode(
                         "https://codex-relay.codes/register?aff=oqr0")), new Object()),
@@ -586,13 +644,18 @@ public class LongTextRegressionTest {
         assertNotNull(r);
         // 单可翻译块：不启用分段标记，请求走纯文本路径。
         assertNull("单文本块不启用标记", r.segmented);
-        assertEquals("纯文本不得包含 URL 链接显示文本",
-                " \n \nfree real gpt-6.1-sol, TRIAL WITHOUT REFS", r.text);
+        assertEquals("纯文本携带 URL 定位标记",
+                " https://codex-relay.codes/register?aff=oqr0 \n "
+                        + "https://api.yzmao.cn/sign-up?aff=IpHK \n"
+                        + "free real gpt-6.1-sol, TRIAL WITHOUT REFS", r.text);
 
-        // 模型只回文本译文（请求里没有 URL 可复述）：
-        // 回填后链接原样、文本节点承载译文，无重复行。
+        // 模型按规则 6 原样回带两个 URL：回填按 URL 切分——URL 之间的
+        // 间隔承载文本节点译文，回显的 URL 本身被删除，链接由原节点渲染，
+        // 无重复行。
         List<Object> out = ContentNodes.replaceText(nodes,
-                "免费真实 gpt-6.1-sol，无需推荐人即可试用");
+                "https://codex-relay.codes/register?aff=oqr0\n"
+                        + "https://api.yzmao.cn/sign-up?aff=IpHK\n"
+                        + "免费真实 gpt-6.1-sol，无需推荐人即可试用");
         assertNotNull(out);
         assertEquals(5, out.size());
         assertSame(nodes.get(0), out.get(0));
@@ -605,7 +668,7 @@ public class LongTextRegressionTest {
                         .getContent());
         assertEquals("免费真实 gpt-6.1-sol，无需推荐人即可试用",
                 ((TextContentNode) out.get(4)).getContent());
-        // 每条 URL 在输出里只出现一次（链接节点本身），文本节点不含 URL。
+        // 文本节点不含 URL：回显部分已按定位标记删除，不重复显示。
         String textNodeContent = ((TextContentNode) out.get(4)).getContent();
         assertFalse(textNodeContent.contains("codex-relay"));
         assertFalse(textNodeContent.contains("yzmao"));

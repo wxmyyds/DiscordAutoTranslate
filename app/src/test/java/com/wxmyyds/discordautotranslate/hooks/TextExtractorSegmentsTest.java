@@ -280,9 +280,10 @@ public class TextExtractorSegmentsTest {
     }
 
     @Test
-    public void urlLinkStaysOutsideTags() {
-        // 裸 URL 链接的显示文本不进请求：模型重新生成 URL 会造成字符损坏
-        // （实测 IJYuv3wZ → lJYuv3wZ）。链接只贡献一个分隔空格。
+    public void urlLinkIsPositionMarkerInPlainRequestAndOutsideMarkedTags() {
+        // 裸 URL 链接的显示文本是请求里的定位标记：纯文本原样携带（模型按
+        // 规则 6 保留，回填按它切分对齐并删除回显，显示永远用原节点）；
+        // 带标记文本（已弃用的库路径）仍只贡献分隔空格。
         TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(list(
                 new TextContentNode("hello"),
                 new NewLineContentNode(),
@@ -292,10 +293,7 @@ public class TextExtractorSegmentsTest {
 
         assertNotNull(r);
         assertEquals("<s1>hello</s1>\n \n<s2>world</s2>", r.segmented);
-        // 纯文本（无标记请求的正文）同样不含 URL：模型复述的 URL 回填后
-        // 会与原链接节点重复显示（实测故障：URL 出现两遍且第二遍是纯文本）。
-        assertEquals("hello\n \nworld", r.text);
-        assertFalse("URL 不得进入任何请求文本", r.text.contains("gofile"));
+        assertEquals("hello\n https://gofile.io/d/rfh2yimO \nworld", r.text);
     }
 
     @Test
