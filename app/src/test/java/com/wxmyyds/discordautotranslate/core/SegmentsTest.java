@@ -350,7 +350,7 @@ public class SegmentsTest {
         }
 
         @Override
-        public String roundTrip(String text) {
+        public String roundTrip(String text) throws Exception {
             sent.add(text);
             if (sent.size() == 1) {
                 throw new TranslationException(TranslationException.Kind.TIMEOUT,
@@ -396,7 +396,7 @@ public class SegmentsTest {
             int calls;
 
             @Override
-            public String roundTrip(String text) {
+            public String roundTrip(String text) throws Exception {
                 calls++;
                 throw new TranslationException(TranslationException.Kind.HTTP,
                         "认证失败（请检查 API 密钥）");
