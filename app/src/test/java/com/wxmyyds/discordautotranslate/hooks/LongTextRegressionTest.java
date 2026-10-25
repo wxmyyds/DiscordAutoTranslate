@@ -591,7 +591,7 @@ public class LongTextRegressionTest {
                 new TextContentNode("\n"),
                 new LinkContentNode(list(new TextContentNode(URLS[1])), new Object()));
         List<Object> out = ContentNodes.replaceText(nodes,
-                "加粗标题\n运行\n现在 " + URLS[1]);
+                "加粗标题\n运行\n现在" + URLS[1]);
 
         assertNotNull(out);
         StrongContentNode strong = (StrongContentNode) out.get(0);
