@@ -512,31 +512,46 @@ public final class ContentNodes {
     /**
      * 把译文对齐到计划的可翻译片段，返回与片段一一对应的译文列表。
      *
-     * <p>请求里的 URL 链接是定位标记：先校验每个标记 URL 在译文中的出现
-     * 次数与计划一致（多了=模型把 URL 写进译文正文会重复显示，少了=模型
-     * 丢失或改坏 URL，定位失败），再按出现顺序把译文切成「URL 间隔」，
-     * 每个间隔独立对齐到它覆盖的片段（见 {@link #alignSpanToParts}）。
-     * 任何校验不过即返回 null，调用方整条保留原文。</p>
+     * <p>对齐顺序：</p>
+     * <ol>
+     *   <li>URL 定位标记出现次数校验（多了=回显会重复显示，少了=丢失/改坏，
+     *       都无法安全定位 → 整条拒绝）；</li>
+     *   <li>请求含样式标记（{@code <xN>…</xN>}）时按标记扫描分配——样式精确
+     *       落位；模型没保留/改坏标记时<b>自动回退</b>到无标记对齐
+     *       （译文保留、样式退化为合并处理），不会拒译；</li>
+     *   <li>无标记回退：URL 间隔切分 + 每个间隔三级对齐
+     *       （见 {@link #alignSpanToParts}）。</li>
+     * </ol>
      */
     @Nullable
     static List<String> alignTranslation(String plain, AlignmentPlan plan) {
         if (plan.groupIds.isEmpty()) {
             return null;
         }
+        if (!plan.urls.isEmpty()) {
+            java.util.Map<String, Integer> expected = new java.util.HashMap<>();
+            for (String url : plan.urls) {
+                expected.merge(url, 1, Integer::sum);
+            }
+            for (java.util.Map.Entry<String, Integer> e : expected.entrySet()) {
+                int actual = countOccurrences(plain, e.getKey());
+                if (actual != e.getValue()) {
+                    XLog.d("align refused: url marker expected " + e.getValue()
+                            + " actual " + actual + " url=" + e.getKey());
+                    return null;
+                }
+            }
+        }
+        if (plan.hasStyleMarkers()) {
+            List<String> viaMarkers = alignByStyleMarkers(plain, plan);
+            if (viaMarkers != null) {
+                return viaMarkers;
+            }
+            XLog.d("style-marker alignment failed; falling back to structure-only");
+            plain = stripStyleTags(plain);
+        }
         if (plan.urls.isEmpty()) {
             return alignSpanToParts(plain, plan.groupIds, plan.unsafe);
-        }
-        java.util.Map<String, Integer> expected = new java.util.HashMap<>();
-        for (String url : plan.urls) {
-            expected.merge(url, 1, Integer::sum);
-        }
-        for (java.util.Map.Entry<String, Integer> e : expected.entrySet()) {
-            int actual = countOccurrences(plain, e.getKey());
-            if (actual != e.getValue()) {
-                XLog.d("align refused: url marker expected " + e.getValue()
-                        + " actual " + actual + " url=" + e.getKey());
-                return null;
-            }
         }
         List<String> parts = new ArrayList<>(
                 java.util.Collections.nCopies(plan.groupIds.size(), ""));
@@ -571,6 +586,84 @@ public final class ContentNodes {
         }
         copySpan(tailParts, parts, segStart);
         return parts;
+    }
+
+    /**
+     * 按样式标记扫描译文：树序遍历令牌流，样式片段的译文取自
+     * {@code <xN>…</xN>} 之间，其余文本按标记间隔分配给相邻的普通片段。
+     * 任何标记缺失/错位/空内容都返回 null 触发回退。
+     */
+    @Nullable
+    private static List<String> alignByStyleMarkers(String plain, AlignmentPlan plan) {
+        List<String> parts = new ArrayList<>(
+                java.util.Collections.nCopies(plan.groupIds.size(), ""));
+        List<Integer> pending = new ArrayList<>();
+        int cursor = 0;
+        for (PlanToken t : plan.tokens) {
+            if (t.url != null) {
+                int at = plain.indexOf(t.url, cursor);
+                if (at < 0 || !assignRun(plain.substring(cursor, at), pending, parts, plan)) {
+                    return null;
+                }
+                pending.clear();
+                cursor = at + t.url.length();
+            } else if (t.styleId > 0) {
+                String open = "<x" + t.styleId + ">";
+                int at = plain.indexOf(open, cursor);
+                if (at < 0 || !assignRun(plain.substring(cursor, at), pending, parts, plan)) {
+                    return null;
+                }
+                pending.clear();
+                String close = "</x" + t.styleId + ">";
+                int end = plain.indexOf(close, at + open.length());
+                if (end < 0) {
+                    return null;
+                }
+                String styled = plain.substring(at + open.length(), end).trim();
+                if (styled.isEmpty()) {
+                    return null; // 样式标记内没有译文：标记不可信，回退
+                }
+                parts.set(t.segIndex, styled);
+                cursor = end + close.length();
+            } else {
+                pending.add(t.segIndex);
+            }
+        }
+        if (!assignRun(plain.substring(cursor), pending, parts, plan)) {
+            return null;
+        }
+        return parts;
+    }
+
+    /** 把一段间隔译文分配给若干待填片段；分配失败返回 false（触发回退）。 */
+    private static boolean assignRun(String run, List<Integer> pending,
+                                     List<String> parts, AlignmentPlan plan) {
+        if (pending.isEmpty()) {
+            return run.trim().isEmpty();
+        }
+        int first = pending.get(0);
+        int last = pending.get(pending.size() - 1);
+        List<String> runParts = alignSpanToParts(run,
+                plan.groupIds.subList(first, last + 1),
+                plan.unsafeIn(first, last + 1));
+        if (runParts == null) {
+            return false;
+        }
+        for (int i = 0; i < runParts.size(); i++) {
+            String p = runParts.get(i);
+            if (p != null && !p.trim().isEmpty()) {
+                parts.set(pending.get(i), p);
+            }
+        }
+        return true;
+    }
+
+    private static final java.util.regex.Pattern STYLE_TAG =
+            java.util.regex.Pattern.compile("</?x\\d+>");
+
+    /** 剥离译文里的样式标记（保留标记间内容），供无标记回退路径使用。 */
+    private static String stripStyleTags(String text) {
+        return STYLE_TAG.matcher(text).replaceAll("");
     }
 
     /**
@@ -703,12 +796,22 @@ public final class ContentNodes {
     static final class AlignmentPlan {
         /** 每个可翻译片段的段落组号（0 起，与片段枚举同序）。 */
         final List<Integer> groupIds = new ArrayList<>();
+        /** 每个可翻译片段的样式标记号（0=无标记；>0 对应请求里的 {@code <xN>…</xN>}）。 */
+        final List<Integer> segStyleId = new ArrayList<>();
         /** 按树序的 URL 定位标记（原样 URL 文本）。 */
         final List<String> urls = new ArrayList<>();
         /** 与 {@code urls} 平行：该 URL 之前的可翻译片段数（间隔边界）。 */
         final List<Integer> urlSegIndex = new ArrayList<>();
         /** 段落组号 → 该段落内片段之间夹有不可翻译的可见内容。 */
         final java.util.BitSet unsafe = new java.util.BitSet();
+        /** 按树序的令牌流：URL 定位标记与可翻译片段。 */
+        final List<PlanToken> tokens = new ArrayList<>();
+        /** 样式标记总数（>0 表示请求里含 {@code <xN>} 标记）。 */
+        int styleMarkers;
+
+        boolean hasStyleMarkers() {
+            return styleMarkers > 0;
+        }
 
         int paragraphCount() {
             return groupIds.isEmpty() ? 0 : groupIds.get(groupIds.size() - 1) + 1;
@@ -727,9 +830,28 @@ public final class ContentNodes {
         }
     }
 
+    /** 树序令牌：URL 定位标记或可翻译片段（样式号 &gt;0 表示包在 {@code <xN>…</xN>} 里）。 */
+    static final class PlanToken {
+        final String url;   // 非 null = URL 定位标记
+        final int segIndex; // URL 令牌为 -1
+        final int styleId;  // 0 = 无样式
+
+        PlanToken(String url) {
+            this.url = url;
+            this.segIndex = -1;
+            this.styleId = 0;
+        }
+
+        PlanToken(int segIndex, int styleId) {
+            this.url = null;
+            this.segIndex = segIndex;
+            this.styleId = styleId;
+        }
+    }
+
     private static AlignmentPlan buildPlan(List<?> nodes) {
         PlanWalk w = new PlanWalk();
-        walkPlan(nodes, w, 0);
+        walkPlan(nodes, w, 0, false);
         return w.plan;
     }
 
@@ -739,9 +861,11 @@ public final class ContentNodes {
         final StringBuilder sep = new StringBuilder();
         /** 自上一片段以来，分隔里是否夹了不可翻译的可见内容（URL 除外——它是定位标记）。 */
         boolean sepOpaque;
+        /** 样式标记序号（与 TextExtractor.walkNode 同口径递增）。 */
+        final int[] styleSeq = new int[1];
     }
 
-    private static void walkPlan(@Nullable List<?> nodes, PlanWalk w, int depth) {
+    private static void walkPlan(@Nullable List<?> nodes, PlanWalk w, int depth, boolean styled) {
         if (nodes == null || depth > 12) {
             return;
         }
@@ -750,7 +874,7 @@ public final class ContentNodes {
                 continue;
             }
             if (n instanceof List) {
-                walkPlan((List<?>) n, w, depth + 1);
+                walkPlan((List<?>) n, w, depth + 1, styled);
                 continue;
             }
             String simple = n.getClass().getSimpleName();
@@ -778,12 +902,20 @@ public final class ContentNodes {
                     }
                     if (TextExtractor.isUrlLike(chunk)) {
                         // 节点内的 URL 文本块：定位标记，与链接节点同口径。
-                        w.plan.urls.add(chunk.trim());
-                        w.plan.urlSegIndex.add(w.plan.groupIds.size());
+                        addUrlToken(w, chunk.trim());
                         w.sep.append(chunk);
                         continue;
                     }
+                    int segIndex = w.plan.groupIds.size();
                     addSegment(w);
+                    int styleId = 0;
+                    if (styled) {
+                        w.styleSeq[0]++;
+                        styleId = w.styleSeq[0];
+                        w.plan.styleMarkers++;
+                    }
+                    w.plan.segStyleId.add(styleId);
+                    w.plan.tokens.add(new PlanToken(segIndex, styleId));
                 }
                 w.sep.append(s, tail, s.length());
                 continue;
@@ -794,8 +926,7 @@ public final class ContentNodes {
                 continue;
             }
             if ("LinkContentNode".equals(simple) && TextExtractor.linkDisplayIsUrl(n)) {
-                w.plan.urls.add(TextExtractor.urlLinkDisplayText(n));
-                w.plan.urlSegIndex.add(w.plan.groupIds.size());
+                addUrlToken(w, TextExtractor.urlLinkDisplayText(n));
                 w.sep.append(' ');
                 continue;
             }
@@ -811,20 +942,26 @@ public final class ContentNodes {
                         w.sep.append("\n• ");
                         w.sepOpaque = true;
                         if (item instanceof List) {
-                            walkPlan((List<?>) item, w, depth + 1);
+                            walkPlan((List<?>) item, w, depth + 1, styled);
                         } else if (item != null) {
                             walkPlan(java.util.Collections.singletonList(item),
-                                    w, depth + 1);
+                                    w, depth + 1, styled);
                         }
                     }
                     continue;
                 }
-                walkPlan(inner, w, depth + 1);
+                walkPlan(inner, w, depth + 1, styled || TextExtractor.isInlineStyleContainer(simple));
                 continue;
             }
             w.sep.append(' '); // 提及/emoji 等不透明节点
             w.sepOpaque = true;
         }
+    }
+
+    private static void addUrlToken(PlanWalk w, String url) {
+        w.plan.urls.add(url);
+        w.plan.urlSegIndex.add(w.plan.groupIds.size());
+        w.plan.tokens.add(new PlanToken(url));
     }
 
     /** 记录一个可翻译片段：先判断段落递增，再判断是否与上一片段之间夹了可见内容。 */

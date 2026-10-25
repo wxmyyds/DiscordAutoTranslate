@@ -441,6 +441,77 @@ public class LongTextRegressionTest {
 
     // --------------------------------------------- 格式化文本与 URL 混排（2026-10 四次上报）
 
+    // --------------------------------------------- 样式标记（2026-10 五次上报：斜体丢失）
+
+    @Test
+    public void styleMarkerPreservesItalicWhenModelKeepsTags() {
+        // 上报形态：***text*** 与相邻普通文字同段，模型合并成一块返回——
+        // 旧逻辑整块落进首片段、样式节点被清空（斜体丢失）。样式标记让
+        // 模型在译文里原样保留 <xN>…</xN>，回填按标记把译文精确落回
+        // 样式节点。
+        List<Object> nodes = list(
+                new TextContentNode("plain "),
+                new com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmphasisContentNode(
+                        list(new TextContentNode("styled text"))),
+                new TextContentNode(" tail"));
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "普通 <x1>斜体文字</x1> 尾巴");
+
+        assertNotNull(out);
+        assertEquals("普通 ", ((TextContentNode) out.get(0)).getContent());
+        com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmphasisContentNode em =
+                (com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmphasisContentNode) out.get(1);
+        assertEquals("斜体文字", ((TextContentNode) em.getContent().get(0)).getContent());
+        assertEquals(" 尾巴", ((TextContentNode) out.get(2)).getContent());
+        assertEquals("原节点未被动过", "styled text",
+                ((TextContentNode) ((com.wxmyyds.discordautotranslate.hooks
+                        .ContentNodesTest.EmphasisContentNode) nodes.get(1))
+                        .getContent().get(0)).getContent());
+    }
+
+    @Test
+    public void styleMarkerMissingFallsBackToMergedBackfill() {
+        // 模型没保留样式标记：自动回退到无标记对齐（合并处理）——
+        // 译文保留、样式退化，不拒译。
+        List<Object> nodes = list(
+                new TextContentNode("plain "),
+                new com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmphasisContentNode(
+                        list(new TextContentNode("styled text"))),
+                new TextContentNode(" tail"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "普通 斜体 尾巴");
+
+        assertNotNull("标记缺失必须回退而不是拒译", out);
+        assertEquals("普通 斜体 尾巴", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("原节点未被动过", "styled text",
+                ((TextContentNode) ((com.wxmyyds.discordautotranslate.hooks
+                        .ContentNodesTest.EmphasisContentNode) nodes.get(1))
+                        .getContent().get(0)).getContent());
+    }
+
+    @Test
+    public void styleMarkerAndUrlMarkerWorkTogether() {
+        // 加粗行内含 URL（广告消息形态）：样式标记与 URL 定位标记共存，
+        // 两者都保留时样式与链接位置同时保真。
+        List<Object> nodes = list(
+                new TextContentNode("see "),
+                new StrongContentNode(list(new TextContentNode("bold "))),
+                new LinkContentNode(list(new TextContentNode(
+                        "https://clck.ru/3Wfv9G")), new Object()),
+                new TextContentNode(" now"));
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "见 <x1>加粗</x1> https://clck.ru/3Wfv9G 现在");
+
+        assertNotNull(out);
+        assertEquals("见 ", ((TextContentNode) out.get(0)).getContent());
+        StrongContentNode strong = (StrongContentNode) out.get(1);
+        assertEquals("加粗 ", ((TextContentNode) strong.getContent().get(0)).getContent());
+        assertSame("URL 链接节点原样保留", nodes.get(2), out.get(2));
+        assertEquals(" 现在", ((TextContentNode) out.get(3)).getContent());
+    }
+
     @Test
     public void urlMissingFromTranslationKeepsOriginal() {
         // URL 链接是请求里的定位标记，译文必须原样包含（提示词规则 6）。

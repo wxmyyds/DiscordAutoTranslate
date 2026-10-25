@@ -215,12 +215,37 @@ public final class TextExtractor {
         }
     }
 
+    /**
+     * 行内样式容器：其内的可翻译片段在请求里包样式标记
+     * {@code <xN>…</xN>}（模型按提示词原样保留，回填按标记把译文
+     * 精确落回样式节点，实测斜体/加粗不再丢失）。块级容器（段落/
+     * 标题/引用）不在此列：它们各自成段，段落对齐已能保真。
+     */
+    public static boolean isInlineStyleContainer(String simpleName) {
+        switch (simpleName) {
+            case "StrongContentNode":
+            case "EmphasisContentNode":
+            case "UnderlineContentNode":
+            case "StrikethroughContentNode":
+            case "SpoilerContentNode":
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static void walkList(List<?> nodes, StringBuilder out, int[] counters, int depth) {
+        walkList(nodes, out, counters, depth, new int[1], false);
+    }
+
+    @SuppressWarnings("ParameterName")
+    private static void walkList(List<?> nodes, StringBuilder out, int[] counters,
+                                 int depth, int[] styleSeq, boolean styled) {
         if (nodes == null || depth > MAX_DEPTH) {
             return;
         }
         for (Object node : nodes) {
-            walkNode(node, out, counters, depth);
+            walkNode(node, out, counters, depth, styleSeq, styled);
         }
     }
 
@@ -378,7 +403,8 @@ public final class TextExtractor {
         }
     }
 
-    private static void walkNode(@Nullable Object node, StringBuilder out, int[] counters, int depth) {
+    private static void walkNode(@Nullable Object node, StringBuilder out, int[] counters,
+                                 int depth, int[] styleSeq, boolean styled) {
         if (node == null || depth > MAX_DEPTH) {
             return;
         }
@@ -398,7 +424,8 @@ public final class TextExtractor {
             Object inner = Reflect.call(
                     Reflect.findMethod(node.getClass(), "getContent", 0), node);
             if (inner instanceof List) {
-                walkList((List<?>) inner, out, counters, depth + 1);
+                walkList((List<?>) inner, out, counters, depth + 1, styleSeq,
+                        styled || isInlineStyleContainer(name));
             }
             return;
         }
@@ -406,10 +433,38 @@ public final class TextExtractor {
         switch (name) {
             case "TextContentNode": {
                 String s = Reflect.callString(node, "getContent");
-                if (s != null) {
+                if (s == null) {
+                    return;
+                }
+                if (!styled) {
+                    // 无样式：整段原样进请求（与纯文本形态一致）。
                     out.append(s);
                     counters[0]++;
+                    return;
                 }
+                // 样式片段：核心内容包 <xN>…</xN>，首尾空白与节点内空行、
+                // URL 块留在标记外（结构由原节点提供）。序号全局递增，
+                // 与 ContentNodes 计划的枚举顺序一致。
+                counters[0]++;
+                int lead = leadingWhitespace(s);
+                int tail = trailingWhitespaceStart(s);
+                out.append(s, 0, lead);
+                BlankLines.Split split = BlankLines.split(s.substring(lead, tail));
+                for (int i = 0; i < split.chunks.size(); i++) {
+                    if (i > 0) {
+                        out.append(split.separators.get(i - 1));
+                    }
+                    String chunk = split.chunks.get(i);
+                    if (BlankLines.isBlank(chunk) || isUrlLike(chunk)) {
+                        out.append(chunk);
+                        continue;
+                    }
+                    styleSeq[0]++;
+                    out.append("<x").append(styleSeq[0]).append('>')
+                            .append(chunk)
+                            .append("</x").append(styleSeq[0]).append('>');
+                }
+                out.append(s, tail, s.length());
                 return;
             }
             case "InlineCodeContentNode": {
@@ -436,9 +491,10 @@ public final class TextExtractor {
                     for (Object item : (List<?>) items) {
                         out.append('\n').append("• ");
                         if (item instanceof List) {
-                            walkList((List<?>) item, out, counters, depth + 1);
+                            walkList((List<?>) item, out, counters, depth + 1,
+                                    styleSeq, styled);
                         } else {
-                            walkNode(item, out, counters, depth + 1);
+                            walkNode(item, out, counters, depth + 1, styleSeq, styled);
                         }
                     }
                 }

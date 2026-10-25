@@ -207,6 +207,27 @@ public class ContentNodesTest {
         }
     }
 
+    /** 斜体容器（Discord 的 *x* / ***x*** 内层）。 */
+    public static final class EmphasisContentNode {
+        private final List<Object> content;
+
+        public EmphasisContentNode(List<Object> content) {
+            this.content = content;
+        }
+
+        public List<Object> getContent() {
+            return content;
+        }
+
+        public List<Object> component1() {
+            return content;
+        }
+
+        public EmphasisContentNode copy(List<Object> content) {
+            return new EmphasisContentNode(content);
+        }
+    }
+
     /** 提及叶子节点。 */
     public static final class UserMentionContentNode {
         private final String userId;

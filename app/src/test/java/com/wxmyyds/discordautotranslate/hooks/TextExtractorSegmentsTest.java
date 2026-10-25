@@ -168,7 +168,9 @@ public class TextExtractorSegmentsTest {
                         new TextContentNode(" foo"))));
 
         assertNotNull(r);
-        assertEquals("hello world foo", r.text);
+        // 纯文本请求里样式片段包样式标记 <xN>…</xN>（模型按规则 7 原样保留，
+        // 回填按标记把译文精确落回样式节点）。
+        assertEquals("hello <x1>world</x1> foo", r.text);
         // 首尾空白属于结构，留在标记外："hello " 的尾随空格与 " foo" 的前导空格
         // 都不交给模型，避免模型改写或合并它们（实测会丢空行/空格）。
         assertEquals("<s1>hello</s1> <s2>world</s2> <s3>foo</s3>", r.segmented);
