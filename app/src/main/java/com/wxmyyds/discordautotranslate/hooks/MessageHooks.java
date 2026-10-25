@@ -339,11 +339,8 @@ public final class MessageHooks {
                                     && e.status == StateStore.Status.TRANSLATED
                                     && !e.showingOriginal) ? e.translatedText : null;
                             if (translated != null) {
-                                long t0 = System.currentTimeMillis();
                                 Object replacement = StructurableTextFactory
                                         .forTranslation(source, translated);
-                                XLog.d("parse+backfill " + messageId + " in "
-                                        + (System.currentTimeMillis() - t0) + "ms");
                                 if (replacement != null) {
                                     renderArgs[0] = replacement;
                                     XLog.d("toSpannable substituted for " + messageId);

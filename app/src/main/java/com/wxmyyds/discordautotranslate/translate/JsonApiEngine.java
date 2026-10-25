@@ -70,12 +70,10 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
         XLog.d("POST " + XLog.safeUrl(url) + " text=" + XLog.text(text));
-        long t0 = System.currentTimeMillis();
         // Compatible 协议请求体带 stream:true，按 SSE 读取（读到 [DONE] 为止）；
         // Responses 协议保持非流式。
         boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
         Http.Response resp = http.postJson(url, body, headers, sse);
-        XLog.d("POST round-trip " + (System.currentTimeMillis() - t0) + "ms");
 
         // 3) 状态码归类
         if (!resp.isSuccess()) {
@@ -83,10 +81,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
 
         // 4) 按协议提取译文
-        long t1 = System.currentTimeMillis();
         String translated = Protocols.extractTranslation(cfg.protocol, resp.body);
-        XLog.d("response parsed in " + (System.currentTimeMillis() - t1) + "ms"
-                + " (body=" + resp.body.length() + " chars)");
         if (translated == null || translated.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }

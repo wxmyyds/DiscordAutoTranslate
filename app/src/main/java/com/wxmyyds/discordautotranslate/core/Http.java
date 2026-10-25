@@ -138,16 +138,6 @@ public final class Http {
     /**
      * 发送 JSON POST 请求。
      *
-     * @throws TranslationException 网络或超时错误（已归类）
-     */
-    public Response postJson(String url, String jsonBody, Headers headers)
-            throws TranslationException {
-        return postJson(url, jsonBody, headers, false);
-    }
-
-    /**
-     * 发送 JSON POST 请求。
-     *
      * @param sse 请求体含 {@code stream:true} 时为 true：按行读取并在
      *            {@code data: [DONE]} 处停止（不依赖服务端关流）。响应体
      *            原样返回（SSE 帧文本），由协议层解析累积 delta。
