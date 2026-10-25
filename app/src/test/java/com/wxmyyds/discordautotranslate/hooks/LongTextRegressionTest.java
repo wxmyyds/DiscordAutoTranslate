@@ -404,16 +404,20 @@ public class LongTextRegressionTest {
                 }
             } else if (n instanceof StrongContentNode) {
                 boldLines++;
+                StrongContentNode strong = (StrongContentNode) n;
                 assertEquals("首尾空白属于原节点结构，译文落核心",
                         " 链接 GEMINI 4 ARGON - ",
-                        ((TextContentNode) ((StrongContentNode) n).getContent().get(0))
-                                .getContent());
-            } else if (n instanceof LinkContentNode) {
-                urlLinks++;
-                assertEquals("URL 必须逐字符保留",
-                        "https://clck.ru/3Wfv9G",
-                        ((TextContentNode) ((LinkContentNode) n).getContent().get(0))
-                                .getContent());
+                        ((TextContentNode) strong.getContent().get(0)).getContent());
+                // URL 链接是加粗行的子节点，位置必须原样保留。
+                for (Object child : strong.getContent()) {
+                    if (child instanceof LinkContentNode) {
+                        urlLinks++;
+                        assertEquals("URL 必须逐字符保留",
+                                "https://clck.ru/3Wfv9G",
+                                ((TextContentNode) ((LinkContentNode) child).getContent().get(0))
+                                        .getContent());
+                    }
+                }
             }
         }
         assertEquals(7, freeHeadings);
