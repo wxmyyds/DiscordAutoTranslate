@@ -490,6 +490,31 @@ public class LongTextRegressionTest {
     }
 
     @Test
+    public void urlSpanMergedSegmentsFillFirstAndBlankRest() {
+        // URL 间隔内有多个相邻片段、模型合并成一块：间隔内段落级对齐——
+        // 译文落进首片段、其余置空（与无 URL 的段落对齐同语义）。
+        // 此前 copySpan 把空片段当「内容丢失」误杀，导致日志中
+        // targets=17 urlMarks=12 的消息被整条拒绝（2026-10 实测）。
+        List<Object> nodes = list(
+                new TextContentNode("alpha"),
+                new TextContentNode("beta"),
+                new LinkContentNode(list(new TextContentNode(
+                        "https://clck.ru/3Wfv9G")), new Object()),
+                new TextContentNode("gamma"));
+
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "甲乙 https://clck.ru/3Wfv9G 丙");
+
+        assertNotNull(out);
+        assertEquals(4, out.size());
+        assertEquals("甲乙", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("间隔内置空的片段原节点未被动过",
+                "beta", ((TextContentNode) nodes.get(1)).getContent());
+        assertSame("URL 链接节点原样保留", nodes.get(2), out.get(2));
+        assertEquals("丙", ((TextContentNode) out.get(3)).getContent());
+    }
+
+    @Test
     public void urlEchoedTwiceKeepsOriginal() {
         // 模型把 URL 回显两份：回填后必然有一份以纯文本显示（实测故障形态），
         // 必须拒绝。

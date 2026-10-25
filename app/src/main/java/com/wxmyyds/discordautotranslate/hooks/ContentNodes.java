@@ -531,7 +531,10 @@ public final class ContentNodes {
             expected.merge(url, 1, Integer::sum);
         }
         for (java.util.Map.Entry<String, Integer> e : expected.entrySet()) {
-            if (countOccurrences(plain, e.getKey()) != e.getValue()) {
+            int actual = countOccurrences(plain, e.getKey());
+            if (actual != e.getValue()) {
+                XLog.d("align refused: url marker expected " + e.getValue()
+                        + " actual " + actual + " url=" + e.getKey());
                 return null;
             }
         }
@@ -549,31 +552,39 @@ public final class ContentNodes {
             List<String> spanParts = alignSpanToParts(plain.substring(from, at),
                     plan.groupIds.subList(segStart, segEnd),
                     plan.unsafeIn(segStart, segEnd));
-            if (spanParts == null || !copySpan(spanParts, parts, segStart)) {
+            if (spanParts == null) {
+                XLog.d("align refused: span " + u + " segs=[" + segStart + "," + segEnd
+                        + ") " + XLog.text(plain.substring(from, at)));
                 return null;
             }
+            copySpan(spanParts, parts, segStart);
             from = at + url.length();
             segStart = segEnd;
         }
         List<String> tailParts = alignSpanToParts(plain.substring(from),
                 plan.groupIds.subList(segStart, plan.groupIds.size()),
                 plan.unsafeIn(segStart, plan.groupIds.size()));
-        if (tailParts == null || !copySpan(tailParts, parts, segStart)) {
+        if (tailParts == null) {
+            XLog.d("align refused: tail span segs=[" + segStart + ","
+                    + plan.groupIds.size() + ") " + XLog.text(plain.substring(from)));
             return null;
         }
+        copySpan(tailParts, parts, segStart);
         return parts;
     }
 
-    /** 把间隔片段写入整体片段列表；间隔译文含空白片段（内容丢失）时失败。 */
-    private static boolean copySpan(List<String> spanParts, List<String> parts, int segStart) {
+    /**
+     * 把间隔片段写入整体片段列表。段落级对齐产生的空片段是设计行为
+     * （译文合并进首片段、段内其余置空），照常写入；模型真正丢内容
+     * 会表现为间隔结构对不上而拒绝，不在这里判断。
+     */
+    private static void copySpan(List<String> spanParts, List<String> parts, int segStart) {
         for (int i = 0; i < spanParts.size(); i++) {
             String p = spanParts.get(i);
-            if (p == null || p.trim().isEmpty()) {
-                return false;
+            if (p != null && !p.trim().isEmpty()) {
+                parts.set(segStart + i, p);
             }
-            parts.set(segStart + i, p);
         }
-        return true;
     }
 
     private static int countOccurrences(String text, String needle) {
@@ -647,6 +658,10 @@ public final class ContentNodes {
             }
             return out;
         }
+        XLog.d("align span refused: segs=" + segs + " chunks=" + chunks.size()
+                + " lines=" + lines.length + " paragraphs=" + paraCount
+                + " unsafe=" + unsafe.cardinality()
+                + " head=" + XLog.text(span));
         return null;
     }
 
