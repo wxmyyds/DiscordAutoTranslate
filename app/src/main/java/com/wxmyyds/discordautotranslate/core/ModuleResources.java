@@ -183,10 +183,7 @@ public final class ModuleResources {
                 return null;
             }
             // 传 null 主题：矢量图内已移除主题属性引用，避免解析失败。
-            Drawable d = res.getDrawable(id, null);
-            if (d == null) {
-            }
-            return d;
+            return res.getDrawable(id, null);
         } catch (Throwable t) {
             return null;
         }

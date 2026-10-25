@@ -102,8 +102,6 @@ public final class MessageHooks {
             return handles;
         }
 
-        if (handles.size() < MIN_REQUIRED_HOOKS) {
-        }
         return handles;
     }
 

@@ -178,8 +178,6 @@ final class RowRefresher {
                 scheduleRelayoutAfterLayout(view);
                 return true;
             } catch (Throwable t) {
-                Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
-                        && t.getCause() != null ? t.getCause() : t;
                 return false;
             }
         } catch (Throwable t) {
@@ -368,8 +366,8 @@ final class RowRefresher {
                 parentView.requestLayout();
             }
         } catch (Throwable ignored) {
-                // 布局请求失败可忽略。
-            }
+            // 布局请求失败可忽略。
+        }
     }
 
     private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
@@ -392,9 +390,8 @@ final class RowRefresher {
             if (dispatchLayout != null) {
                 dispatchLayout.invoke(recycler);
             }
-        } catch (Throwable t) {
-            Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
-                    && t.getCause() != null ? t.getCause() : t;
+        } catch (Throwable ignored) {
+            // 派发布局失败可忽略。
         }
     }
 

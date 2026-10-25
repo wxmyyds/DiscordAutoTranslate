@@ -80,9 +80,6 @@ public final class EmbedHooks {
         installRichEmbedBindHook(module, cl, handles);
         installPostPreviewBindHook(module, cl, handles);
         installPostPreviewSetHook(module, cl, handles);
-        if (handles.isEmpty()) {
-        } else {
-        }
         return handles;
     }
 
