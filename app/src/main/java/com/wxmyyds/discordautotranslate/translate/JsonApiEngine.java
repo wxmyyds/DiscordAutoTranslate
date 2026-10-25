@@ -55,17 +55,10 @@ public final class JsonApiEngine implements Scheduler.Engine {
      */
     private String requestOnce(String text) throws Exception {
         // 1) 按协议构造请求体
-        String systemPrompt = cfg.systemPrompt;
-        if (Segments.isSegmented(text)) {
-            systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()
-                    ? "" : systemPrompt + "\n\n") + Segments.RULE;
-        }
-        String body = Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model);
-
-        // 2) 组装请求头（认证 + 用户自定义头）
+        String body = buildBody(text, true);
         Http.Headers headers = buildHeaders();
 
-        // 3) 发送（任务被取消时通过线程中断尽早退出）
+        // 2) 发送（任务被取消时通过线程中断尽早退出）
         if (Thread.currentThread().isInterrupted()) {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
@@ -76,14 +69,21 @@ public final class JsonApiEngine implements Scheduler.Engine {
         // Responses 协议保持非流式。
         boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
         Http.Response resp = http.postJson(url, body, headers, sse);
+        if (resp.status == 400) {
+            // 个别服务严格校验参数（如 OpenAI 非推理模型不接受
+            // reasoning_effort）：去掉思考等级参数原样重发一次。
+            XLog.d("400 with reasoning_effort; retrying without it");
+            body = buildBody(text, false);
+            resp = http.postJson(url, body, headers, sse);
+        }
         XLog.d("POST round-trip " + (System.currentTimeMillis() - t0) + "ms");
 
-        // 4) 状态码归类
+        // 3) 状态码归类
         if (!resp.isSuccess()) {
             throw classifyHttpError(resp);
         }
 
-        // 5) 按协议提取译文
+        // 4) 按协议提取译文
         long t1 = System.currentTimeMillis();
         String translated = Protocols.extractTranslation(cfg.protocol, resp.body);
         XLog.d("response parsed in " + (System.currentTimeMillis() - t1) + "ms"
@@ -92,6 +92,17 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }
         return translated.trim();
+    }
+
+    /** 构造一次请求体：带标记文本追加分段协议说明；可去掉思考等级参数。 */
+    private String buildBody(String text, boolean suppressThinking) throws Exception {
+        String systemPrompt = cfg.systemPrompt;
+        if (Segments.isSegmented(text)) {
+            systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()
+                    ? "" : systemPrompt + "\n\n") + Segments.RULE;
+        }
+        return Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model,
+                suppressThinking);
     }
 
     /**

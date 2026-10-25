@@ -41,6 +41,14 @@ public final class Protocols {
     /** 轻度频率惩罚仅抑制重复，不承担“只翻译”约束；兼容接口需支持此参数。 */
     private static final double FREQUENCY_PENALTY = 0.2;
 
+    /**
+     * 思考等级（OpenAI 事实标准字段）。翻译任务不需要深思考：推理型模型
+     * 在默认/高思考下会把输出预算全花在思考上（实测 55s/196KB 帧零正文），
+     * low 档实测秒级返回正文。不支持该字段的服务通常忽略它；个别严格校验的
+     * 服务（如 OpenAI 非推理模型）会回 400，引擎侧收到 400 会去参重发一次。
+     */
+    public static final String REASONING_EFFORT_LOW = "low";
+
     private static final String SUFFIX_CHAT_COMPLETIONS = "/chat/completions";
     private static final String SUFFIX_RESPONSES = "/responses";
 
@@ -60,6 +68,20 @@ public final class Protocols {
      */
     public static String requestBody(String protocol, String text,
                                      @Nullable String systemPrompt, String model)
+            throws TranslationException {
+        return requestBody(protocol, text, systemPrompt, model, true);
+    }
+
+    /**
+     * 构造请求体 JSON（可控制是否携带思考等级参数）。
+     *
+     * @param suppressThinking true 时携带 {@code reasoning_effort:"low"}；
+     *                          false 供引擎在服务端拒绝该参数（HTTP 400）后
+     *                          去参重发使用
+     */
+    public static String requestBody(String protocol, String text,
+                                     @Nullable String systemPrompt, String model,
+                                     boolean suppressThinking)
             throws TranslationException {
         String safeText = text == null ? "" : text;
         String safePrompt = systemPrompt == null ? "" : systemPrompt;
@@ -84,6 +106,9 @@ public final class Protocols {
                 body.put("temperature", TEMPERATURE);
                 body.put("frequency_penalty", FREQUENCY_PENALTY);
                 body.put("stream", true);
+                if (suppressThinking) {
+                    body.put("reasoning_effort", REASONING_EFFORT_LOW);
+                }
             }
             return body.toString();
         } catch (JSONException e) {
