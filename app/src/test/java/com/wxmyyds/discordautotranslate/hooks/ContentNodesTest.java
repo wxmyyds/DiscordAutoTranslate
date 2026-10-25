@@ -889,15 +889,17 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void plainMarkerlessMergedTranslationKeepsOriginal() {
-        // 无标记译文结构对不上（两节点只回一行，模型合并了段落）：
-        // 不做「首节点承载全部、其余置空」的启发式分配——那会把译文
-        // 挤进错误位置、清空其他节点。整条保留原文。
+    public void plainMarkerlessMergedTranslationBackfillsIntoParagraph() {
+        // 同段两节点只回一块译文（模型合并了段内两行）：段落对齐——译文进
+        // 本段首片段，段内其余置空并裁剪。不跨段、不清空其他段落。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
 
-        assertNull(ContentNodes.replaceText(nodes, "只有一段译文"));
+        List<Object> out = ContentNodes.replaceText(nodes, "只有一段译文");
 
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("只有一段译文", ((TextContentNode) out.get(0)).getContent());
         assertEquals("hi", ((TextContentNode) nodes.get(0)).getContent());
         assertEquals("hi", ((TextContentNode) nodes.get(2)).getContent());
     }
@@ -994,13 +996,15 @@ public class ContentNodesTest {
 
     @Test
     public void splitSinglePartIsUnchanged() {
-        assertEquals(Arrays.asList("αβγ"), ContentNodes.splitTranslation("αβγ", 1));
+        assertEquals(Arrays.asList("αβγ"), ContentNodes.splitTranslation("αβγ", 1,
+                Arrays.asList(0)));
     }
 
     @Test
     public void splitByLinesWhenLineCountMatches() {
         // 相邻单行节点、模型用单换行分段：非空行数与片段数一致 → 按行 1:1。
-        List<String> parts = ContentNodes.splitTranslation("第一行\n第二行", 2);
+        List<String> parts = ContentNodes.splitTranslation("第一行\n第二行", 2,
+                Arrays.asList(0, 0));
         assertEquals(2, parts.size());
         assertEquals("第一行", parts.get(0));
         assertEquals("第二行", parts.get(1));
@@ -1008,29 +1012,38 @@ public class ContentNodesTest {
 
     @Test
     public void splitRejectsExtraLinesWhenStructureMismatches() {
-        // 行数多于片段数：旧实现把多余行合并塞进最后一段（堆叠=乱序来源），
-        // 现在必须拒绝，保留原文。
-        assertNull(ContentNodes.splitTranslation("a\nb\nc\nd", 2));
+        // 行数多于片段数且段落也对不上：旧实现把多余行合并塞进最后一段
+        // （堆叠=乱序来源），现在必须拒绝，保留原文。
+        assertNull(ContentNodes.splitTranslation("a\nb\nc\nd", 2, Arrays.asList(0, 1)));
     }
 
     @Test
-    public void splitRejectsWhenFewerLinesThanTargets() {
-        // 行数不足：旧实现把整段塞进首节点、其余置空，现在必须拒绝。
-        assertNull(ContentNodes.splitTranslation("只有一行", 3));
+    public void splitAlignsSingleChunkToItsParagraph() {
+        // 同段落的多个内联片段（如加粗+普通文本相邻），模型按段落返回一块：
+        // 译文进本段第一个片段，段内其余置空——有格式文本的翻译靠这级落位。
+        assertEquals(Arrays.asList("只有一行", "", ""),
+                ContentNodes.splitTranslation("只有一行", 3, Arrays.asList(0, 0, 0)));
+    }
+
+    @Test
+    public void splitAlignsChunksToFirstFragmentOfEachParagraph() {
+        // 两个段落（第一段 2 个内联片段、第二段 1 个片段）：每段译文进本段首片段。
+        assertEquals(Arrays.asList("译一", "", "译二"),
+                ContentNodes.splitTranslation("译一\n\n译二", 3, Arrays.asList(0, 0, 1)));
     }
 
     @Test
     public void splitRejectsBlankLineWhenLineCountMatches() {
-        // 行数恰好等于片段数但中间是空行：空行会顶掉某个节点的译文
-        // （该节点内容丢失），必须拒绝而不是按行分配。
-        assertNull(ContentNodes.splitTranslation("甲\n\n乙", 3));
+        // 三个独立段落只回两段：跨段落合并 = 内容丢失，必须拒绝。
+        assertNull(ContentNodes.splitTranslation("甲\n\n乙", 3, Arrays.asList(0, 1, 2)));
     }
 
     @Test
     public void splitByParagraphBlocksWhenCountsMatch() {
         // 段落块数与片段数一致：每块整体落到一个片段（块内单换行保留），
         // 不再按裸行切——按行切会把第二行并进第一片段、空行后的内容堆到尾部。
-        List<String> parts = ContentNodes.splitTranslation("第一块\n第二行\n\n第二块", 2);
+        List<String> parts = ContentNodes.splitTranslation("第一块\n第二行\n\n第二块", 2,
+                Arrays.asList(0, 1));
         assertEquals(2, parts.size());
         assertEquals("第一块\n第二行", parts.get(0));
         assertEquals("第二块", parts.get(1));
@@ -1040,26 +1053,71 @@ public class ContentNodesTest {
     public void splitRejectsWhenMoreParagraphBlocksThanTargets() {
         // 译文段落块多于片段数 = 模型新增/复读内容：拒绝回填（null），
         // 不得把多出的块堆进最后一个节点。
-        assertNull(ContentNodes.splitTranslation("A\n\nB\n\nC", 2));
+        assertNull(ContentNodes.splitTranslation("A\n\nB\n\nC", 2, Arrays.asList(0, 1)));
         // URL 块与空段落不算块：URL 回显不触发拒绝。
         assertEquals(Arrays.asList("甲", "乙"),
-                ContentNodes.splitTranslation("甲\n\nhttps://gofile.io/d/abc\n\n乙", 2));
+                ContentNodes.splitTranslation("甲\n\nhttps://gofile.io/d/abc\n\n乙", 2,
+                        Arrays.asList(0, 1)));
+    }
+
+    @Test
+    public void inlineFormattedParagraphBackfillsIntoFirstStyledFragment() {
+        // 有格式的内联消息（加粗+普通文本相邻成一段）：纯文本请求里它们
+        // 连成一段，模型只能按段落返回一块——片段级永远对不上。段落对齐：
+        // 译文进本段首片段（加粗节点），段内其余片段置空并裁剪。
+        // 9261dd5 的「精确对应或拒绝」让这类消息全部保持原文，此处回归。
+        List<Object> nodes = list(
+                new StrongContentNode(list(new TextContentNode("bold text"))),
+                new TextContentNode(" and plain"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "加粗文本 和纯文本");
+
+        assertNotNull("有格式的内联消息必须能翻译", out);
+        assertEquals(1, out.size());
+        StrongContentNode strong = (StrongContentNode) out.get(0);
+        assertEquals("加粗文本 和纯文本",
+                ((TextContentNode) strong.getContent().get(0)).getContent());
+        assertEquals("bold text",
+                ((TextContentNode) ((StrongContentNode) nodes.get(0)).getContent().get(0))
+                        .getContent());
+    }
+
+    @Test
+    public void multiParagraphFormattedPlacesEachParagraphInPlace() {
+        // 两段消息：第一段由加粗片段+普通片段内联组成，第二段独立。
+        // 模型按段落返回两块：第一块进第一段首片段（加粗），第二块进
+        // 第二段——段落各就各位，不跨段堆叠。
+        List<Object> nodes = list(
+                new StrongContentNode(list(new TextContentNode("bold"))),
+                new TextContentNode(" tail"),
+                new TextContentNode("\n\n"),
+                new TextContentNode("second para"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "加粗 尾巴\n\n第二段");
+
+        assertNotNull(out);
+        assertEquals(4, out.size());
+        StrongContentNode strong = (StrongContentNode) out.get(0);
+        assertEquals("加粗 尾巴", ((TextContentNode) strong.getContent().get(0)).getContent());
+        assertEquals("段内第二片段置空", " ", ((TextContentNode) out.get(1)).getContent());
+        assertEquals("空行结构保留", "\n\n", ((TextContentNode) out.get(2)).getContent());
+        assertEquals("第二段", ((TextContentNode) out.get(3)).getContent());
     }
 
     // ---------------------------------------------------------------- 行数与尾部空白
 
     @Test
-    public void mergedOneLineTranslationForTwoNodesKeepsOriginal() {
-        // 两个原节点只回一行译文：结构不对应，保留原文。
-        // 旧实现首节点承载全部、第二节点置空再裁剪，表现为译文挤在
-        // 第一行、后续段落“丢失”。
+    public void mergedOneLineTranslationBackfillsIntoFirstParagraph() {
+        // 两个原节点只回一行译文（同段）：段落对齐到首片段，尾部空白裁剪。
         List<Object> nodes = list(new TextContentNode("first line"), new NewLineContentNode(),
                 new TextContentNode("second line"));
 
-        assertNull(ContentNodes.replaceText(nodes, "只有一行译文"));
+        List<Object> out = ContentNodes.replaceText(nodes, "只有一行译文");
 
+        assertNotNull(out);
+        assertEquals(1, out.size());
+        assertEquals("只有一行译文", ((TextContentNode) out.get(0)).getContent());
         assertEquals("first line", ((TextContentNode) nodes.get(0)).getContent());
-        assertEquals("second line", ((TextContentNode) nodes.get(2)).getContent());
     }
 
     @Test

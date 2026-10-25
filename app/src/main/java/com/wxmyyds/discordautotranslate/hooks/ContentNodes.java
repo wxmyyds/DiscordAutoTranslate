@@ -126,15 +126,16 @@ public final class ContentNodes {
                 return null;
             }
             // 无标记译文：单链路（无标记纯文本请求）的标准形态，
-            // 或单段请求。只有结构与片段数精确对应才回填（段落块 1:1 或
-            // 非空行 1:1）；模型重排/增删段落时整条保留原文，
-            // 不做启发式分配（那是乱序与内容丢失的来源）。
+            // 或单段请求。三级对齐：片段 1:1（保结构）→ 非空行 1:1（单行
+            // 分段）→ 段落对齐（每段译文进本段首片段，段内其余置空——
+            // 有格式的内联消息只能这样落位）。都对不上才整条保留原文。
             String plain = normalize(Segments.strip(translated));
             if (plain.isEmpty()) {
                 // 剔除后什么都不剩：不能清空消息，保留原文。
                 return null;
             }
-            parts = splitTranslation(plain, targetCount);
+            List<Integer> groupIds = collectGroupIds(nodes);
+            parts = splitTranslation(plain, targetCount, groupIds);
             if (parts == null) {
                 XLog.d("markerless translation structure mismatch (targets="
                         + targetCount + "); keeping original text");
@@ -503,26 +504,34 @@ public final class ContentNodes {
     // ---------------------------------------------------------------- 译文切分
 
     /**
-     * 把译文切分成与原文本节点数量一致的片段（精确对应，或拒绝）。
+     * 把译文切分成与原文本节点数量一致的片段（三级对齐，或拒绝）。
      *
      * <p>回填消费片段的口径是「空行切分的非空白非 URL 段落块」（见
-     * {@link TextExtractor#countSegments}）。结构对得上时片段与节点一一对应，
-     * URL 链接仍与正确的段落相邻：</p>
+     * {@link TextExtractor#countSegments}）。对齐优先级：</p>
      * <ol>
      *   <li>译文段落块数 == 片段数 → 每块落到自己的节点（保结构译文）；</li>
      *   <li>非空行数 == 片段数 → 按行 1:1（相邻单行节点、模型用单换行分段）；</li>
-     *   <li>其余一律返回 null，整条保留原文。</li>
+     *   <li>译文段落块数 == 段落数（{@code groupIds} 的最大组号+1）→ 段落
+     *       对齐：每个空行段落的译文落在本段<b>第一个</b>片段，段内其余
+     *       片段置空。有格式的内联消息（加粗/行内代码/掩码链接把一句话
+     *       拆成多个片段，但纯文本里它们连成一段）只能这样落位——模型
+     *       按段落返回一块译文，片段级永远对不上；</li>
+     *   <li>其余返回 null，整条保留原文。</li>
      * </ol>
      *
-     * <p>不再做启发式分配（旧行为：行数富余按行分配、空行顶掉节点译文、
-     * 多余行全部堆进最后一个节点、行数不足整段塞首节点）。模型重排段落
-     * 时这些启发式就是实测的「译文乱序、节点被置空、消息膨胀」来源，
-     * 流式与非流式共用同一切分逻辑，与传输方式无关。</p>
+     * <p>不做无段落的启发式分配（旧行为：行数富余按行分配、空行顶掉
+     * 节点译文、多余行堆进最后一个节点、行数不足整段塞首节点）。模型
+     * <b>跨段落</b>合并或增删内容时那些启发式就是实测的「译文乱序、
+     * 节点被置空、消息膨胀」来源，必须拒绝；模型按段落返回（提示词
+     * 规则 5 的要求）则段落对齐能完整落位。</p>
      *
-     * @return 片段列表；结构与片段数不对应时返回 null（拒绝回填）
+     * @param groupIds 每个可翻译片段的段落组编号（0 起，与 parts 同长、
+     *                 与片段枚举同序），见 {@link #collectGroupIds}
+     * @return 片段列表；结构无法对齐时返回 null（拒绝回填）
      */
     @Nullable
-    static List<String> splitTranslation(String translated, int parts) {
+    static List<String> splitTranslation(String translated, int parts,
+                                         List<Integer> groupIds) {
         List<String> out = new ArrayList<>(parts);
         if (parts <= 1) {
             out.add(translated);
@@ -540,18 +549,145 @@ public final class ContentNodes {
         }
         String[] lines = translated.split("\n", -1);
         if (lines.length == parts) {
+            boolean allNonBlank = true;
             for (String line : lines) {
                 if (line.trim().isEmpty()) {
-                    // 空行顶掉某个节点的译文 = 该节点内容丢失，必须拒绝。
-                    return null;
+                    // 空行顶掉某个节点的译文 = 该节点内容丢失，不能用行对齐。
+                    allNonBlank = false;
+                    break;
                 }
             }
-            for (String line : lines) {
-                out.add(line);
+            if (allNonBlank) {
+                for (String line : lines) {
+                    out.add(line);
+                }
+                return out;
+            }
+        }
+        int groups = groupIds.isEmpty() ? 0 : groupIds.get(groupIds.size() - 1) + 1;
+        if (chunks.size() == groups && groupIds.size() == parts) {
+            // 段落对齐：每个段落块的译文进本段第一个片段，段内其余置空。
+            for (int i = 0; i < parts; i++) {
+                out.add("");
+            }
+            int j = 0;
+            int lastGroup = -1;
+            for (int i = 0; i < parts && j < chunks.size(); i++) {
+                int g = groupIds.get(i);
+                if (g != lastGroup) {
+                    out.set(i, chunks.get(j++));
+                    lastGroup = g;
+                }
             }
             return out;
         }
         return null;
+    }
+
+    /**
+     * 推导每个可翻译片段所属的「显示段落」组号（0 起），枚举顺序与
+     * {@link #countTextNodes}/rebuild 完全一致。
+     *
+     * <p>段落边界（硬边界）：节点内的空行分隔、片段之间结构分隔里含
+     * ≥2 个换行（空行文本节点、节点首尾空白与换行节点的组合）。相邻
+     * 片段、单换行分隔（换行节点、列表项）是同一段——这与发给模型的
+     * 纯文本段落划分一致（模型按空行感知段落，提示词规则 5 也按空行
+     * 要求保真），因此「译文块数 == 段落数」时每块译文能确定地落回
+     * 本段第一个片段。</p>
+     */
+    private static List<Integer> collectGroupIds(@Nullable List<?> nodes) {
+        List<Integer> ids = new ArrayList<>();
+        int[] group = {0};
+        walkGroupIds(nodes, ids, group, new StringBuilder(), 0);
+        return ids;
+    }
+
+    private static void walkGroupIds(@Nullable List<?> nodes, List<Integer> ids,
+                                     int[] group, StringBuilder sep, int depth) {
+        if (nodes == null || depth > 12) {
+            return;
+        }
+        for (Object n : nodes) {
+            if (n == null) {
+                continue;
+            }
+            if (n instanceof List) {
+                walkGroupIds((List<?>) n, ids, group, sep, depth + 1);
+                continue;
+            }
+            String simple = n.getClass().getSimpleName();
+            if ("TextContentNode".equals(simple)) {
+                String s = Reflect.callString(n, "getContent");
+                if (s == null) {
+                    continue;
+                }
+                if (BlankLines.isBlank(s)) {
+                    sep.append(s); // 空行结构节点：段落分隔的一部分
+                    continue;
+                }
+                int lead = TextExtractor.leadingWhitespace(s);
+                int tail = TextExtractor.trailingWhitespaceStart(s);
+                sep.append(s, 0, lead);
+                BlankLines.Split split = BlankLines.split(s.substring(lead, tail));
+                for (int i = 0; i < split.chunks.size(); i++) {
+                    if (i > 0) {
+                        sep.append(split.separators.get(i - 1)); // 节点内空行：硬边界
+                    }
+                    String chunk = split.chunks.get(i);
+                    if (BlankLines.isBlank(chunk) || TextExtractor.isUrlLike(chunk)) {
+                        sep.append(chunk); // 不翻译的块：留在分隔流里
+                        continue;
+                    }
+                    if (!ids.isEmpty() && countNewlines(sep) >= 2) {
+                        group[0]++;
+                    }
+                    ids.add(group[0]);
+                    sep.setLength(0);
+                }
+                sep.append(s, tail, s.length());
+                continue;
+            }
+            if (CODE_NODES.contains(simple)) {
+                sep.append("InlineCodeContentNode".equals(simple) ? ' ' : '\n');
+                continue;
+            }
+            if ("LinkContentNode".equals(simple) && TextExtractor.linkDisplayIsUrl(n)) {
+                sep.append(' ');
+                continue;
+            }
+            if (BLANK_NODES.contains(simple)) {
+                sep.append('\n');
+                continue;
+            }
+            List<?> inner = childListOf(n, simple);
+            if (inner != null) {
+                if (BULLET_LIST.equals(simple)) {
+                    for (Object item : inner) {
+                        sep.append("\n• "); // 列表项间单换行：同段
+                        if (item instanceof List) {
+                            walkGroupIds((List<?>) item, ids, group, sep, depth + 1);
+                        } else if (item != null) {
+                            walkGroupIds(java.util.Collections.singletonList(item),
+                                    ids, group, sep, depth + 1);
+                        }
+                    }
+                    continue;
+                }
+                walkGroupIds(inner, ids, group, sep, depth + 1);
+                continue;
+            }
+            sep.append(' '); // 提及/emoji 等不透明节点
+        }
+    }
+
+    private static int countNewlines(CharSequence s) {
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) == '\n') {
+                n++;
+            }
+        }
+        return n;
     }
 
     /** 拼接节点列表为 JSON 数组文本，用于诊断与单测。 */
