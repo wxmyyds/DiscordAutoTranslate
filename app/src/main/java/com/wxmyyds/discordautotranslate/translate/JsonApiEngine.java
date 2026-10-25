@@ -40,9 +40,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
         }
         validateConfig(cfg);
-        // 分段请求的译文若未通过标记协议校验，自动用无标记纯文本重发一次
-        // （见 Segments.translateWithFallback）：小模型经常丢失/改写标记，
-        // 整条放弃会让消息永远显示原文。渲染层只接受协议完好或无标记的译文。
+        // 分段请求的译文未通过标记校验、或带标记请求超时（标记+长内容会让
+        // 小模型生成失控，实测同供应商纯文本长文很快），都会在核心层自动
+        // 降级一次无标记请求（见 Segments.translateWithFallback）。
         return Segments.translateWithFallback(text, this::requestOnce);
     }
 
@@ -71,7 +71,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
         XLog.d("POST " + XLog.safeUrl(url) + " text=" + XLog.text(text));
+        long t0 = System.currentTimeMillis();
         Http.Response resp = http.postJson(url, body, headers);
+        XLog.d("POST round-trip " + (System.currentTimeMillis() - t0) + "ms");
 
         // 4) 状态码归类
         if (!resp.isSuccess()) {
@@ -79,7 +81,10 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
 
         // 5) 按协议提取译文
+        long t1 = System.currentTimeMillis();
         String translated = Protocols.extractTranslation(cfg.protocol, resp.body);
+        XLog.d("response parsed in " + (System.currentTimeMillis() - t1) + "ms"
+                + " (body=" + resp.body.length() + " chars)");
         if (translated == null || translated.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }

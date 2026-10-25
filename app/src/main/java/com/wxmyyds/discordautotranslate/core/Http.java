@@ -174,8 +174,11 @@ public final class Http {
             return new Response(status, body, retryAfter);
 
         } catch (SocketTimeoutException e) {
+            // 区分连接阶段与读阶段：读超时=服务端在预算内未回完响应
+            //（非流式接口生成完成前不回字节，长生成会表现为读超时）。
+            String phase = e.getMessage(); // "connect timed out" / "Read timed out"
             throw new TranslationException(TranslationException.Kind.TIMEOUT,
-                    "请求超时（" + timeoutMs + "ms）", e);
+                    "请求超时（" + timeoutMs + "ms，" + (phase == null ? "未知阶段" : phase) + "）", e);
         } catch (IOException e) {
             throw new TranslationException(TranslationException.Kind.NETWORK,
                     "网络错误：" + e.getClass().getSimpleName(), e);

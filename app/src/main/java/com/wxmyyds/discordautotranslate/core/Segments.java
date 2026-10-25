@@ -241,18 +241,22 @@ public final class Segments {
     }
 
     /**
-     * 分段请求的完整翻译策略：标记协议校验失败时自动降级一次。
+     * 分段请求的完整翻译策略：标记协议校验失败或请求超时，自动降级一次
+     * 无标记纯文本请求。
      *
      * <p>小模型在多段消息上经常丢失或改写标记（实测 parts=12 的消息回得
-     * 支离破碎），直接整条放弃会让消息永远显示原文。策略改为：</p>
-     * <ol>
-     *   <li>按原请求发送；译文通过 {@link #tryParse} 校验则原样返回；</li>
-     *   <li>校验失败则用<b>无标记纯文本</b>重发一次（模型没有协议可破坏，
-     *       走久经验证的整段翻译路径），重试译文须通过
-     *       {@link #plainTextViolation} 防损坏校验；</li>
-     *   <li>重试译文也不合格则抛 {@link TranslationException}（PARSE），
-     *       宁可显示原文也不显示损坏内容。</li>
-     * </ol>
+     * 支离破碎），直接整条放弃会让消息永远显示原文。</p>
+     *
+     * <p><b>超时降级</b>的依据是实测：同一供应商用聊天客户端直发<b>纯文本</b>
+     * 长文响应很快，而模块的<b>带标记</b>长文（&lt;sN&gt; 标记 + 协议指令）
+     * 稳定 15s 无响应——标记+长内容会让小模型生成失控，非流式接口在生成
+     * 完成前不回任何字节，读超时随之触发。因此带标记请求超时后立即改发
+     * 无标记请求（等价于聊天客户端验证过的快路径），而不是让调度器把注定
+     * 超时的标记请求原样重试三遍。</p>
+     *
+     * <p>两种降级的重试译文都要通过 {@link #plainTextViolation} 防损坏校验，
+     * 不合格则抛 {@link TranslationException}（PARSE）——宁可显示原文也
+     * 不显示损坏内容。</p>
      *
      * @param requestText 本次请求文本（可能带分段标记）
      * @param rt          单次请求回调（内部处理协议/认证/提取）
@@ -260,7 +264,17 @@ public final class Segments {
      */
     public static String translateWithFallback(String requestText, RoundTrip rt)
             throws Exception {
-        String translated = rt.roundTrip(requestText);
+        String translated;
+        try {
+            translated = rt.roundTrip(requestText);
+        } catch (TranslationException te) {
+            if (te.kind() == TranslationException.Kind.TIMEOUT
+                    && isSegmented(requestText)) {
+                XLog.i("marked request timed out; falling back to plain text");
+                return plainRetry(requestText, null, rt);
+            }
+            throw te;
+        }
         if (!isSegmented(requestText)) {
             return translated;
         }
@@ -271,17 +285,25 @@ public final class Segments {
         }
         XLog.i("segment protocol violated (" + r.violation
                 + "); retrying once without markers");
+        return plainRetry(requestText, translated, rt);
+    }
+
+    /** 用无标记纯文本重发一次并做防损坏校验；{@code firstAnswer} 仅在理论不可达路径返回。 */
+    private static String plainRetry(String requestText, @Nullable String firstAnswer,
+                                     RoundTrip rt) throws Exception {
         String plain = strip(requestText);
         if (plain.trim().isEmpty()) {
             // 理论上不可达（分段请求必有非空内容）：保守返回首答。
-            return translated;
+            return firstAnswer;
         }
+        long t0 = System.currentTimeMillis();
         String retried = rt.roundTrip(plain);
         String violation = plainTextViolation(retried, plain);
         if (violation != null) {
             throw new TranslationException(TranslationException.Kind.PARSE,
                     "无标记重试译文未通过校验：" + violation);
         }
+        XLog.i("plain retry ok in " + (System.currentTimeMillis() - t0) + "ms");
         return retried;
     }
 

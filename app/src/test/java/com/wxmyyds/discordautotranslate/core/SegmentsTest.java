@@ -337,4 +337,78 @@ public class SegmentsTest {
         assertEquals(zh.toString(), Segments.translateWithFallback(source.toString(), rt));
         assertEquals(2, rt.sent.size());
     }
+
+    // ------------------------------------------------- 带标记请求超时的降级
+
+    /** 第一次调用抛超时、其后返回给定应答的假请求回调。 */
+    private static final class TimeoutFirstRoundTrip implements Segments.RoundTrip {
+        final List<String> sent = new ArrayList<>();
+        private final String later;
+
+        TimeoutFirstRoundTrip(String later) {
+            this.later = later;
+        }
+
+        @Override
+        public String roundTrip(String text) {
+            sent.add(text);
+            if (sent.size() == 1) {
+                throw new TranslationException(TranslationException.Kind.TIMEOUT,
+                        "请求超时（15000ms，Read timed out）");
+            }
+            return later;
+        }
+    }
+
+    @Test
+    public void markedRequestTimeoutFallsBackToPlainText() throws Exception {
+        // 实测：同供应商纯文本长文很快、带标记长文稳定超时（非流式接口在
+        // 生成完成前不回字节，标记+长内容让小模型生成失控）。
+        // 超时后必须立即改发无标记请求，而不是原样重试注定超时的请求。
+        TimeoutFirstRoundTrip rt = new TimeoutFirstRoundTrip("你好世界");
+        String out = Segments.translateWithFallback(
+                "<s1>hello</s1>\n<s2>world</s2>", rt);
+
+        assertEquals("你好世界", out);
+        assertEquals(2, rt.sent.size());
+        assertEquals("重试必须发送无标记纯文本", "hello\nworld", rt.sent.get(1));
+    }
+
+    @Test
+    public void plainRequestTimeoutPropagates() {
+        // 无标记请求超时 = 真网络/供应商问题，不能无限降级。
+        TimeoutFirstRoundTrip rt = new TimeoutFirstRoundTrip("不应到达");
+        try {
+            Segments.translateWithFallback("hello world", rt);
+            fail("无标记请求超时必须原样上抛");
+        } catch (TranslationException expected) {
+            assertEquals(TranslationException.Kind.TIMEOUT, expected.kind());
+        } catch (Exception other) {
+            fail("unexpected: " + other);
+        }
+        assertEquals(1, rt.sent.size());
+    }
+
+    @Test
+    public void markedRequestNonTimeoutErrorsDoNotTriggerPlainFallback() {
+        // 非超时错误（认证失败、限流等）按原逻辑上抛，由调度器决定重试。
+        Segments.RoundTrip rt = new Segments.RoundTrip() {
+            int calls;
+
+            @Override
+            public String roundTrip(String text) {
+                calls++;
+                throw new TranslationException(TranslationException.Kind.HTTP,
+                        "认证失败（请检查 API 密钥）");
+            }
+        };
+        try {
+            Segments.translateWithFallback("<s1>a</s1><s2>b</s2>", rt);
+            fail("非超时错误必须上抛");
+        } catch (TranslationException expected) {
+            assertEquals(TranslationException.Kind.HTTP, expected.kind());
+        } catch (Exception other) {
+            fail("unexpected: " + other);
+        }
+    }
 }

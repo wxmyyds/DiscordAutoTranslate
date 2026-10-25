@@ -401,7 +401,10 @@ public final class HookBridge {
         if (messageId == null || structurableText == null) {
             return;
         }
+        long t0 = System.currentTimeMillis();
         TextExtractor.Result ex = TextExtractor.extract(structurableText);
+        XLog.d("extract+mark " + messageId + " in "
+                + (System.currentTimeMillis() - t0) + "ms");
         if (ex == null || ex.text.trim().isEmpty()) {
             return;
         }
