@@ -29,6 +29,9 @@ public class ProtocolsTest {
         assertEquals(Config.DEF_MODEL, json.getString("model"));
         assertEquals(0, json.getDouble("temperature"), 0.0);
         assertEquals(0.2, json.getDouble("frequency_penalty"), 0.0);
+        // 流式：非流式接口生成完成前零字节返回，慢速供应商上长消息会被
+        // 总时长超时掐断；流式下读超时按字节间隔计算。
+        assertTrue("Compatible 协议必须请求流式", json.getBoolean("stream"));
         JSONArray messages = json.getJSONArray("messages");
         assertEquals(2, messages.length());
         assertEquals("system", messages.getJSONObject(0).getString("role"));
@@ -50,6 +53,42 @@ public class ProtocolsTest {
         assertEquals(0, json.getDouble("temperature"), 0.0);
         assertFalse("Responses 接口不接受 frequency_penalty", json.has("frequency_penalty"));
         assertFalse("Responses 接口没有 messages 字段", json.has("messages"));
+        assertFalse("Responses 协议暂不支持流式，不携带 stream", json.has("stream"));
+    }
+
+    // ------------------------------------------------------------ 流式响应提取
+
+    /** 流式帧按 delta 累积成完整译文；role/空帧与注释行不得混入。 */
+    @Test
+    public void streamedResponseAccumulatesDeltas() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n"
+                + "\n"
+                + ": keep-alive\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"，世界\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{}}]}\n"
+                + "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好，世界",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
+    /** 服务端忽略 stream 参数回普通 JSON 时，提取路径保持原样。 */
+    @Test
+    public void nonStreamedJsonResponseStillExtractsViaMessageContent() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"普通\"}}]}";
+        assertEquals("普通",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, json));
+    }
+
+    /** 只收到 role/usage 帧时累积为空，由引擎报“提取到的译文为空”。 */
+    @Test
+    public void streamedResponseWithoutContentDeltasIsEmpty() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n"
+                + "data: {\"usage\":{\"total_tokens\":10},\"choices\":[]}\n"
+                + "data: [DONE]\n";
+        assertEquals("",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
     }
 
     /**

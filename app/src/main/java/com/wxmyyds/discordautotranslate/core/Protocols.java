@@ -18,11 +18,14 @@ import java.util.Locale;
  * <ul>
  *   <li>{@link Config#PROTOCOL_OPENAI_COMPATIBLE}：{@code POST /v1/chat/completions}，
  *       请求体为 {@code messages}（system + user）+ {@code temperature:0} +
- *       {@code frequency_penalty:0.2}（与旧版默认模板逐字段等价），
- *       译文取 {@code choices.0.message.content}。</li>
+ *       {@code frequency_penalty:0.2} + {@code stream:true}（采样参数与旧版默认
+ *       模板逐字段等价；流式是为避免慢速供应商上长消息被总时长超时掐断），
+ *       译文从 SSE 帧累积 {@code choices.0.delta.content}，非流式 JSON 回退到
+ *       {@code choices.0.message.content}。</li>
  *   <li>{@link Config#PROTOCOL_OPENAI_RESPONSES}：{@code POST /v1/responses}，
  *       请求体为 {@code instructions} + {@code input} + {@code temperature:0}。
  *       不携带 {@code frequency_penalty}：OpenAI 官方 Responses 接口不接受该参数。
+ *       保持非流式（其流式事件格式不同，暂未支持）。
  *       译文在 {@code output} 数组中按类型扫描（推理模型会把 reasoning 项排在
  *       message 项之前，不能固定取 {@code output.0}）。</li>
  * </ul>
@@ -46,6 +49,12 @@ public final class Protocols {
 
     /**
      * 构造请求体 JSON。
+     *
+     * <p>Compatible 协议携带 {@code stream:true}：非流式接口在生成完成前
+     * 零字节返回，慢速供应商上长消息会被总时长超时掐断（实测 15s 读超时，
+     * 同供应商聊天客户端流式发送很快）；流式下 token 持续到达，读超时按
+     * 字节间隔计算，总生成时长不再受限。Responses 协议保持非流式
+     * （其流式事件格式不同，暂未支持）。</p>
      *
      * @throws TranslationException 理论上仅在 org.json 拒绝值时发生，统一归类为配置错误
      */
@@ -74,6 +83,7 @@ public final class Protocols {
                 body.put("messages", messages);
                 body.put("temperature", TEMPERATURE);
                 body.put("frequency_penalty", FREQUENCY_PENALTY);
+                body.put("stream", true);
             }
             return body.toString();
         } catch (JSONException e) {
@@ -117,14 +127,60 @@ public final class Protocols {
     /**
      * 从响应体提取译文。
      *
-     * @throws TranslationException 响应不是合法 JSON 或结构中取不到译文
+     * <p>SSE 流式响应（{@code data:} 帧开头）按帧累积
+     * {@code choices.0.delta.content}；非流式 JSON（服务端忽略 stream 参数）
+     * 走原有路径。</p>
      */
     public static String extractTranslation(String protocol, String responseBody)
             throws TranslationException {
         if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
             return extractResponsesText(responseBody);
         }
+        if (responseBody != null && responseBody.trim().startsWith("data:")) {
+            return extractStreamedChatText(responseBody);
+        }
         return JsonPath.extractString(responseBody, "choices.0.message.content");
+    }
+
+    /**
+     * 累积 chat/completions 流式帧里的 delta 文本。
+     *
+     * <p>帧形态：{@code data: {"choices":[{"delta":{"content":"片"}}]}}，
+     * 以 {@code data: [DONE]} 结束。role 帧/usage 帧的 delta.content 为空，
+     * 跳过即可；错误帧没有 content，累积结果为空由引擎报“译文为空”。</p>
+     */
+    private static String extractStreamedChatText(String responseBody)
+            throws TranslationException {
+        StringBuilder out = new StringBuilder();
+        try {
+            for (String rawLine : responseBody.split("\n", -1)) {
+                String line = rawLine.trim();
+                if (!line.startsWith("data:")) {
+                    continue; // 注释行（: keep-alive）与空行
+                }
+                String payload = line.substring("data:".length()).trim();
+                if (payload.isEmpty() || "[DONE]".equals(payload)) {
+                    continue;
+                }
+                JSONObject frame = new JSONObject(payload);
+                JSONArray choices = frame.optJSONArray("choices");
+                if (choices == null || choices.length() == 0) {
+                    continue;
+                }
+                JSONObject delta = choices.getJSONObject(0).optJSONObject("delta");
+                if (delta == null) {
+                    continue;
+                }
+                String piece = delta.optString("content", "");
+                if (!piece.isEmpty()) {
+                    out.append(piece);
+                }
+            }
+        } catch (JSONException e) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "流式响应帧不是合法 JSON：" + e.getMessage(), e);
+        }
+        return out.toString();
     }
 
     /**

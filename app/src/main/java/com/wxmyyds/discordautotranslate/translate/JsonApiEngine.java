@@ -72,7 +72,10 @@ public final class JsonApiEngine implements Scheduler.Engine {
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
         XLog.d("POST " + XLog.safeUrl(url) + " text=" + XLog.text(text));
         long t0 = System.currentTimeMillis();
-        Http.Response resp = http.postJson(url, body, headers);
+        // Compatible 协议请求体带 stream:true，按 SSE 读取（读到 [DONE] 为止）；
+        // Responses 协议保持非流式。
+        boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
+        Http.Response resp = http.postJson(url, body, headers, sse);
         XLog.d("POST round-trip " + (System.currentTimeMillis() - t0) + "ms");
 
         // 4) 状态码归类

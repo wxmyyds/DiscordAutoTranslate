@@ -2,9 +2,11 @@ package com.wxmyyds.discordautotranslate.core;
 
 import androidx.annotation.Nullable;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
@@ -140,6 +142,22 @@ public final class Http {
      */
     public Response postJson(String url, String jsonBody, Headers headers)
             throws TranslationException {
+        return postJson(url, jsonBody, headers, false);
+    }
+
+    /**
+     * 发送 JSON POST 请求。
+     *
+     * @param sse 请求体含 {@code stream:true} 时为 true：按行读取并在
+     *            {@code data: [DONE]} 处停止（不依赖服务端关流）。响应体
+     *            原样返回（SSE 帧文本），由协议层解析累积 delta。
+     *            <p>流式的意义：读超时按<b>字节间隔</b>计算，token 持续到达
+     *            就不会触发；非流式接口生成完成前零字节返回，长生成会被
+     *            总时长超时掐断（实测：慢速中转上长消息必超时）。</p>
+     * @throws TranslationException 网络或超时错误（已归类）
+     */
+    public Response postJson(String url, String jsonBody, Headers headers, boolean sse)
+            throws TranslationException {
         HttpURLConnection conn = null;
         final Thread worker = Thread.currentThread();
         try {
@@ -151,7 +169,7 @@ public final class Http {
             conn.setDoOutput(true);
             conn.setUseCaches(false);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("Accept", sse ? "text/event-stream" : "application/json");
 
             if (headers != null) {
                 for (String[] p : headers.pairs) {
@@ -168,7 +186,7 @@ public final class Http {
 
             int status = conn.getResponseCode();
             InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
-            String body = readAll(in);
+            String body = sse ? readUntilDone(in) : readAll(in);
             int retryAfter = parseIntSafe(conn.getHeaderField("Retry-After"));
 
             return new Response(status, body, retryAfter);
@@ -215,6 +233,35 @@ public final class Http {
                 bos.write(buf, 0, n);
             }
             return bos.toString("UTF-8");
+        }
+    }
+
+    /**
+     * 按行读取 SSE 响应体，读到 {@code data: [DONE]} 帧即停止。
+     *
+     * <p>不能读到流关闭为止：部分服务端发完 [DONE] 后保持连接不关，
+     * 等关闭会一直阻塞到读超时。非流式 JSON 响应（服务端忽略 stream 参数）
+     * 没有 [DONE]，读到 EOF 自然结束，行为与 {@link #readAll} 一致。</p>
+     */
+    @Nullable
+    private static String readUntilDone(@Nullable InputStream in) throws IOException {
+        if (in == null) {
+            return null;
+        }
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line).append('\n');
+                if (sb.length() > 1024 * 1024) {
+                    throw new IOException("HTTP response exceeds 1 MiB limit");
+                }
+                if ("data: [DONE]".equals(line.trim())) {
+                    break;
+                }
+            }
+            return sb.toString();
         }
     }
 
