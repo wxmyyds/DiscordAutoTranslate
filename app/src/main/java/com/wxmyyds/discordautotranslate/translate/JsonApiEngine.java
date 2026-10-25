@@ -40,22 +40,21 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
         }
         validateConfig(cfg);
-        // 分段请求的译文未通过标记校验、或带标记请求超时（标记+长内容会让
-        // 小模型生成失控，实测同供应商纯文本长文很快），都会在核心层自动
-        // 降级一次无标记请求（见 Segments.translateWithFallback）。
-        return Segments.translateWithFallback(text, this::requestOnce);
+        // 单一链路（用户决策）：一次无标记纯文本请求，不重试、不降级。
+        // 失败由调度器的既有错误重试处理；译文按行回填到各文本节点。
+        return requestOnce(text);
     }
 
     /**
      * 发送一次请求并返回协议提取后的译文。
      *
-     * <p>按协议构造请求体（带分段标记的请求追加 {@link Segments#RULE} 到
-     * 系统提示词末尾，不改动用户配置的提示词本身），发送后按协议提取译文。
-     * 由 {@link Segments#translateWithFallback} 作为单次请求回调复用。</p>
+     * <p>按协议构造请求体（请求文本若带分段标记会追加分段协议说明到系统
+     * 提示词末尾；单链路下请求恒为无标记纯文本，该分支不触发），发送后
+     * 按协议提取译文。</p>
      */
     private String requestOnce(String text) throws Exception {
-        // 1) 按协议构造请求体
-        String body = buildBody(text, true);
+        // 1) 按协议构造请求体（无标记请求不追加分段协议说明）
+        String body = buildBody(text);
         Http.Headers headers = buildHeaders();
 
         // 2) 发送（任务被取消时通过线程中断尽早退出）
@@ -69,13 +68,6 @@ public final class JsonApiEngine implements Scheduler.Engine {
         // Responses 协议保持非流式。
         boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
         Http.Response resp = http.postJson(url, body, headers, sse);
-        if (resp.status == 400) {
-            // 个别服务严格校验参数（如 OpenAI 官方不接受未知的
-            // enable_thinking/thinking 字段）：去掉关闭思考参数原样重发一次。
-            XLog.d("400 with thinking-suppression params; retrying without them");
-            body = buildBody(text, false);
-            resp = http.postJson(url, body, headers, sse);
-        }
         XLog.d("POST round-trip " + (System.currentTimeMillis() - t0) + "ms");
 
         // 3) 状态码归类
@@ -94,15 +86,14 @@ public final class JsonApiEngine implements Scheduler.Engine {
         return translated.trim();
     }
 
-    /** 构造一次请求体：带标记文本追加分段协议说明；可去掉思考等级参数。 */
-    private String buildBody(String text, boolean suppressThinking) throws Exception {
+    /** 构造一次请求体：请求文本带分段标记时追加分段协议说明（单链路下不触发）。 */
+    private String buildBody(String text) throws Exception {
         String systemPrompt = cfg.systemPrompt;
         if (Segments.isSegmented(text)) {
             systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()
                     ? "" : systemPrompt + "\n\n") + Segments.RULE;
         }
-        return Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model,
-                suppressThinking);
+        return Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model);
     }
 
     /**

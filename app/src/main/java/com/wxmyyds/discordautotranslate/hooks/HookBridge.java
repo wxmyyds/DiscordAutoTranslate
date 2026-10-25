@@ -410,13 +410,10 @@ public final class HookBridge {
         }
 
         Config.Snapshot cfg = config;
-        // 请求文本带分段标记（存在 ≥2 个文本节点时），使译文能逐段回填。
-        // 内容哈希仍以无标记纯文本为主：它决定「内容是否相同」。
-        // 但对启用标记的消息追加一个协议版本后缀：这类消息的译文形态变了
-        // （从「整段塞进首节点」变成「逐段带标记」），旧缓存条目必须失效，
-        // 否则已缓存的旧译文会继续走回退路径、格式照旧丢失。
-        // 单节点消息不受影响，其缓存与旧版本完全兼容。
-        String requestText = ex.segmented != null ? ex.segmented : ex.text;
+        // 单一链路（用户决策）：始终发送无标记纯文本，不做分段标记请求。
+        // 内容哈希沿用带分段后缀的键空间（仅作缓存命名空间，多段消息与
+        // 旧缓存条目隔离）。
+        String requestText = ex.text;
         String hash = contentHashOf(ex, cfg);
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
         rawContent.put(messageId, structurableText);

@@ -125,9 +125,8 @@ public final class ContentNodes {
                         + "); keeping original text");
                 return null;
             }
-            // 无标记译文：分段请求失败后引擎已用无标记重试并做过防损坏校验
-            // （见 Segments.translateWithFallback），单段请求本就无标记。
-            // 走整段回填的既有路径：按行切分分配到各节点。
+            // 无标记译文：单链路（无标记纯文本请求）的标准形态，
+            // 或单段请求——都走整段回填：按行切分分配到各节点。
             String plain = normalize(Segments.strip(translated));
             if (plain.isEmpty()) {
                 // 剔除后什么都不剩：不能清空消息，保留原文。

@@ -32,12 +32,6 @@ public class ProtocolsTest {
         // 流式：非流式接口生成完成前零字节返回，慢速供应商上长消息会被
         // 总时长超时掐断；流式下读超时按字节间隔计算。
         assertTrue("Compatible 协议必须请求流式", json.getBoolean("stream"));
-        // 关闭思考（SenseNova 官方文档字段）：reasoning_effort 枚举里的
-        // none 直接关闭思考模式（默认 high），thinking 开关置 disabled。
-        // 推理型模型默认档会把输出预算全花在思考上（实测 55s 零正文）。
-        assertEquals(Protocols.REASONING_EFFORT_NONE,
-                json.getString("reasoning_effort"));
-        assertEquals(Protocols.THINKING_DISABLED, json.getString("thinking"));
         JSONArray messages = json.getJSONArray("messages");
         assertEquals(2, messages.length());
         assertEquals("system", messages.getJSONObject(0).getString("role"));
@@ -60,18 +54,6 @@ public class ProtocolsTest {
         assertFalse("Responses 接口不接受 frequency_penalty", json.has("frequency_penalty"));
         assertFalse("Responses 接口没有 messages 字段", json.has("messages"));
         assertFalse("Responses 协议暂不支持流式，不携带 stream", json.has("stream"));
-        assertFalse("Responses 协议不携带思考等级参数", json.has("reasoning_effort"));
-    }
-
-    /** 引擎在服务端拒绝关闭思考参数（HTTP 400）后用该形态去参重发。 */
-    @Test
-    public void compatibleBodyWithoutThinkingEffortOmitsTheField() throws Exception {
-        String body = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
-                "hii", null, "m", false);
-        JSONObject json = new JSONObject(body);
-        assertFalse(json.has("reasoning_effort"));
-        assertFalse(json.has("thinking"));
-        assertTrue(json.getBoolean("stream"));
     }
 
     // ------------------------------------------------------------ 流式响应提取

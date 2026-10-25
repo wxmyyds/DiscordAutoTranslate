@@ -41,22 +41,6 @@ public final class Protocols {
     /** 轻度频率惩罚仅抑制重复，不承担“只翻译”约束；兼容接口需支持此参数。 */
     private static final double FREQUENCY_PENALTY = 0.2;
 
-    /**
-     * 关闭思考的参数组合（按 SenseNova 官方文档对齐）：
-     * <ul>
-     *   <li>{@code reasoning_effort:"none"} —— 官方枚举 low/medium/high/max
-     *       之外，{@code none} 直接关闭思考模式（默认 high）；</li>
-     *   <li>{@code thinking:"disabled"} —— 思考模式开关，字符串枚举
-     *       {@code enabled}/{@code disabled}，默认 enabled。</li>
-     * </ul>
-     * 两个字段同时发送互为保险。翻译任务不需要思考：推理型模型默认档会把
-     * 输出预算全花在思考上（实测 55s/196KB 帧零正文）。其他供应商不认识
-     * 这些字段时通常忽略；严格校验的服务回 400，引擎侧收到 400 会去参
-     * 重发一次。
-     */
-    public static final String REASONING_EFFORT_NONE = "none";
-    public static final String THINKING_DISABLED = "disabled";
-
     private static final String SUFFIX_CHAT_COMPLETIONS = "/chat/completions";
     private static final String SUFFIX_RESPONSES = "/responses";
 
@@ -76,20 +60,6 @@ public final class Protocols {
      */
     public static String requestBody(String protocol, String text,
                                      @Nullable String systemPrompt, String model)
-            throws TranslationException {
-        return requestBody(protocol, text, systemPrompt, model, true);
-    }
-
-    /**
-     * 构造请求体 JSON（可控制是否携带思考等级参数）。
-     *
-     * @param suppressThinking true 时携带 {@code reasoning_effort:"low"}；
-     *                          false 供引擎在服务端拒绝该参数（HTTP 400）后
-     *                          去参重发使用
-     */
-    public static String requestBody(String protocol, String text,
-                                     @Nullable String systemPrompt, String model,
-                                     boolean suppressThinking)
             throws TranslationException {
         String safeText = text == null ? "" : text;
         String safePrompt = systemPrompt == null ? "" : systemPrompt;
@@ -114,10 +84,6 @@ public final class Protocols {
                 body.put("temperature", TEMPERATURE);
                 body.put("frequency_penalty", FREQUENCY_PENALTY);
                 body.put("stream", true);
-                if (suppressThinking) {
-                    body.put("reasoning_effort", REASONING_EFFORT_NONE);
-                    body.put("thinking", THINKING_DISABLED);
-                }
             }
             return body.toString();
         } catch (JSONException e) {
