@@ -436,6 +436,92 @@ public class LongTextRegressionTest {
                 "免费 GEMINI 4 ARGON\n\n链接 GEMINI 4 ARGON -\n\n仅限 TELEGRAM"));
     }
 
+    // --------------------------------------------- 格式化文本与 URL 混排（2026-10 四次上报）
+
+    @Test
+    public void urlBetweenSegmentsIsNotOrphanedByParagraphAlignment() {
+        // 上报形态：URL 夹在同一段落的两个可翻译片段之间（如「描述 URL **加粗**」）。
+        // URL 链接显示文本不进请求，模型只能把整段回成一块；若段落级对齐把
+        // 整块塞进首片段、清空后续片段，URL 就与它的描述分离、视觉上跳到
+        // 相邻段落。修复后这种段落标记 unsafe，拒绝回填、整条保留原文。
+        List<Object> nodes = list(
+                new StrongContentNode(list(new TextContentNode("bold desc"))),
+                new TextContentNode(" "),
+                new LinkContentNode(list(new TextContentNode(
+                        "https://clck.ru/3Wfv9G")), new Object()),
+                new TextContentNode(" "),
+                new TextContentNode("trailing text"));
+
+        assertNull(ContentNodes.replaceText(nodes, "描述 尾巴"));
+        // 原节点树原样保留：URL 逐字符不变，各文字片段未被动过。
+        assertEquals("bold desc",
+                ((TextContentNode) ((StrongContentNode) nodes.get(0)).getContent().get(0))
+                        .getContent());
+        assertEquals("https://clck.ru/3Wfv9G",
+                ((TextContentNode) ((LinkContentNode) nodes.get(2)).getContent().get(0))
+                        .getContent());
+        assertEquals("trailing text", ((TextContentNode) nodes.get(4)).getContent());
+    }
+
+    @Test
+    public void urlOwnParagraphDoesNotBlockParagraphAlignment() {
+        // URL 独占一个段落（前后都是空行）：它不在任何两个片段之间，
+        // 不会孤立——段落级对齐正常工作，URL 原地保留。
+        LinkContentNode link = new LinkContentNode(list(new TextContentNode(
+                "https://clck.ru/3Wfv9G")), new Object());
+        List<Object> nodes = list(
+                new TextContentNode("para one"),
+                new TextContentNode("\n\n"),
+                link,
+                new TextContentNode("\n\n"),
+                new TextContentNode("para two"));
+
+        List<Object> out = ContentNodes.replaceText(nodes, "段落一\n\n段落二");
+
+        assertNotNull(out);
+        assertEquals("段落一", ((TextContentNode) out.get(0)).getContent());
+        assertSame("URL 原地保留", link, out.get(2));
+        assertEquals("https://clck.ru/3Wfv9G",
+                ((TextContentNode) ((LinkContentNode) out.get(2)).getContent().get(0))
+                        .getContent());
+        assertEquals("段落二", ((TextContentNode) out.get(4)).getContent());
+    }
+
+    @Test
+    public void repeatedBlocksWithUrlAfterBoldTranslateWithLinksInPlace() {
+        // 多链接 + 重复段落：URL 在加粗行内部（行内只有一个可翻译片段），
+        // 不构成「夹在两片段之间」——逐块正常翻译，链接各就各位。
+        List<Object> nodes = new ArrayList<>();
+        for (int g = 0; g < 2; g++) {
+            nodes.add(new StrongContentNode(list(
+                    new TextContentNode(" LINK GEMINI 4 ARGON - "),
+                    new LinkContentNode(list(new TextContentNode(
+                            "https://clck.ru/3Wfv9G")), new Object()),
+                    new TextContentNode(" "))));
+            if (g < 1) {
+                nodes.add(new TextContentNode("\n\n"));
+            }
+        }
+        StringBuilder translation = new StringBuilder();
+        for (int g = 0; g < 2; g++) {
+            if (g > 0) {
+                translation.append("\n\n");
+            }
+            translation.append("链接 GEMINI 4 ARGON -");
+        }
+        List<Object> out = ContentNodes.replaceText(nodes, translation.toString());
+
+        assertNotNull(out);
+        for (int g = 0; g < 2; g++) {
+            StrongContentNode strong = (StrongContentNode) out.get(g * 2);
+            assertEquals("链接 GEMINI 4 ARGON -",
+                    ((TextContentNode) strong.getContent().get(0)).getContent());
+            assertEquals("https://clck.ru/3Wfv9G",
+                    ((TextContentNode) ((LinkContentNode) strong.getContent().get(1))
+                            .getContent().get(0)).getContent());
+        }
+    }
+
     // ---------------------------------------------------------------- 混合格式的长文本
 
     @Test

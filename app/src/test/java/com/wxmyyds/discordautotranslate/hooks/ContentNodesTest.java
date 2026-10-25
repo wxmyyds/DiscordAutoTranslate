@@ -997,14 +997,14 @@ public class ContentNodesTest {
     @Test
     public void splitSinglePartIsUnchanged() {
         assertEquals(Arrays.asList("αβγ"), ContentNodes.splitTranslation("αβγ", 1,
-                Arrays.asList(0)));
+                ContentNodes.ParagraphGroups.of(0)));
     }
 
     @Test
     public void splitByLinesWhenLineCountMatches() {
         // 相邻单行节点、模型用单换行分段：非空行数与片段数一致 → 按行 1:1。
         List<String> parts = ContentNodes.splitTranslation("第一行\n第二行", 2,
-                Arrays.asList(0, 0));
+                ContentNodes.ParagraphGroups.of(0, 0));
         assertEquals(2, parts.size());
         assertEquals("第一行", parts.get(0));
         assertEquals("第二行", parts.get(1));
@@ -1014,7 +1014,8 @@ public class ContentNodesTest {
     public void splitRejectsExtraLinesWhenStructureMismatches() {
         // 行数多于片段数且段落也对不上：旧实现把多余行合并塞进最后一段
         // （堆叠=乱序来源），现在必须拒绝，保留原文。
-        assertNull(ContentNodes.splitTranslation("a\nb\nc\nd", 2, Arrays.asList(0, 1)));
+        assertNull(ContentNodes.splitTranslation("a\nb\nc\nd", 2,
+                ContentNodes.ParagraphGroups.of(0, 1)));
     }
 
     @Test
@@ -1022,20 +1023,36 @@ public class ContentNodesTest {
         // 同段落的多个内联片段（如加粗+普通文本相邻），模型按段落返回一块：
         // 译文进本段第一个片段，段内其余置空——有格式文本的翻译靠这级落位。
         assertEquals(Arrays.asList("只有一行", "", ""),
-                ContentNodes.splitTranslation("只有一行", 3, Arrays.asList(0, 0, 0)));
+                ContentNodes.splitTranslation("只有一行", 3,
+                        ContentNodes.ParagraphGroups.of(0, 0, 0)));
     }
 
     @Test
     public void splitAlignsChunksToFirstFragmentOfEachParagraph() {
         // 两个段落（第一段 2 个内联片段、第二段 1 个片段）：每段译文进本段首片段。
         assertEquals(Arrays.asList("译一", "", "译二"),
-                ContentNodes.splitTranslation("译一\n\n译二", 3, Arrays.asList(0, 0, 1)));
+                ContentNodes.splitTranslation("译一\n\n译二", 3,
+                        ContentNodes.ParagraphGroups.of(0, 0, 1)));
+    }
+
+    @Test
+    public void splitRejectsParagraphAlignmentWhenUnsafe() {
+        // unsafe 段落（片段之间夹着 URL 等可见内容）禁止段落级对齐：
+        // 强行对齐会把夹住的节点孤立（URL 与描述分离）。
+        ContentNodes.ParagraphGroups unsafe = ContentNodes.ParagraphGroups.of(0, 0);
+        unsafe.unsafe.set(0);
+        assertNull(ContentNodes.splitTranslation("整段一块", 2, unsafe));
+        // 没有 unsafe 标记的相同分组照常对齐。
+        assertEquals(Arrays.asList("整段一块", ""),
+                ContentNodes.splitTranslation("整段一块", 2,
+                        ContentNodes.ParagraphGroups.of(0, 0)));
     }
 
     @Test
     public void splitRejectsBlankLineWhenLineCountMatches() {
         // 三个独立段落只回两段：跨段落合并 = 内容丢失，必须拒绝。
-        assertNull(ContentNodes.splitTranslation("甲\n\n乙", 3, Arrays.asList(0, 1, 2)));
+        assertNull(ContentNodes.splitTranslation("甲\n\n乙", 3,
+                ContentNodes.ParagraphGroups.of(0, 1, 2)));
     }
 
     @Test
@@ -1043,7 +1060,7 @@ public class ContentNodesTest {
         // 段落块数与片段数一致：每块整体落到一个片段（块内单换行保留），
         // 不再按裸行切——按行切会把第二行并进第一片段、空行后的内容堆到尾部。
         List<String> parts = ContentNodes.splitTranslation("第一块\n第二行\n\n第二块", 2,
-                Arrays.asList(0, 1));
+                ContentNodes.ParagraphGroups.of(0, 1));
         assertEquals(2, parts.size());
         assertEquals("第一块\n第二行", parts.get(0));
         assertEquals("第二块", parts.get(1));
@@ -1053,11 +1070,12 @@ public class ContentNodesTest {
     public void splitRejectsWhenMoreParagraphBlocksThanTargets() {
         // 译文段落块多于片段数 = 模型新增/复读内容：拒绝回填（null），
         // 不得把多出的块堆进最后一个节点。
-        assertNull(ContentNodes.splitTranslation("A\n\nB\n\nC", 2, Arrays.asList(0, 1)));
+        assertNull(ContentNodes.splitTranslation("A\n\nB\n\nC", 2,
+                ContentNodes.ParagraphGroups.of(0, 1)));
         // URL 块与空段落不算块：URL 回显不触发拒绝。
         assertEquals(Arrays.asList("甲", "乙"),
                 ContentNodes.splitTranslation("甲\n\nhttps://gofile.io/d/abc\n\n乙", 2,
-                        Arrays.asList(0, 1)));
+                        ContentNodes.ParagraphGroups.of(0, 1)));
     }
 
     @Test

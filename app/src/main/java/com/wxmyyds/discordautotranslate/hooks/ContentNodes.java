@@ -134,14 +134,14 @@ public final class ContentNodes {
                 // 剔除后什么都不剩：不能清空消息，保留原文。
                 return null;
             }
-            List<Integer> groupIds = collectGroupIds(nodes);
-            parts = splitTranslation(plain, targetCount, groupIds);
+            ParagraphGroups groups = collectGroupIds(nodes);
+            parts = splitTranslation(plain, targetCount, groups);
             if (parts == null) {
-                int groups = groupIds.isEmpty() ? 0 : groupIds.get(groupIds.size() - 1) + 1;
                 XLog.d("markerless structure mismatch: targets=" + targetCount
                         + " blocks=" + translatableChunks(plain).size()
                         + " lines=" + plain.split("\n", -1).length
-                        + " paragraphs=" + groups
+                        + " paragraphs=" + groups.count()
+                        + " unsafeParagraphs=" + groups.unsafe.cardinality()
                         + " head=" + XLog.text(plain));
                 return null;
             }
@@ -515,11 +515,13 @@ public final class ContentNodes {
      * <ol>
      *   <li>译文段落块数 == 片段数 → 每块落到自己的节点（保结构译文）；</li>
      *   <li>非空行数 == 片段数 → 按行 1:1（相邻单行节点、模型用单换行分段）；</li>
-     *   <li>译文段落块数 == 段落数（{@code groupIds} 的最大组号+1）→ 段落
-     *       对齐：每个空行段落的译文落在本段<b>第一个</b>片段，段内其余
-     *       片段置空。有格式的内联消息（加粗/行内代码/掩码链接把一句话
-     *       拆成多个片段，但纯文本里它们连成一段）只能这样落位——模型
-     *       按段落返回一块译文，片段级永远对不上；</li>
+     *   <li>译文段落块数 == 段落数（{@code groups}）且<b>没有任何段落被标记
+     *       unsafe</b>（片段之间夹有 URL/代码/emoji 等）→ 段落对齐：每个空行
+     *       段落的译文落在本段<b>第一个</b>片段，段内其余片段置空。有格式的
+     *       内联消息（加粗/行内代码/掩码链接把一句话拆成多个片段，但纯文本里
+     *       它们连成一段）只能这样落位——模型按段落返回一块译文，片段级永远
+     *       对不上；unsafe 段落若强行对齐，夹在片段之间的 URL 会被孤立
+     *       （链接与描述分离），必须拒绝；</li>
      *   <li>其余返回 null，整条保留原文。</li>
      * </ol>
      *
@@ -529,13 +531,13 @@ public final class ContentNodes {
      * 节点被置空、消息膨胀」来源，必须拒绝；模型按段落返回（提示词
      * 规则 5 的要求）则段落对齐能完整落位。</p>
      *
-     * @param groupIds 每个可翻译片段的段落组编号（0 起，与 parts 同长、
-     *                 与片段枚举同序），见 {@link #collectGroupIds}
+     * @param groups 每个可翻译片段的段落分组与 unsafe 标记，
+     *               见 {@link #collectGroupIds}
      * @return 片段列表；结构无法对齐时返回 null（拒绝回填）
      */
     @Nullable
     static List<String> splitTranslation(String translated, int parts,
-                                         List<Integer> groupIds) {
+                                         ParagraphGroups groups) {
         List<String> out = new ArrayList<>(parts);
         if (parts <= 1) {
             out.add(translated);
@@ -562,16 +564,18 @@ public final class ContentNodes {
                 return out;
             }
         }
-        int groups = groupIds.isEmpty() ? 0 : groupIds.get(groupIds.size() - 1) + 1;
-        if (chunks.size() == groups && groupIds.size() == parts) {
+        int paraCount = groups.count();
+        if (chunks.size() == paraCount && groups.ids.size() == parts
+                && groups.unsafe.isEmpty()) {
             // 段落对齐：每个段落块的译文进本段第一个片段，段内其余置空。
+            // unsafe 段落禁止（见 ParagraphGroups：URL 等会被孤立）。
             for (int i = 0; i < parts; i++) {
                 out.add("");
             }
             int j = 0;
             int lastGroup = -1;
             for (int i = 0; i < parts && j < chunks.size(); i++) {
-                int g = groupIds.get(i);
+                int g = groups.ids.get(i);
                 if (g != lastGroup) {
                     out.set(i, chunks.get(j++));
                     lastGroup = g;
@@ -598,25 +602,49 @@ public final class ContentNodes {
     }
 
     /**
-     * 推导每个可翻译片段所属的「显示段落」组号（0 起），枚举顺序与
-     * {@link #countTextNodes}/rebuild 完全一致。
+     * 片段 → 显示段落的分组结果（段落级对齐的输入）。
      *
-     * <p>段落边界（硬边界）：节点内的空行分隔、片段之间结构分隔里含
-     * ≥2 个换行（空行文本节点、节点首尾空白与换行节点的组合）。相邻
-     * 片段、单换行分隔（换行节点、列表项）是同一段——这与发给模型的
-     * 纯文本段落划分一致（模型按空行感知段落，提示词规则 5 也按空行
-     * 要求保真），因此「译文块数 == 段落数」时每块译文能确定地落回
-     * 本段第一个片段。</p>
+     * <p>{@code unsafe} 标记「同一段落内两个片段之间夹有不可翻译的可见内容」
+     * （URL 链接、行内代码、emoji/提及、列表符号、URL 文本块）。段落级对齐
+     * 会把整段译文塞进首片段、清空其余片段——夹在中间的可见节点随之被孤立：
+     * URL 与它的描述文字分离，视觉上跳到相邻段落（实测上报形态）。标记过的
+     * 段落禁止段落级对齐，整条保留原文。</p>
      */
-    private static List<Integer> collectGroupIds(@Nullable List<?> nodes) {
-        List<Integer> ids = new ArrayList<>();
-        int[] group = {0};
-        walkGroupIds(nodes, ids, group, new StringBuilder(), 0);
-        return ids;
+    static final class ParagraphGroups {
+        /** 每个可翻译片段的段落组号（0 起，与片段枚举同序）。 */
+        final List<Integer> ids = new ArrayList<>();
+        /** 组号 → 该段落内片段之间夹有不可翻译的可见内容。 */
+        final java.util.BitSet unsafe = new java.util.BitSet();
+
+        int count() {
+            return ids.isEmpty() ? 0 : ids.get(ids.size() - 1) + 1;
+        }
+
+        /** 测试与诊断用：按给定组号构造，无 unsafe 标记。 */
+        static ParagraphGroups of(int... ids) {
+            ParagraphGroups g = new ParagraphGroups();
+            for (int id : ids) {
+                g.ids.add(id);
+            }
+            return g;
+        }
     }
 
-    private static void walkGroupIds(@Nullable List<?> nodes, List<Integer> ids,
-                                     int[] group, StringBuilder sep, int depth) {
+    private static ParagraphGroups collectGroupIds(@Nullable List<?> nodes) {
+        GroupWalk w = new GroupWalk();
+        walkGroupIds(nodes, w, 0);
+        return w.out;
+    }
+
+    private static final class GroupWalk {
+        final ParagraphGroups out = new ParagraphGroups();
+        int group = 0;
+        final StringBuilder sep = new StringBuilder();
+        /** 自上一片段以来，分隔里是否夹了不可翻译的可见内容。 */
+        boolean sepOpaque;
+    }
+
+    private static void walkGroupIds(@Nullable List<?> nodes, GroupWalk w, int depth) {
         if (nodes == null || depth > 12) {
             return;
         }
@@ -625,7 +653,7 @@ public final class ContentNodes {
                 continue;
             }
             if (n instanceof List) {
-                walkGroupIds((List<?>) n, ids, group, sep, depth + 1);
+                walkGroupIds((List<?>) n, w, depth + 1);
                 continue;
             }
             String simple = n.getClass().getSimpleName();
@@ -635,62 +663,85 @@ public final class ContentNodes {
                     continue;
                 }
                 if (BlankLines.isBlank(s)) {
-                    sep.append(s); // 空行结构节点：段落分隔的一部分
+                    w.sep.append(s); // 空行结构节点：段落分隔的一部分
                     continue;
                 }
                 int lead = TextExtractor.leadingWhitespace(s);
                 int tail = TextExtractor.trailingWhitespaceStart(s);
-                sep.append(s, 0, lead);
+                w.sep.append(s, 0, lead);
                 BlankLines.Split split = BlankLines.split(s.substring(lead, tail));
                 for (int i = 0; i < split.chunks.size(); i++) {
                     if (i > 0) {
-                        sep.append(split.separators.get(i - 1)); // 节点内空行：硬边界
+                        w.sep.append(split.separators.get(i - 1)); // 节点内空行：硬边界
                     }
                     String chunk = split.chunks.get(i);
-                    if (BlankLines.isBlank(chunk) || TextExtractor.isUrlLike(chunk)) {
-                        sep.append(chunk); // 不翻译的块：留在分隔流里
+                    if (BlankLines.isBlank(chunk)) {
+                        w.sep.append(chunk);
                         continue;
                     }
-                    if (!ids.isEmpty() && countNewlines(sep) >= 2) {
-                        group[0]++;
+                    if (TextExtractor.isUrlLike(chunk)) {
+                        // URL 文本块原样保留在分隔流里；夹在两片段之间时不可被对齐孤立。
+                        w.sep.append(chunk);
+                        w.sepOpaque = true;
+                        continue;
                     }
-                    ids.add(group[0]);
-                    sep.setLength(0);
+                    addSegment(w);
                 }
-                sep.append(s, tail, s.length());
+                w.sep.append(s, tail, s.length());
                 continue;
             }
             if (CODE_NODES.contains(simple)) {
-                sep.append("InlineCodeContentNode".equals(simple) ? ' ' : '\n');
+                w.sep.append("InlineCodeContentNode".equals(simple) ? ' ' : '\n');
+                w.sepOpaque = true;
                 continue;
             }
             if ("LinkContentNode".equals(simple) && TextExtractor.linkDisplayIsUrl(n)) {
-                sep.append(' ');
+                w.sep.append(' ');
+                w.sepOpaque = true;
                 continue;
             }
             if (BLANK_NODES.contains(simple)) {
-                sep.append('\n');
+                w.sep.append('\n');
                 continue;
             }
             List<?> inner = childListOf(n, simple);
             if (inner != null) {
                 if (BULLET_LIST.equals(simple)) {
                     for (Object item : inner) {
-                        sep.append("\n• "); // 列表项间单换行：同段
+                        // 项目符号渲染在上一项片段与本项片段之间，同样不可被孤立。
+                        w.sep.append("\n• ");
+                        w.sepOpaque = true;
                         if (item instanceof List) {
-                            walkGroupIds((List<?>) item, ids, group, sep, depth + 1);
+                            walkGroupIds((List<?>) item, w, depth + 1);
                         } else if (item != null) {
                             walkGroupIds(java.util.Collections.singletonList(item),
-                                    ids, group, sep, depth + 1);
+                                    w, depth + 1);
                         }
                     }
                     continue;
                 }
-                walkGroupIds(inner, ids, group, sep, depth + 1);
+                walkGroupIds(inner, w, depth + 1);
                 continue;
             }
-            sep.append(' '); // 提及/emoji 等不透明节点
+            w.sep.append(' '); // 提及/emoji 等不透明节点
+            w.sepOpaque = true;
         }
+    }
+
+    /** 记录一个可翻译片段：先判断段落递增，再判断是否与上一片段之间夹了可见内容。 */
+    private static void addSegment(GroupWalk w) {
+        if (!w.out.ids.isEmpty() && countNewlines(w.sep) >= 2) {
+            w.group++;
+            // 新段落以本片段开头：之前夹的内容位于本段首片段之前，不会孤立。
+            w.sepOpaque = false;
+        } else if (w.sepOpaque && !w.out.ids.isEmpty()
+                && w.out.ids.get(w.out.ids.size() - 1).equals(w.group)) {
+            // 同一段落里，上一片段与本片段之间夹着不可翻译的可见内容。
+            w.out.unsafe.set(w.group);
+        }
+        w.out.ids.add(w.group);
+        w.sep.setLength(0);
+        w.sepOpaque = false;
     }
 
     private static int countNewlines(CharSequence s) {
