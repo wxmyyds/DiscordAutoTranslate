@@ -8,11 +8,13 @@ import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -20,11 +22,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.JsonTemplate;
 import com.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import com.wxmyyds.discordautotranslate.translate.ApiTester;
 
-import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -36,6 +36,9 @@ import io.github.libxposed.service.XposedService;
 
 /** 设置界面（需求 §5.7）。 */
 public class SettingsActivity extends Activity implements XposedServiceConnectionHolder.Listener {
+
+    /** 下拉框显示顺序：0=OpenAI-Responses，1=OpenAI-Compatible。 */
+    private static final String[] PROTOCOL_ENTRIES = {"OpenAI-Responses", "OpenAI-Compatible"};
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService testExecutor = Executors.newSingleThreadExecutor();
@@ -53,14 +56,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private boolean saveInProgress;
     private boolean destroyed;
 
+    private Spinner protocolSpinner;
     private EditText urlInput;
     private EditText keyInput;
     private EditText modelInput;
     private EditText targetLangInput;
     private EditText headersInput;
     private EditText systemPromptInput;
-    private EditText bodyTemplateInput;
-    private EditText responsePathInput;
     private EditText timeoutInput;
     private EditText concurrencyInput;
     private CheckBox enabledInput;
@@ -144,6 +146,25 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         enabledInput.setText("启用自动翻译");
         root.addView(enabledInput, matchWrap());
 
+        // 供应商协议：请求体与译文解析按所选协议内置实现，
+        // 不再让用户手写 JSON 请求模板与译文提取路径。
+        TextView protocolLabel = new TextView(this);
+        protocolLabel.setText("供应商协议");
+        protocolLabel.setPadding(0, dp(8), 0, 0);
+        root.addView(protocolLabel, matchWrap());
+        protocolSpinner = new Spinner(this);
+        ArrayAdapter<String> protocolAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, PROTOCOL_ENTRIES);
+        protocolAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        protocolSpinner.setAdapter(protocolAdapter);
+        protocolSpinner.setSelection(positionOf(Config.DEF_PROTOCOL));
+        root.addView(protocolSpinner, matchWrap());
+        TextView protocolHint = new TextView(this);
+        protocolHint.setTextSize(12f);
+        protocolHint.setText("OpenAI-Responses 对应 …/v1/responses，OpenAI-Compatible 对应 "
+                + "…/v1/chat/completions。请求时若 API URL 以另一协议的端点结尾，会自动改写为当前协议端点。");
+        root.addView(protocolHint, matchWrap());
+
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
         urlInput = addField(root, "API URL", Config.DEF_API_URL,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -153,12 +174,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
         headersInput = addField(root, "额外请求头（每行 Name: Value）", "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        systemPromptInput = addField(root, "系统提示词（多行，在模板里用 {{system}} 引用）",
+        systemPromptInput = addField(root, "系统提示词（多行）",
                 Config.DEF_SYSTEM_PROMPT,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        bodyTemplateInput = addField(root, "JSON 请求模板（{{text}} / {{system}} / {{target}} / {{model}}）",
-                Config.DEF_BODY_TEMPLATE, InputType.TYPE_CLASS_TEXT);
-        responsePathInput = addField(root, "响应译文提取路径", Config.DEF_RESPONSE_PATH, InputType.TYPE_CLASS_TEXT);
         timeoutInput = addField(root, "超时（毫秒）", String.valueOf(Config.DEF_TIMEOUT_MS),
                 InputType.TYPE_CLASS_NUMBER);
         concurrencyInput = addField(root, "最大并发", String.valueOf(Config.DEF_MAX_CONCURRENCY),
@@ -236,6 +254,17 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
+    /** 下拉框位置 → 协议存储值。未知位置回落默认协议。 */
+    private static String protocolAt(int position) {
+        return position == 0
+                ? Config.PROTOCOL_OPENAI_RESPONSES : Config.PROTOCOL_OPENAI_COMPATIBLE;
+    }
+
+    /** 协议存储值 → 下拉框位置；未知值按默认协议处理。 */
+    private static int positionOf(String protocol) {
+        return Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol) ? 0 : 1;
+    }
+
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
@@ -249,14 +278,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
         Config.Snapshot snapshot = Config.read(currentPrefs);
         enabledInput.setChecked(snapshot.enabled);
+        protocolSpinner.setSelection(positionOf(snapshot.protocol));
         urlInput.setText(snapshot.apiUrl);
         keyInput.setText(snapshot.apiKey);
         modelInput.setText(snapshot.model);
         targetLangInput.setText(snapshot.targetLang);
         headersInput.setText(snapshot.extraHeaders);
-        bodyTemplateInput.setText(snapshot.bodyTemplate);
         systemPromptInput.setText(snapshot.systemPrompt);
-        responsePathInput.setText(snapshot.responsePath);
         timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
         concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
         verboseInput.setChecked(snapshot.verboseLog);
@@ -267,35 +295,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             updateStatus("未连接 LSPosed 服务，无法保存。请确认模块已在 LSPosed 中启用并勾选作用域。");
             return;
         }
-
-        Config.Snapshot snapshot = snapshotFromUi();
-        // 用 Config.read 后的有效模板检查占位符；空白字段会按既有逻辑回落默认模板。
-        List<String> missing = JsonTemplate.missingKeyPlaceholders(snapshot.bodyTemplate);
-        if (!missing.isEmpty()) {
-            warnMissingPlaceholders(missing, snapshot);
-            return;
-        }
-        commitSnapshot(snapshot);
-    }
-
-    /** 使用实际有效模板提示缺少的关键占位符；不替换或迁移用户模板。 */
-    private void warnMissingPlaceholders(List<String> missing, Config.Snapshot snapshot) {
-        StringBuilder message = new StringBuilder("有效 JSON 请求模板缺少以下占位符：\n\n");
-        for (String placeholder : missing) {
-            message.append("  •  ").append(placeholder);
-            if ("{{text}}".equals(placeholder)) {
-                message.append("　—— 消息正文不会进入请求模板，翻译请求可能无法正常工作\n");
-            } else {
-                message.append("　—— 系统提示词不会进入请求模板\n");
-            }
-        }
-        message.append("\n请确认这是有意为之；若否，请先修正模板。仍要保存当前有效配置吗？");
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("请求模板配置提醒")
-                .setMessage(message.toString())
-                .setPositiveButton("仍然保存", (dialog, which) -> commitSnapshot(snapshot))
-                .setNegativeButton("返回修改", null)
-                .show();
+        commitSnapshot(snapshotFromUi());
     }
 
     private void commitSnapshot(Config.Snapshot snapshot) {
@@ -311,14 +311,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         try {
             editor = targetPrefs.edit();
             editor.putBoolean(Config.KEY_ENABLED, snapshot.enabled);
+            editor.putString(Config.KEY_PROTOCOL, snapshot.protocol);
             editor.putString(Config.KEY_API_URL, snapshot.apiUrl);
             editor.putString(Config.KEY_API_KEY, snapshot.apiKey);
             editor.putString(Config.KEY_MODEL, snapshot.model);
             editor.putString(Config.KEY_TARGET_LANG, snapshot.targetLang);
             editor.putString(Config.KEY_EXTRA_HEADERS, snapshot.extraHeaders);
             editor.putString(Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt);
-            editor.putString(Config.KEY_BODY_TEMPLATE, snapshot.bodyTemplate);
-            editor.putString(Config.KEY_RESPONSE_PATH, snapshot.responsePath);
             editor.putInt(Config.KEY_TIMEOUT_MS, snapshot.timeoutMs);
             editor.putInt(Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency);
             editor.putBoolean(Config.KEY_VERBOSE_LOG, snapshot.verboseLog);
@@ -386,14 +385,14 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private Config.Snapshot snapshotFromUi() {
         MemoryPrefs memoryPrefs = new MemoryPrefs();
         memoryPrefs.put(Config.KEY_ENABLED, enabledInput.isChecked());
+        memoryPrefs.put(Config.KEY_PROTOCOL,
+                protocolAt(protocolSpinner.getSelectedItemPosition()));
         memoryPrefs.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
         memoryPrefs.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
-        memoryPrefs.put(Config.KEY_BODY_TEMPLATE, bodyTemplateInput.getText().toString());
-        memoryPrefs.put(Config.KEY_RESPONSE_PATH, responsePathInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
         memoryPrefs.put(Config.KEY_MAX_CONCURRENCY,
                 parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));

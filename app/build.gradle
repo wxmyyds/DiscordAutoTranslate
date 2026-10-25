@@ -43,7 +43,7 @@ android {
 
     testOptions {
         unitTests {
-            // 纯逻辑单测（模板渲染、路径提取、调度语义、缓存）不依赖 Android 框架，
+            // 纯逻辑单测（协议请求构造、路径提取、调度语义、缓存）不依赖 Android 框架，
             // 只需 org.json（JDK 自带的 JSON 实现来自 Android，单测环境不可用）。
             returnDefaultValues = true
         }

@@ -8,7 +8,7 @@ import static org.junit.Assert.assertTrue;
 
 import com.wxmyyds.discordautotranslate.core.Config;
 import com.wxmyyds.discordautotranslate.core.JsonPath;
-import com.wxmyyds.discordautotranslate.core.JsonTemplate;
+import com.wxmyyds.discordautotranslate.core.Protocols;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
 import com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.AnnotatedStructurableText;
 import com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmojiContentNode;
@@ -132,9 +132,9 @@ public class StructurableTextFactoryTest {
                 list(mention, new TextContentNode(body)));
         TextExtractor.Result extracted = TextExtractor.extract(original);
         assertNotNull(extracted);
-        JsonTemplate.RenderResult request = JsonTemplate.render(Config.DEF_BODY_TEMPLATE,
-                extracted.text, Config.DEF_TARGET_LANG, Config.DEF_MODEL, Config.DEF_SYSTEM_PROMPT);
-        assertEquals(" " + body, JsonPath.extractString(request.body, "messages.1.content"));
+        String request = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
+                extracted.text, Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
+        assertEquals(" " + body, JsonPath.extractString(request, "messages.1.content"));
 
         // 模拟正常接口译文，仅验证本地回填；不声称测试了真实模型输出。
         String translation = "兄弟，给我推荐一些设计系统技能";

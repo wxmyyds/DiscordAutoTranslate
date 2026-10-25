@@ -31,8 +31,7 @@ public class ConfigTest {
         assertEquals(Config.DEF_MODEL, s.model);
         assertEquals(Config.DEF_TARGET_LANG, s.targetLang);
         assertEquals(Config.DEF_SYSTEM_PROMPT, s.systemPrompt);
-        assertEquals(Config.DEF_BODY_TEMPLATE, s.bodyTemplate);
-        assertEquals(Config.DEF_RESPONSE_PATH, s.responsePath);
+        assertEquals(Config.DEF_PROTOCOL, s.protocol);
         assertEquals(Config.DEF_TIMEOUT_MS, s.timeoutMs);
         assertEquals(Config.DEF_MAX_CONCURRENCY, s.maxConcurrency);
     }
@@ -89,17 +88,14 @@ public class ConfigTest {
                 .put(Config.KEY_API_URL, "")
                 .put(Config.KEY_MODEL, "   ")
                 .put(Config.KEY_TARGET_LANG, "")
-                .put(Config.KEY_SYSTEM_PROMPT, "  \n ")
-                .put(Config.KEY_BODY_TEMPLATE, "")
-                .put(Config.KEY_RESPONSE_PATH, "\t");
+                .put(Config.KEY_SYSTEM_PROMPT, "  \n ");
 
         Config.Snapshot s = Config.read(p);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
         assertEquals(Config.DEF_MODEL, s.model);
         assertEquals(Config.DEF_TARGET_LANG, s.targetLang);
         assertEquals(Config.DEF_SYSTEM_PROMPT, s.systemPrompt);
-        assertEquals(Config.DEF_BODY_TEMPLATE, s.bodyTemplate);
-        assertEquals(Config.DEF_RESPONSE_PATH, s.responsePath);
+        assertEquals(Config.DEF_PROTOCOL, s.protocol);
     }
 
     /** null 值同样回落默认值。 */
@@ -107,11 +103,35 @@ public class ConfigTest {
     public void nullValuesFallBackToDefaults() {
         MemoryPrefs p = new MemoryPrefs()
                 .put(Config.KEY_API_URL, null)
-                .put(Config.KEY_RESPONSE_PATH, null);
+                .put(Config.KEY_PROTOCOL, null);
 
         Config.Snapshot s = Config.read(p);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
-        assertEquals(Config.DEF_RESPONSE_PATH, s.responsePath);
+        assertEquals(Config.DEF_PROTOCOL, s.protocol);
+    }
+
+    /** 协议只接受两个已知值；空白与未知字符串（含类型异常）一律回落默认协议。 */
+    @Test
+    public void protocolOnlyAcceptsKnownValues() {
+        assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_RESPONSES)).protocol);
+        assertEquals(Config.PROTOCOL_OPENAI_COMPATIBLE, Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_COMPATIBLE)).protocol);
+        assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, "gemini")).protocol);
+        assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, " ")).protocol);
+        assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, 17)).protocol);
+    }
+
+    /** 协议改变请求与解析方式，必须参与配置版本，切换后旧缓存/在途结果失效。 */
+    @Test
+    public void protocolChangeChangesConfigVersion() {
+        String base = Config.read(new MemoryPrefs()).version();
+        String switched = Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_RESPONSES)).version();
+        assertNotEquals("protocol change must change version", base, switched);
     }
 
     /** 用户填了有效值时必须用用户的值，不能被默认值覆盖。 */
@@ -122,29 +142,28 @@ public class ConfigTest {
                 .put(Config.KEY_MODEL, "my-model")
                 .put(Config.KEY_TARGET_LANG, "日本語")
                 .put(Config.KEY_SYSTEM_PROMPT, "只翻译。")
-                .put(Config.KEY_RESPONSE_PATH, "data.text");
+                .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_RESPONSES);
 
         Config.Snapshot s = Config.read(p);
         assertEquals("https://example.com/v1/chat/completions", s.apiUrl);
         assertEquals("my-model", s.model);
         assertEquals("日本語", s.targetLang);
         assertEquals("只翻译。", s.systemPrompt);
-        assertEquals("data.text", s.responsePath);
+        assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, s.protocol);
         // 默认值不得生效
         assertNotEquals(Config.DEF_MODEL, s.model);
+        assertNotEquals(Config.DEF_PROTOCOL, s.protocol);
     }
 
     @Test
-    public void savedPromptAndSamplingSettingsAreNotSilentlyOverwritten() {
+    public void savedPromptAndProtocolAreNotSilentlyOverwritten() {
         String prompt = "My custom translation instructions";
-        String template = "{\"model\":\"{{model}}\",\"temperature\":0.7,"
-                + "\"frequency_penalty\":0,\"text\":\"{{text}}\",\"system\":\"{{system}}\"}";
         Config.Snapshot snapshot = Config.read(new MemoryPrefs()
                 .put(Config.KEY_SYSTEM_PROMPT, prompt)
-                .put(Config.KEY_BODY_TEMPLATE, template));
+                .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_RESPONSES));
 
         assertEquals(prompt, snapshot.systemPrompt);
-        assertEquals(template, snapshot.bodyTemplate);
+        assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, snapshot.protocol);
         Config.Snapshot defaults = Config.read(new MemoryPrefs());
         assertNotEquals(snapshot.version(), defaults.version());
     }

@@ -3,7 +3,6 @@ package com.wxmyyds.discordautotranslate.translate;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Config;
-import com.wxmyyds.discordautotranslate.core.JsonPath;
 import com.wxmyyds.discordautotranslate.core.TranslationException;
 
 /**
@@ -32,7 +31,7 @@ public final class ApiTester {
         }
     }
 
-    /** 默认测试文本：包含引号、换行、反斜杠，同时验证模板转义是否正确。 */
+    /** 默认测试文本：包含引号、换行、反斜杠，同时验证请求体转义是否正确。 */
     public static final String DEFAULT_TEST_TEXT =
             "Hello, \"world\"\\\nThis is a test.";
 
@@ -42,9 +41,9 @@ public final class ApiTester {
     /**
      * 测试连接：只做配置校验 + 一次真实请求。
      *
-     * <p>说明：通用 JSON 配置没有统一的“健康检查”端点，因此连接测试等价于
+     * <p>说明：内置协议没有统一的“健康检查”端点，因此连接测试等价于
      * 用一段固定文本执行一次真实翻译请求，并校验响应能被解析。
-     * 这样能同时覆盖 URL、认证、模板、提取路径四项配置。</p>
+     * 这样能同时覆盖 URL、认证、协议、模型四项配置。</p>
      */
     public static Result testConnection(Config.Snapshot cfg) {
         return testTranslation(cfg, DEFAULT_TEST_TEXT);
@@ -84,17 +83,8 @@ public final class ApiTester {
         try {
             // 与真实请求共用同一套配置校验，避免两处规则不一致。
             JsonApiEngine.validateConfig(cfg);
-
-            // 内置样例只覆盖默认 OpenAI 提取路径；自定义路径不在此处误判为错误，
-            // 真实结构由在线“测试连接/测试翻译”确认。
-            boolean sampleMatchesPath = Config.DEF_RESPONSE_PATH.equals(cfg.responsePath)
-                    && pathExistsInSample(cfg.responsePath);
-
             long ms = System.currentTimeMillis() - start;
-            return new Result(true, sampleMatchesPath
-                    ? "配置检查通过（" + ms + "ms）"
-                    : "模板/URL/路径格式有效；内置响应样例无法验证此自定义路径（" + ms + "ms）",
-                    null, ms);
+            return new Result(true, "配置检查通过（" + ms + "ms）", null, ms);
         } catch (TranslationException e) {
             return new Result(false, e.userMessage(), null,
                     System.currentTimeMillis() - start);
@@ -102,22 +92,5 @@ public final class ApiTester {
             return new Result(false, "配置检查失败：" + t.getClass().getSimpleName(),
                     null, System.currentTimeMillis() - start);
         }
-    }
-
-    /** 仅在内置样例确实有该路径时返回 true；否则不将自定义路径误判为错误。 */
-    private static boolean pathExistsInSample(String path) {
-        try {
-            JsonPath.extractString(simulatedResponse(), path);
-            return true;
-        } catch (TranslationException e) {
-            return false;
-        }
-    }
-
-    /** 固定样例只用于默认 OpenAI 提取路径的离线示意。 */
-    private static String simulatedResponse() {
-        return "{\"choices\":[{\"message\":{\"role\":\"assistant\","
-                + "\"content\":\"译文\"}}],\"data\":{\"translations\":[{\"text\":\"译文\","
-                + "\"translatedText\":\"译文\"}]}}";
     }
 }
