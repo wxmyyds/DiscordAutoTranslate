@@ -22,7 +22,13 @@ public final class TextExtractor {
 
     /** 提取结果。 */
     public static final class Result {
-        /** 可翻译的纯文本（含换行；原样保留的结构节点仅贡献空白分隔）。 */
+        /**
+         * 可翻译的纯文本（含换行；结构节点与 URL 链接仅贡献空白分隔）。
+         *
+         * <p>它是无标记请求（分段未启用的消息）的正文，也用于语言检测与
+         * 内容哈希。URL 链接显示文本不进入：模型复述的 URL 回填后会与
+         * 原链接节点重复显示。</p>
+         */
         public final String text;
         /**
          * 带分段标记的请求文本：每个可翻译文本节点包在 {@code <sN>…</sN>} 内。
@@ -365,6 +371,15 @@ public final class TextExtractor {
         }
         String name = node.getClass().getSimpleName();
         if (isTextContainer(name)) {
+            if ("LinkContentNode".equals(name) && linkDisplayIsUrl(node)) {
+                // 与带标记走法（walkNodeMarked）同口径：URL 链接显示文本
+                // 不进任何请求。纯文本是无标记请求的正文（分段未启用的消息），
+                // 若把 URL 发给模型，模型会在译文里复述它，回填后与原链接
+                // 节点重复显示（实测：URL 出现两遍，第二遍是纯文本）。
+                counters[1]++;
+                out.append(' ');
+                return;
+            }
             Object inner = Reflect.call(
                     Reflect.findMethod(node.getClass(), "getContent", 0), node);
             if (inner instanceof List) {

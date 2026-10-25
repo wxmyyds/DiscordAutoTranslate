@@ -112,8 +112,10 @@ public class LongTextRegressionTest {
         for (String url : URLS) {
             assertFalse("URL 不得进入请求文本：" + url, r.segmented.contains(url));
         }
-        // 纯文本（语言检测/缓存键）保持既有形态，仍包含 URL。
-        assertTrue(r.text.contains(URLS[2]));
+        // 纯文本（无标记请求正文/检测/缓存键）同样不含 URL 链接显示文本：
+        // 发给模型的任何文本都不该包含 URL（模型复述会造成重复/损坏）。
+        assertFalse(r.text.contains(URLS[2]));
+        assertTrue(r.text.contains("FREE CLAUDE CODE CRACK"));
     }
 
     @Test
@@ -298,5 +300,53 @@ public class LongTextRegressionTest {
 
         assertNotNull(out);
         assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
+    }
+
+    // ---------------------------------------------------------------- URL 链接去重（2026-10 实测）
+
+    @Test
+    public void urlLinksAreNotDuplicatedInUnsegmentedRequests() {
+        // 实测故障：链接 + 单文本块的消息（分段未启用），纯文本请求里仍带
+        // URL 链接的显示文本 → 模型复述 URL → 整段回填后 URL 出现两遍，
+        // 第二遍是纯文本（不可点击）。修复后纯文本与标记文本同口径排除
+        // URL 链接，请求只含可翻译文本，模型无从复述。
+        List<Object> nodes = list(
+                new LinkContentNode(list(new TextContentNode(
+                        "https://codex-relay.codes/register?aff=oqr0")), new Object()),
+                new NewLineContentNode(),
+                new LinkContentNode(list(new TextContentNode(
+                        "https://api.yzmao.cn/sign-up?aff=IpHK")), new Object()),
+                new NewLineContentNode(),
+                new TextContentNode("free real gpt-6.1-sol, TRIAL WITHOUT REFS"));
+
+        TextExtractor.Result r = TextExtractor.extract(
+                new AnnotatedStructurableText(nodes));
+
+        assertNotNull(r);
+        // 单可翻译块：不启用分段标记，请求走纯文本路径。
+        assertNull("单文本块不启用标记", r.segmented);
+        assertEquals("纯文本不得包含 URL 链接显示文本",
+                " \n \nfree real gpt-6.1-sol, TRIAL WITHOUT REFS", r.text);
+
+        // 模型只回文本译文（请求里没有 URL 可复述）：
+        // 回填后链接原样、文本节点承载译文，无重复行。
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "免费真实 gpt-6.1-sol，无需推荐人即可试用");
+        assertNotNull(out);
+        assertEquals(5, out.size());
+        assertSame(nodes.get(0), out.get(0));
+        assertSame(nodes.get(2), out.get(2));
+        assertEquals("https://codex-relay.codes/register?aff=oqr0",
+                ((TextContentNode) ((LinkContentNode) out.get(0)).getContent().get(0))
+                        .getContent());
+        assertEquals("https://api.yzmao.cn/sign-up?aff=IpHK",
+                ((TextContentNode) ((LinkContentNode) out.get(2)).getContent().get(0))
+                        .getContent());
+        assertEquals("免费真实 gpt-6.1-sol，无需推荐人即可试用",
+                ((TextContentNode) out.get(4)).getContent());
+        // 每条 URL 在输出里只出现一次（链接节点本身），文本节点不含 URL。
+        String textNodeContent = ((TextContentNode) out.get(4)).getContent();
+        assertFalse(textNodeContent.contains("codex-relay"));
+        assertFalse(textNodeContent.contains("yzmao"));
     }
 }

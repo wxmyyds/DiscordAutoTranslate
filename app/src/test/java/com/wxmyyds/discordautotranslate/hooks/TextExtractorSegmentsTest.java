@@ -292,9 +292,10 @@ public class TextExtractorSegmentsTest {
 
         assertNotNull(r);
         assertEquals("<s1>hello</s1>\n \n<s2>world</s2>", r.segmented);
-        assertFalse("URL 不得进入请求文本", r.segmented.contains("gofile"));
-        // 纯文本形态不受影响（语言检测与内容哈希依赖它）。
-        assertTrue(r.text.contains("https://gofile.io/d/rfh2yimO"));
+        // 纯文本（无标记请求的正文）同样不含 URL：模型复述的 URL 回填后
+        // 会与原链接节点重复显示（实测故障：URL 出现两遍且第二遍是纯文本）。
+        assertEquals("hello\n \nworld", r.text);
+        assertFalse("URL 不得进入任何请求文本", r.text.contains("gofile"));
     }
 
     @Test
