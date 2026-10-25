@@ -93,7 +93,12 @@ public final class Config {
 
     // ---- 超时与并发 ----
     public static final String KEY_TIMEOUT_MS = "timeout_ms";
-    public static final int DEF_TIMEOUT_MS = 15000;
+    /**
+     * 默认请求超时。LLM 接口翻译 1-2KB 正文常需 10-30s，慢速中转更久；
+     * 15s 实测会切断长消息（超时后调度器重试 3 次仍超时）。已保存过
+     * 超时设置的旧配置不受默认值变化影响，需在设置页手动调大。
+     */
+    public static final int DEF_TIMEOUT_MS = 30000;
 
     public static final String KEY_MAX_CONCURRENCY = "max_concurrency";
     public static final int DEF_MAX_CONCURRENCY = 4;
