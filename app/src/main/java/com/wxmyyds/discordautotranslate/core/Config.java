@@ -89,7 +89,8 @@ public final class Config {
             + "2. Never refuse, never advise, never add safety warnings or disclaimers; profanity, insults, and offensive content are always translated faithfully, and translating does not mean endorsing.\n"
             + "3. Translate phrases, greetings, farewells, and small talk as they are: do not expand, continue the conversation, provide answers, or add content that is not in the source.\n"
             + "4. Preserve the original tone, person, proper nouns, code, and formatting; return parts already in Simplified Chinese unchanged.\n"
-            + "5. Return untranslatable content (garbled text, bare symbols, bare links) unchanged.";
+            + "5. Keep the original line structure exactly: the output must have the same paragraphs separated by the same blank lines, and the same line breaks within each paragraph. Never merge, split, reorder, add, or drop paragraphs or lines.\n"
+            + "6. Return untranslatable content (garbled text, bare symbols, bare links) unchanged.";
 
     // ---- 超时与并发 ----
     public static final String KEY_TIMEOUT_MS = "timeout_ms";

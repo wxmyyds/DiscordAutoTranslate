@@ -889,19 +889,17 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void plainMarkerlessTranslationOnMultiNodeBackfillsWhole() {
-        // 无标记译文 = 分段请求失败后引擎用无标记重试的产物（已通过引擎的
-        // 防损坏校验，见 Segments.translateWithFallback），走整段回填：
-        // 首节点承载全部，尾部空节点裁剪。带残缺标记的译文才保留原文。
+    public void plainMarkerlessMergedTranslationKeepsOriginal() {
+        // 无标记译文结构对不上（两节点只回一行，模型合并了段落）：
+        // 不做「首节点承载全部、其余置空」的启发式分配——那会把译文
+        // 挤进错误位置、清空其他节点。整条保留原文。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "只有一段译文");
+        assertNull(ContentNodes.replaceText(nodes, "只有一段译文"));
 
-        assertNotNull(out);
-        assertEquals(1, out.size());
-        assertEquals("只有一段译文", ((TextContentNode) out.get(0)).getContent());
         assertEquals("hi", ((TextContentNode) nodes.get(0)).getContent());
+        assertEquals("hi", ((TextContentNode) nodes.get(2)).getContent());
     }
 
     @Test
@@ -1000,7 +998,8 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void splitByLinesWhenEnoughLines() {
+    public void splitByLinesWhenLineCountMatches() {
+        // 相邻单行节点、模型用单换行分段：非空行数与片段数一致 → 按行 1:1。
         List<String> parts = ContentNodes.splitTranslation("第一行\n第二行", 2);
         assertEquals(2, parts.size());
         assertEquals("第一行", parts.get(0));
@@ -1008,21 +1007,23 @@ public class ContentNodesTest {
     }
 
     @Test
-    public void splitMergesExtraLinesIntoLastPart() {
-        List<String> parts = ContentNodes.splitTranslation("a\nb\nc\nd", 2);
-        assertEquals(2, parts.size());
-        assertEquals("a", parts.get(0));
-        assertEquals("b\nc\nd", parts.get(1));
+    public void splitRejectsExtraLinesWhenStructureMismatches() {
+        // 行数多于片段数：旧实现把多余行合并塞进最后一段（堆叠=乱序来源），
+        // 现在必须拒绝，保留原文。
+        assertNull(ContentNodes.splitTranslation("a\nb\nc\nd", 2));
     }
 
     @Test
-    public void splitPadsWhenTooFewLines() {
-        // 行数不足时不得把句子硬切碎：首段承载全部，其余留空
-        List<String> parts = ContentNodes.splitTranslation("只有一行", 3);
-        assertEquals(3, parts.size());
-        assertEquals("只有一行", parts.get(0));
-        assertEquals("", parts.get(1));
-        assertEquals("", parts.get(2));
+    public void splitRejectsWhenFewerLinesThanTargets() {
+        // 行数不足：旧实现把整段塞进首节点、其余置空，现在必须拒绝。
+        assertNull(ContentNodes.splitTranslation("只有一行", 3));
+    }
+
+    @Test
+    public void splitRejectsBlankLineWhenLineCountMatches() {
+        // 行数恰好等于片段数但中间是空行：空行会顶掉某个节点的译文
+        // （该节点内容丢失），必须拒绝而不是按行分配。
+        assertNull(ContentNodes.splitTranslation("甲\n\n乙", 3));
     }
 
     @Test
@@ -1048,18 +1049,17 @@ public class ContentNodesTest {
     // ---------------------------------------------------------------- 行数与尾部空白
 
     @Test
-    public void twoOriginalLinesWithOneTranslatedLineLeaveNoExtraBlankLine() {
-        // 引擎无标记重试的译文行数少于原节点数：首节点承载全部，
-        // 其余为空被裁剪，不留下多余空行，也不显示残缺标记。
+    public void mergedOneLineTranslationForTwoNodesKeepsOriginal() {
+        // 两个原节点只回一行译文：结构不对应，保留原文。
+        // 旧实现首节点承载全部、第二节点置空再裁剪，表现为译文挤在
+        // 第一行、后续段落“丢失”。
         List<Object> nodes = list(new TextContentNode("first line"), new NewLineContentNode(),
                 new TextContentNode("second line"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "只有一行译文");
+        assertNull(ContentNodes.replaceText(nodes, "只有一行译文"));
 
-        assertNotNull(out);
-        assertEquals(1, out.size());
-        assertEquals("只有一行译文", ((TextContentNode) out.get(0)).getContent());
         assertEquals("first line", ((TextContentNode) nodes.get(0)).getContent());
+        assertEquals("second line", ((TextContentNode) nodes.get(2)).getContent());
     }
 
     @Test

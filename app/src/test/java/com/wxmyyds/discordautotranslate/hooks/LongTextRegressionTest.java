@@ -38,7 +38,9 @@ import java.util.regex.Pattern;
  *   <li>带标记译文的校验是全有或全无：标记残缺/错序/夹带/占位符 → 整条保留原文；</li>
  *   <li>单链路：请求恒为无标记纯文本，引擎返回前做防损坏校验
  *       （残留标记/占位符/长度比例，见 {@code Segments.plainTextViolation}）；
- *       渲染层按「空行段落块」对齐回填，段落块多于片段数时整条保留原文；</li>
+ *       渲染层只在结构精确对应时回填（段落块 1:1 或非空行 1:1），
+ *       结构不对应（模型合并/增删/重排段落）时整条保留原文，
+ *       不做启发式分配（那是乱序与内容丢失的来源）；</li>
  *   <li>结构对齐时每个标题拿到自己的片段，空行结构来自原节点。</li>
  * </ul>
  */
@@ -242,25 +244,40 @@ public class LongTextRegressionTest {
     }
 
     @Test
-    public void completelyMarkerlessOutputFallsBackToWholeTextBackfill() {
-        // 完全无标记的输出（模型丢光标记，或单链路无标记请求的产物）：
-        // 段落块数不多于片段数时走按行回填。防损坏由引擎负责——残留标记、
-        // 占位符、长度异常（疑似复读/丢失）的无标记译文在引擎一侧被拒
-        // （见 SegmentsTest）；带残缺标记的输出在这里仍然保留原文。
+    public void completelyMarkerlessSpamWithMismatchedStructureKeepsOriginal() {
+        // 40 行单换行刷屏（原文 15 个标题片段）：段落块与行数都对不上，
+        // 整条保留原文。防损坏由引擎负责——残留标记、占位符、长度异常
+        // （疑似复读/丢失）的无标记译文在引擎一侧被拒（见 SegmentsTest）；
+        // 带残缺标记的输出在这里同样保留原文。
         StringBuilder spam = new StringBuilder();
         for (int i = 0; i < 40; i++) {
             spam.append("🔥🔥🔥 FREE CRACK 🔥🔥🔥\n");
         }
-        List<Object> out = ContentNodes.replaceText(reportedMessageTree(), spam.toString());
-
-        assertNotNull("无标记译文必须回填（否则消息永远显示原文）", out);
-        // 首个标题节点承载第一行，URL 链接不受影响。
-        HeadingContentNode first = (HeadingContentNode) out.get(0);
-        assertEquals("🔥🔥🔥 FREE CRACK 🔥🔥🔥",
-                ((TextContentNode) first.getContent().get(0)).getContent());
-        LinkContentNode link = (LinkContentNode) out.get(2);
+        List<Object> nodes = reportedMessageTree();
+        assertNull(ContentNodes.replaceText(nodes, spam.toString()));
+        HeadingContentNode first = (HeadingContentNode) nodes.get(0);
+        assertEquals(TITLES[0], ((TextContentNode) first.getContent().get(0)).getContent());
+        LinkContentNode third = (LinkContentNode) nodes.get(2);
         assertEquals(URLS[0],
-                ((TextContentNode) link.getContent().get(0)).getContent());
+                ((TextContentNode) third.getContent().get(0)).getContent());
+    }
+
+    @Test
+    public void markerlessMergedStructureKeepsOriginal() {
+        // 模型把 15 个标题合并成 8 块返回（结构不对应）：保留原文。
+        // 旧实现按行启发式分配：空格行/空行顶掉一半标题节点（内容丢失）、
+        // 剩余标题串位、多余行堆进最后一个节点（乱序+膨胀）。
+        StringBuilder merged = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            if (i > 0) {
+                merged.append("\n\n");
+            }
+            merged.append("合并段").append(i + 1);
+        }
+        List<Object> nodes = reportedMessageTree();
+        assertNull(ContentNodes.replaceText(nodes, merged.toString()));
+        HeadingContentNode first = (HeadingContentNode) nodes.get(0);
+        assertEquals(TITLES[0], ((TextContentNode) first.getContent().get(0)).getContent());
     }
 
     // ---------------------------------------------------------------- 单链路无标记回填（2026-10 二次上报）

@@ -126,8 +126,9 @@ public final class ContentNodes {
                 return null;
             }
             // 无标记译文：单链路（无标记纯文本请求）的标准形态，
-            // 或单段请求。按「空行段落块」对齐到各可翻译片段；
-            // 译文段落块多于片段数 = 模型新增/复读内容，拒绝回填保留原文。
+            // 或单段请求。只有结构与片段数精确对应才回填（段落块 1:1 或
+            // 非空行 1:1）；模型重排/增删段落时整条保留原文，
+            // 不做启发式分配（那是乱序与内容丢失的来源）。
             String plain = normalize(Segments.strip(translated));
             if (plain.isEmpty()) {
                 // 剔除后什么都不剩：不能清空消息，保留原文。
@@ -135,8 +136,8 @@ public final class ContentNodes {
             }
             parts = splitTranslation(plain, targetCount);
             if (parts == null) {
-                XLog.d("markerless translation has more paragraph blocks than "
-                        + targetCount + " targets; keeping original text");
+                XLog.d("markerless translation structure mismatch (targets="
+                        + targetCount + "); keeping original text");
                 return null;
             }
         }
@@ -154,7 +155,7 @@ public final class ContentNodes {
                     + " visited=" + replacement.next);
             return null;
         }
-        // 译文行数通常少于原文，多余位置会被补成空串；原换行结构节点也会保留。
+        // 片段全部非空，但原树尾部的空行/空白节点仍会随结构保留；
         // 不裁剪就会在译文下方留下原文遗留的空行。
         return trimTrailingBlank(result, 0);
     }
@@ -502,22 +503,23 @@ public final class ContentNodes {
     // ---------------------------------------------------------------- 译文切分
 
     /**
-     * 把译文切分成与原文本节点数量一致的片段。
+     * 把译文切分成与原文本节点数量一致的片段（精确对应，或拒绝）。
      *
      * <p>回填消费片段的口径是「空行切分的非空白非 URL 段落块」（见
-     * {@link TextExtractor#countSegments}），切分必须先按同一口径对齐：
-     * 模型保结构返回时（译文段落块数 == 片段数）每块精确落到自己的节点，
-     * URL 链接因此仍与正确的段落相邻。此前按裸换行行数切分，空行与
-     * 占位空格行也被当成片段，导致段落串位、部分节点被置空、多余行
-     * 全部堆进最后一个节点（实测：内容块重复堆叠、消息膨胀、URL 与
-     * 正文错误关联）。</p>
+     * {@link TextExtractor#countSegments}）。结构对得上时片段与节点一一对应，
+     * URL 链接仍与正确的段落相邻：</p>
+     * <ol>
+     *   <li>译文段落块数 == 片段数 → 每块落到自己的节点（保结构译文）；</li>
+     *   <li>非空行数 == 片段数 → 按行 1:1（相邻单行节点、模型用单换行分段）；</li>
+     *   <li>其余一律返回 null，整条保留原文。</li>
+     * </ol>
      *
-     * <p>段落块<b>多于</b>片段数：模型输出里出现了原文没有的段落
-     * （复读/自增内容），任何分配都会错位或膨胀，返回 null 让调用方
-     * 整条保留原文。段落块不足时退回旧的按行分配：行数足够按行切、
-     * 不足则首段承载全部（不硬切句子）。</p>
+     * <p>不再做启发式分配（旧行为：行数富余按行分配、空行顶掉节点译文、
+     * 多余行全部堆进最后一个节点、行数不足整段塞首节点）。模型重排段落
+     * 时这些启发式就是实测的「译文乱序、节点被置空、消息膨胀」来源，
+     * 流式与非流式共用同一切分逻辑，与传输方式无关。</p>
      *
-     * @return 片段列表；段落块数超过 parts 时返回 null（拒绝回填）
+     * @return 片段列表；结构与片段数不对应时返回 null（拒绝回填）
      */
     @Nullable
     static List<String> splitTranslation(String translated, int parts) {
@@ -536,32 +538,20 @@ public final class ContentNodes {
         if (chunks.size() == parts) {
             return chunks;
         }
-        if (chunks.size() > parts) {
-            return null;
-        }
         String[] lines = translated.split("\n", -1);
-        if (lines.length >= parts) {
-            // 行数足够：按行分配，多余的行合并进最后一段。
-            int head = parts - 1;
-            for (int i = 0; i < head; i++) {
-                out.add(lines[i]);
-            }
-            StringBuilder tail = new StringBuilder();
-            for (int i = head; i < lines.length; i++) {
-                if (tail.length() > 0) {
-                    tail.append('\n');
+        if (lines.length == parts) {
+            for (String line : lines) {
+                if (line.trim().isEmpty()) {
+                    // 空行顶掉某个节点的译文 = 该节点内容丢失，必须拒绝。
+                    return null;
                 }
-                tail.append(lines[i]);
             }
-            out.add(tail.toString());
+            for (String line : lines) {
+                out.add(line);
+            }
             return out;
         }
-        // 行数不足：首段承载全部，其余留空（避免把句子硬切碎）。
-        out.add(translated);
-        for (int i = 1; i < parts; i++) {
-            out.add("");
-        }
-        return out;
+        return null;
     }
 
     /** 拼接节点列表为 JSON 数组文本，用于诊断与单测。 */
