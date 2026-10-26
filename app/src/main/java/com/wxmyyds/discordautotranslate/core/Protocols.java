@@ -6,8 +6,6 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.Locale;
-
 /**
  * 内置供应商协议：按 {@link Config#KEY_PROTOCOL} 构造请求体、
  * 解析请求端点并从响应中提取译文。
@@ -112,10 +110,10 @@ public final class Protocols {
     /**
      * 解析当前协议实际请求的端点 URL。
      *
-     * <p>API URL 仍由用户填写完整端点；但用户切换协议后旧端点若仍指向
-     * 另一协议（{@code /chat/completions} 与 {@code /responses} 互换），
-     * 请求必然失败。这里在请求前把已知的另一协议后缀替换为当前协议后缀，
-     * 其余 URL（自定义网关路径等）原样使用。</p>
+     * <p>API URL 是基础地址，只填到 {@code /v1}（或网关的基础路径），
+     * 端点后缀由所选协议决定：Compatible 追加 {@code /chat/completions}，
+     * Responses 追加 {@code /responses}，切换协议不需要改 URL。
+     * URL 不应自带协议端点后缀，写了会被再次追加成重复路径。</p>
      */
     public static String endpoint(String protocol, String apiUrl) {
         if (apiUrl == null) {
@@ -128,17 +126,8 @@ public final class Protocols {
         if (url.isEmpty()) {
             return apiUrl;
         }
-        String lower = url.toLowerCase(Locale.ROOT);
-        if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
-            if (lower.endsWith(SUFFIX_CHAT_COMPLETIONS)) {
-                return url.substring(0, url.length() - SUFFIX_CHAT_COMPLETIONS.length())
-                        + SUFFIX_RESPONSES;
-            }
-        } else if (lower.endsWith(SUFFIX_RESPONSES)) {
-            return url.substring(0, url.length() - SUFFIX_RESPONSES.length())
-                    + SUFFIX_CHAT_COMPLETIONS;
-        }
-        return url;
+        return url + (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)
+                ? SUFFIX_RESPONSES : SUFFIX_CHAT_COMPLETIONS);
     }
 
     /**

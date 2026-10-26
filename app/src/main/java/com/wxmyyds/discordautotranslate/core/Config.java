@@ -23,9 +23,10 @@ public final class Config {
     public static final String KEY_ENABLED = "auto_translate_enabled";
     public static final boolean DEF_ENABLED = true;
 
-    // ---- API 配置（默认适配 OpenAI 兼容 /chat/completions，见需求确认项）----
+    // ---- API 配置（URL 只填基础地址，端点后缀由所选协议追加）----
     public static final String KEY_API_URL = "api_url";
-    public static final String DEF_API_URL = "https://api.openai.com/v1/chat/completions";
+    /** 基础地址默认值；实际端点由协议追加 {@code /chat/completions} 或 {@code /responses}。 */
+    public static final String DEF_API_URL = "https://api.openai.com/v1";
 
     public static final String KEY_API_KEY = "api_key";
     public static final String DEF_API_KEY = "";

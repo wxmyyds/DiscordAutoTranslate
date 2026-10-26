@@ -160,8 +160,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         root.addView(protocolSpinner, matchWrap());
         TextView protocolHint = new TextView(this);
         protocolHint.setTextSize(12f);
-        protocolHint.setText("OpenAI-Responses 对应 …/v1/responses，OpenAI-Compatible 对应 "
-                + "…/v1/chat/completions。请求时若 API URL 以另一协议的端点结尾，会自动改写为当前协议端点。");
+        protocolHint.setText("API URL 只填到 /v1 的基础地址，请求时按所选协议追加端点："
+                + "OpenAI-Compatible 追加 /chat/completions，OpenAI-Responses 追加 /responses，"
+                + "切换协议无需修改 URL。旧配置里填写的完整端点需删掉后缀只留基础地址。");
         root.addView(protocolHint, matchWrap());
 
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。

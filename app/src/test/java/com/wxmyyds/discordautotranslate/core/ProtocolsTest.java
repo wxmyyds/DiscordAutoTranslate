@@ -183,32 +183,29 @@ public class ProtocolsTest {
 
     // ------------------------------------------------------------ 端点解析
 
+    /** API URL 是基础地址：端点后缀由所选协议追加，切换协议不用改 URL。 */
     @Test
-    public void endpointSwapsKnownSuffixWhenProtocolDiffers() {
-        assertEquals("https://api.openai.com/v1/responses",
-                Protocols.endpoint(Config.PROTOCOL_OPENAI_RESPONSES,
-                        "https://api.openai.com/v1/chat/completions"));
+    public void endpointAppendsSuffixPerProtocolToBaseUrl() {
         assertEquals("https://api.openai.com/v1/chat/completions",
                 Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE,
-                        "https://api.openai.com/v1/responses"));
+                        "https://api.openai.com/v1"));
+        assertEquals("https://api.openai.com/v1/responses",
+                Protocols.endpoint(Config.PROTOCOL_OPENAI_RESPONSES,
+                        "https://api.openai.com/v1"));
+        // 默认值本身也是基础地址形态。
+        assertEquals("https://api.openai.com/v1/chat/completions",
+                Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, Config.DEF_API_URL));
     }
 
-    /** 同协议或未知后缀（自定义网关）一律不改写；尾随斜杠仅做规整。 */
+    /** 尾随斜杠仅做规整；基础路径不必以 /v1 结尾，自定义网关基础路径同样直接追加。 */
     @Test
-    public void endpointLeavesMatchingOrUnknownUrlsAlone() {
+    public void endpointNormalizesTrailingSlashAndAppendsToCustomBase() {
         assertEquals("https://api.openai.com/v1/responses",
                 Protocols.endpoint(Config.PROTOCOL_OPENAI_RESPONSES,
-                        "https://api.openai.com/v1/responses/"));
-        assertEquals("https://gw.example.com/translate",
-                Protocols.endpoint(Config.PROTOCOL_OPENAI_RESPONSES,
-                        "https://gw.example.com/translate"));
-        assertEquals("https://api.openai.com/v1/chat/completions",
+                        "https://api.openai.com/v1/"));
+        assertEquals("https://gw.example.com/translate/chat/completions",
                 Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE,
-                        "https://api.openai.com/v1/chat/completions/"));
-        // 后缀匹配不区分大小写。
-        assertEquals("https://api.openai.com/v1/responses",
-                Protocols.endpoint(Config.PROTOCOL_OPENAI_RESPONSES,
-                        "https://api.openai.com/v1/Chat/Completions"));
+                        "https://gw.example.com/translate"));
     }
 
     // ------------------------------------------------------------ 译文提取
