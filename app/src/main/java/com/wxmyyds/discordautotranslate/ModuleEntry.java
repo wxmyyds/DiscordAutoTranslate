@@ -29,8 +29,8 @@ import io.github.libxposed.api.XposedModuleInterface;
  *
  * <p>约束（依据 libxposed API 102.0.0 源码）：
  * <ul>
- *   <li>必须 {@code extends XposedModule} 且提供公开无参构造 —— 框架按此实例化。</li>
- *   <li>热重载<b>仅支持恰好一个 Java 入口类</b>。因此所有 Hook 都由本类统一注册，
+ *   <li>必须 {@code extends XposedModule} 且提供公开无参构造，框架按此实例化。</li>
+ *   <li>热重载仅支持恰好一个 Java 入口类。因此所有 Hook 都由本类统一注册，
  *       不允许再有第二个入口。</li>
  *   <li>不应在 {@code onModuleLoaded} 之前做初始化工作。</li>
  *   <li>不需要（也不应）自行调用 {@code attachFramework()}。</li>
@@ -83,7 +83,7 @@ public class ModuleEntry extends XposedModule {
     }
 
     /**
-     * 热重载：在<b>旧</b>代码中执行。返回 true 前必须停止本模块拥有的线程、
+     * 热重载：在旧代码中执行。返回 true 前必须停止本模块拥有的线程、
      * 释放引用，否则旧代次会被新代次长期持有（需求 §5.1、§风险 6）。
      */
     @Override
@@ -98,7 +98,7 @@ public class ModuleEntry extends XposedModule {
     }
 
     /**
-     * 热重载：在<b>新</b>代码中执行。包生命周期回调不会被自动重放，
+     * 热重载：在新代码中执行。包生命周期回调不会被自动重放，
      * 因此必须在这里主动重建状态并重新注册 Hook。
      */
     @Override

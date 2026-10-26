@@ -17,7 +17,7 @@ import org.json.JSONTokener;
  *   <li>示例：{@code choices.0.message.content}</li>
  * </ul>
  *
- * <p>限制：字段名本身包含 {@code .} 的情况不支持（需改写为不支持的形式无法表达）；
+ * <p>限制：字段名本身包含 {@code .} 的情况无法用本语法表达；
  * 第一版按此简化处理，并在取不到值时给出明确错误。</p>
  */
 public final class JsonPath {

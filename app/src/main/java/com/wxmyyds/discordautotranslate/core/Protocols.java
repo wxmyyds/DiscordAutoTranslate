@@ -77,7 +77,7 @@ public final class Protocols {
             throws TranslationException {
         String safeText = text == null ? "" : text;
         String safePrompt = systemPrompt == null ? "" : systemPrompt;
-        // 正文包进 <translate> 标签，系统提示词末尾追加协议说明（见常量 javadoc）。
+        // 包装与追加协议说明的动机见 WRAPPER_OPEN javadoc。
         String wrapped = WRAPPER_OPEN + safeText + WRAPPER_CLOSE;
         String prompt = (safePrompt.trim().isEmpty() ? "" : safePrompt.trim() + "\n\n")
                 + WRAPPER_RULE;
@@ -163,7 +163,7 @@ public final class Protocols {
 
     /**
      * 防御模型回显包装标签：仅当译文首尾成对包裹时剥离（视为包裹层）；
-     * 剥离后仍残留标签说明输出结构损坏，按解析失败拒绝——标签字面量
+     * 剥离后仍残留标签说明输出结构损坏，按解析失败拒绝：标签字面量
      * 绝不能渲染进消息。
      */
     @Nullable
@@ -190,8 +190,8 @@ public final class Protocols {
      * 以 {@code data: [DONE]} 结束。role 帧/usage 帧的 delta.content 为空，
      * 跳过即可；错误帧没有 content，累积结果为空由引擎报“译文为空”。</p>
      *
-     * <p><b>完整性把关</b>：流式读取按行进行，连接断在半路时已到达的
-     * 部分 delta 会拼出一份“缺尾巴”的译文——回填显示就是实测的
+     * <p>完整性把关：流式读取按行进行，连接断在半路时已到达的部分
+     * delta 会拼出一份“缺尾巴”的译文，回填显示就是实测的
      * “翻译后丢失文本”。因此译文只有在生成确有结束信号时才可用：
      * {@code finish_reason=="stop"}（个别实现省略 [DONE]）或收到
      * {@code data: [DONE]} 帧；{@code finish_reason} 为 length 等

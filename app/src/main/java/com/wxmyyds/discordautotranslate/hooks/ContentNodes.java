@@ -15,7 +15,7 @@ import java.util.List;
  * Discord 消息内容结构的反射访问层（需求 §7 阶段 3）。
  *
  * <p>背景（已核对 smali 源码）：
- * {@code TextUtilsKt.toSpannable(StructurableText, ...)} 是<b>所有</b>文本渲染的唯一入口，
+ * {@code TextUtilsKt.toSpannable(StructurableText, ...)} 是所有文本渲染的唯一入口，
  * 且只有两个分支：
  * <ul>
  *   <li>{@code AnnotatedStructurableText} → 遍历 {@code List<ContentNode>} 渲染；</li>
@@ -23,13 +23,13 @@ import java.util.List;
  *   <li>其他类型 → {@code throw RuntimeException}。</li>
  * </ul>
  *
- * <p>关键设计取舍：早期做法是把带 Markdown 的消息整体替换成 {@code PrimitiveStructurableText}，
- * 虽然不会崩溃（渲染器接受该类型），但会<b>丢失全部 Markdown 格式</b>。
+ * <p>早期做法是把带 Markdown 的消息整体替换成 {@code PrimitiveStructurableText}，
+ * 不会崩溃（渲染器接受该类型），但会丢失全部 Markdown 格式。
  * 本类改为保留 {@code AnnotatedStructurableText} 类型，
  * 只把其中的 {@code TextContentNode}（自然语言）替换为译文节点，
  * 结构化节点（提及/表情/链接/代码块等）原样保留，从而保住格式。</p>
  *
- * <p>节点重建采用 Kotlin data class 的通用能力而非逐个类型写死：
+ * <p>节点重建采用 Kotlin data class 的通用能力：
  * <ul>
  *   <li>用 {@code componentN()} 取出原节点的全部字段；</li>
  *   <li>只替换其中的内容字段（List 或 String）；</li>
@@ -94,7 +94,7 @@ public final class ContentNodes {
      * 译文先按 URL 定位标记切分成间隔，再逐间隔对齐到可翻译片段
      * （段落块 1:1 → 非空行 1:1 → 段落级：每段译文进本段首片段、段内其余
      * 置空）。模型跨段落合并/增删内容导致结构对不上时整条保留原文，
-     * 绝不让复读或错位内容进入节点树。</p>
+     * 不让复读或错位内容进入节点树。</p>
      *
      * @param nodes        原始节点列表
      * @param translated   无标记译文（引擎侧已通过防损坏校验）
@@ -112,10 +112,10 @@ public final class ContentNodes {
         }
         // URL 链接在请求里是定位标记：先按译文中的 URL 出现位置把译文
         // 切成若干间隔，每个间隔再独立三级对齐（段落块 1:1 → 非空行 1:1
-        // → 段落级：每段译文进本段首片段，段内其余置空——有格式的内联
+        // → 段落级：每段译文进本段首片段，段内其余置空；有格式的内联
         // 消息只能这样落位）。URL 丢失/改坏/多份回显或间隔对不上时
         // 整条保留原文。strip 是防御性的：正常链路下引擎校验已保证译文
-        // 无分段标记，模型幻觉出的标记在这里被剥离而不是显示为字面量。
+        // 无分段标记，模型幻觉出的标记在这里被剥离，不会显示为字面量。
         String plain = normalize(Segments.strip(translated));
         if (plain.isEmpty()) {
             // 剔除后什么都不剩：不能清空消息，保留原文。
@@ -134,7 +134,7 @@ public final class ContentNodes {
             result.add(rebuild(n, replacement, 0));
         }
         // 容器复制失败可能丢弃已重建的子节点；不得把其他已清空的文本节点
-        // 作为部分成功的结果交给宿主。只允许整棵树替换成功。
+        // 作为部分成功的结果交给宿主，必须整棵树替换成功。
         if (replacement.failed || replacement.next != targetCount) {
             return null;
         }
@@ -266,10 +266,11 @@ public final class ContentNodes {
     }
 
     /**
-     * 递归统计<b>可翻译</b>片段数，每次出现分别计数（包括共享实例）。
+     * 递归统计可翻译片段数，每次出现分别计数（包括共享实例）。
      *
      * <p>口径与提取阶段完全一致：一个文本节点可能因为内部空行被拆成多个片段，
-     * 只含空白的节点不计数。三者口径不一致会让片段串位。</p>
+     * 只含空白的节点不计数。提取、计划、回填三套遍历的口径必须一致，
+     * 否则片段串位。</p>
      */
     private static int countTextNodes(@Nullable List<?> nodes, int depth) {
         if (nodes == null || depth > 12) {
@@ -384,7 +385,6 @@ public final class ContentNodes {
             return node;
         }
 
-        // 代码节点不进入。
         if (CODE_NODES.contains(simple)) {
             return node;
         }
@@ -490,8 +490,8 @@ public final class ContentNodes {
      * <ol>
      *   <li>URL 定位标记出现次数校验（多了=回显会重复显示，少了=丢失/改坏，
      *       都无法安全定位 → 整条拒绝）；</li>
-     *   <li>请求含样式标记（{@code <xN>…</xN>}）时按标记扫描分配——样式精确
-     *       落位；模型没保留/改坏标记时<b>自动回退</b>到无标记对齐
+     *   <li>请求含样式标记（{@code <xN>…</xN>}）时按标记扫描分配，样式
+     *       精确落位；模型没保留/改坏标记时自动回退到无标记对齐
      *       （译文保留、样式退化为合并处理），不会拒译；</li>
      *   <li>无标记回退：URL 间隔切分 + 每个间隔三级对齐
      *       （见 {@link #alignSpanToParts}）。</li>
@@ -660,9 +660,10 @@ public final class ContentNodes {
     /**
      * 把一个 URL 间隔内的译文对齐到该间隔的片段（{@code groups} 与片段
      * 一一对应）。优先级：段落块 1:1（保结构）→ 非空行 1:1（单行分段）→
-     * 段落级对齐（每段译文进本段首片段，段内其余置空；unsafe 段落——
-     * 片段之间夹有 emoji/行内代码/列表符号等不可翻译可见内容——拒用，
-     * 强行对齐会孤立这些节点，实测链接与描述分离）。全部对不上返回 null。
+     * 段落级对齐（每段译文进本段首片段，段内其余置空）。unsafe 段落
+     * （片段之间夹有 emoji/行内代码/列表符号等不可翻译可见内容）拒用
+     * 段落级对齐：强行对齐会孤立这些节点，实测链接与描述分离。
+     * 全部对不上返回 null。
      */
     @Nullable
     static List<String> alignSpanToParts(String span, List<Integer> groups,
@@ -730,7 +731,7 @@ public final class ContentNodes {
     }
 
     /**
-     * 译文的可翻译段落块：空行切分，剔除空白块与 URL 块——与回填消费片段
+     * 译文的可翻译段落块：空行切分，剔除空白块与 URL 块，与回填消费片段
      * 的口径（{@link TextExtractor#countSegments}）一致，日志与切分共用。
      */
     private static List<String> translatableChunks(String translated) {

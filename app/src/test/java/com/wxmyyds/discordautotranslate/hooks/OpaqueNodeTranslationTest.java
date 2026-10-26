@@ -28,7 +28,7 @@ import java.util.List;
 public class OpaqueNodeTranslationTest {
 
     // 实际宿主的这些类型使用 copy-<suffix>；这里不提供名为 copy 的方法，
-    // 模拟旧 findCopyMethod 无法处理的情况。正确实现根本不应尝试复制它们。
+    // 模拟旧 findCopyMethod 无法处理的情况。实现不应尝试复制它们。
     public static final class UserOrRoleMentionContentNode {
         private final List<Object> content;
         public UserOrRoleMentionContentNode(List<Object> content) { this.content = content; }

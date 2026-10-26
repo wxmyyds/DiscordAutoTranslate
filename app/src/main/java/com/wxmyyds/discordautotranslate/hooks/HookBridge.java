@@ -23,8 +23,8 @@ import java.util.Map;
  *
  * <p>职责：
  * <ol>
- *   <li>维护 <b>正文视图 → 消息 ID</b> 与 <b>内容对象 → 消息 ID</b> 两张映射。
- *       必须如此：RecyclerView 会复用 {@code MessageContentView} 实例，
+ *   <li>维护「正文视图 → 消息 ID」与「内容对象 → 消息 ID」两张映射：
+ *       RecyclerView 会复用 {@code MessageContentView} 实例，
  *       译文状态绝不能存在 View 上（需求 §风险 2）。</li>
  *   <li>保存每条消息最近一次的原始渲染参数，用于翻译完成后重新渲染。</li>
  *   <li>提供“原文/译文”切换与失败重试入口，供图标点击调用。</li>
@@ -178,7 +178,7 @@ public final class HookBridge {
      * 同一套翻译管线（StateStore/Scheduler/缓存/重渲染/替换），但：
      * <ul>
      *   <li>与正文的状态条目、与同消息内不同 Embed 文本（标题/描述/字段）
-     *       互不覆盖——每段文本按内容哈希各占一条；</li>
+     *       互不覆盖：每段文本按内容哈希各占一条；</li>
      *   <li>哈希与 {@link #onMessageBound} 完全同口径，保证键与条目一致；</li>
      *   <li>分隔符含 {@code U+0000}，真实雪花 ID 不可能包含，可安全区分
      *       Embed 键与正文键。</li>
@@ -199,7 +199,7 @@ public final class HookBridge {
      * 按裸文本生成 Embed 状态键（用于不经 StructurableText 渲染的文本，
      * 例如原生帖子预览的标题）。
      *
-     * <p>与 {@link #embedStateKey} 的约定：同一段纯文本两者生成的键<b>必须相等</b>
+     * <p>与 {@link #embedStateKey} 的约定：同一段纯文本两者生成的键必须相等
      * （登记侧与替换侧各用其一），单测锁定该不变量。</p>
      */
     @Nullable
@@ -219,7 +219,7 @@ public final class HookBridge {
      * 取 Embed 状态键中的行消息 ID 部分；非 Embed 键原样返回。
      *
      * <p>同一个 Embed 视图承载同一条消息的多段文本（标题/描述/字段），
-     * 各段键不同但行 ID 相同——复用校验按“行未变即仍有效”放宽，
+     * 各段键不同但行 ID 相同。复用校验按“行未变即仍有效”放宽，
      * 行 ID 变化（视图被复用到其他消息）则仍然拒绝。</p>
      */
     public static String embedRowOf(@Nullable String key) {
@@ -313,9 +313,6 @@ public final class HookBridge {
      *
      * <p>视图是否已被复用的判定见 {@link RerenderRegistry}；投递执行时由
      * {@code toSpannable} 按当前状态重新决定替换与否，因此不会把译文写错消息。</p>
-     *
-     * <p>真正的文本替换发生在 {@code TextUtilsKt.toSpannable}，
-     * 它会按当前状态自行决定是否替换。</p>
      *
      * <p>排队期间视图可能已被 RecyclerView 复用到其他消息，因此执行前必须
      * 再校验一次：绑定已变成其他消息则跳过，不能把旧译文渲染到新消息上。

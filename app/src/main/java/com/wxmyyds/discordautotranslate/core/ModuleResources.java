@@ -15,7 +15,7 @@ import io.github.libxposed.api.XposedInterface;
 /**
  * 模块自身资源的加载器。
  *
- * <p><b>为什么需要它</b>：本模块运行在 Discord 进程内，该进程默认的资源表属于
+ * <p>本模块运行在 Discord 进程内，该进程默认的资源表属于
  * Discord，无法直接访问模块 APK 里的 drawable。必须用模块自己的
  * {@code ApplicationInfo} 取到模块的 {@code Resources} 才能解析这些图标。</p>
  *

@@ -16,9 +16,9 @@ import java.nio.charset.StandardCharsets;
 /**
  * 极简 HTTP 客户端。
  *
- * <p><b>为什么不用 OkHttp</b>：本模块代码运行在 Discord 进程内，而 Discord 自身已打包
- * {@code okhttp3}（见 smali/okhttp3/）。若模块再打包一份会造成类冲突与版本错配。
- * 使用 JDK 自带的 {@link HttpURLConnection} 可做到零依赖、零冲突。
+ * <p>不用 OkHttp 的原因：本模块代码运行在 Discord 进程内，Discord 自身已打包
+ * {@code okhttp3}（见 smali/okhttp3/），模块再打包一份会造成类冲突与版本错配。
+ * 用 JDK 自带的 {@link HttpURLConnection}，零依赖、零冲突。
  * 阶段 3 如需更精细的 TLS/连接池控制再评估。</p>
  *
  * <p>超时由 {@link #timeoutMs} 控制，同时作用于连接与读取（需求 §5.5 超时时间）。</p>
@@ -140,7 +140,7 @@ public final class Http {
      * @param sse 请求体含 {@code stream:true} 时为 true：按行读取并在
      *            {@code data: [DONE]} 处停止（不依赖服务端关流）。响应体
      *            原样返回（SSE 帧文本），由协议层解析累积 delta。
-     *            <p>流式的意义：读超时按<b>字节间隔</b>计算，token 持续到达
+     *            <p>流式的意义：读超时按字节间隔计算，token 持续到达
      *            就不会触发；非流式接口生成完成前零字节返回，长生成会被
      *            总时长超时掐断（实测：慢速中转上长消息必超时）。</p>
      * @throws TranslationException 网络或超时错误（已归类）

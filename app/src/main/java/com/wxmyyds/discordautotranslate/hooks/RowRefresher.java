@@ -291,7 +291,7 @@ final class RowRefresher {
      * <p>{@code View.invalidate()} only redraws. A text change rebuilds the text layout,
      * but {@code View.getHeight()} updates during measure/layout.</p>
      *
-     * <p><b>为什么先 forceLayout()</b>：仅调 {@code requestLayout()} 时，
+     * <p>先调 {@code forceLayout()} 的原因：仅调 {@code requestLayout()} 时，
      * 若该 View 的 {@code PFLAG_FORCE_LAYOUT} 未置位且测量参数未变，
      * 父级会在 {@code measureChildWithMargins} 中直接用缓存尺寸而不再下探。
      * {@code forceLayout()} 会置位该标记并清掉测量缓存，使下一次 measure
@@ -425,7 +425,7 @@ final class RowRefresher {
      *
      * <p>实测消息正文视图到外层 ChatListView 的层级较深，原先 12 层的
      * 上限可能在到达 ChatListView 之前就截断，导致 requestLayout 没有传到
-     * 真正负责布局的那一层——表现为“高度不更新，滚动一次才恢复”。
+     * 真正负责布局的那一层，表现为“高度不更新，滚动一次才恢复”。
      * 这里放宽到 32（仍为有界值，避免异常情况下的无界传播）。</p>
      */
     private static final int RELAYOUT_MAX_DEPTH = 32;

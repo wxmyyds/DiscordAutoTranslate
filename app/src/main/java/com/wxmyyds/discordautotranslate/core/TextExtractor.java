@@ -27,7 +27,7 @@ public final class TextExtractor {
          *
          * <p>它是无标记请求（单链路）的正文，也用于语言检测与内容哈希。
          * URL 链接显示文本原样进入请求充当定位标记：模型必须原样保留它，
-         * 回填按它切分对齐并删除回显，显示永远用原链接节点——URL 字符
+         * 回填按它切分对齐并删除回显，显示永远用原链接节点。URL 字符
          * 不会损坏，也不会重复显示。</p>
          */
         public final String text;
@@ -90,7 +90,7 @@ public final class TextExtractor {
      *
      * <p>裸 URL 消息在 Discord 里渲染为 {@code LinkContentNode}，显示文本就是
      * URL 本身。这类节点整体按不可翻译结构处理（与行内代码同口径）：
-     * 显示文本原样进请求充当<b>定位标记</b>（模型据此在译文里保留 URL 位置，
+     * 显示文本原样进请求充当定位标记（模型据此在译文里保留 URL 位置，
      * 回填按它切分对齐并删除回显，显示永远用原节点）；带自然语言显示文本的
      * 链接（掩码链接）不受影响，仍正常翻译。</p>
      */
@@ -272,7 +272,7 @@ public final class TextExtractor {
         return i;
     }
 
-    /** 末尾空白之前的位置（即核心内容的结束下标，不含）。 */
+    /** 末尾空白之前的位置（即内容主体的结束下标，不含）。 */
     public static int trailingWhitespaceStart(String s) {
         int i = s.length();
         while (i > 0 && Character.isWhitespace(s.charAt(i - 1))) {
@@ -326,7 +326,7 @@ public final class TextExtractor {
                     counters[0]++;
                     return;
                 }
-                // 样式片段：核心内容包 <xN>…</xN>，首尾空白与节点内空行、
+                // 样式片段：可翻译内容包 <xN>…</xN>，首尾空白与节点内空行、
                 // URL 块留在标记外（结构由原节点提供）。序号全局递增，
                 // 与 ContentNodes 计划的枚举顺序一致。
                 counters[0]++;

@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * {@link Scheduler} 的调度语义：去重、并发限制、过期结果丢弃、可重试错误重试。
  *
- * <p>这些是需求 §5.4 与 §风险 3 的核心行为，也是阶段 2 的验收点。</p>
+ * <p>这些是需求 §5.4 与 §风险 3 要求的行为，也是阶段 2 的验收点。</p>
  *
  * <p>回写必须经过 {@link Scheduler.MainThread}。生产环境没有 Handler 时会直接丢弃回调，
  * 因此单测显式安装直投 dispatcher，不能依赖已删除的“无 Handler 时同步执行”兜底。</p>
@@ -409,7 +409,7 @@ public class SchedulerTest {
                 c.latch.await(500, TimeUnit.MILLISECONDS));
     }
 
-    /** 线程池已满时提交失败必须回报错误，而不是静默丢弃。 */
+    /** 线程池已满时提交失败必须回报错误，不得静默丢弃。 */
     @Test
     public void rejectedSubmitReportsFailure() throws Exception {
         Scheduler s = new Scheduler();

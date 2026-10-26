@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** 工厂回退策略：富文本替换失败时必须让调用方保留原文，而不是丢弃结构。 */
+/** 工厂回退策略：富文本替换失败时必须让调用方保留原文，不得丢弃结构。 */
 public class StructurableTextFactoryTest {
 
     @Before

@@ -94,9 +94,9 @@ public final class InlineIconGeometry {
      * 点击 span 应覆盖的字符区间。
      *
      * <p>宿主在 {@code ACTION_DOWN} 用 {@code Layout.getOffsetForHorizontal} 把触点换算成
-     * 字符位置，它对宽 span 的格子按<b>左边界</b>归属；手指落在图标靠左部分时算出的
+     * 字符位置，它对宽 span 的格子按左边界归属；手指落在图标靠左部分时算出的
      * offset 是 {@code iconStart - 1}。而 {@code getSpans(offset, offset)} 只对 span 的
-     * <b>末尾</b>边界包含，所以该位置原本什么也拿不到，宿主于是退化为调用消息的
+     * 末尾边界包含，所以该位置原本什么也拿不到，宿主于是退化为调用消息的
      * {@code onClickListener}（表现为「点击图标却触发了消息点击」）。
      *
      * <p>因此点击 span 必须从图标前一个字符开始。调用方负责让那一格由本模块自己插入

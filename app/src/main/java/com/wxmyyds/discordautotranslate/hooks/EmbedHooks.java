@@ -17,7 +17,7 @@ import io.github.libxposed.api.XposedModule;
 /**
  * Embed 翻译 Hook（富 Embed 与原生帖子预览）。
  *
- * <p><b>已核对 smali（Discord 340.13）的渲染链</b>：
+ * <p>已核对 smali（Discord 340.13）的渲染链：
  * <pre>
  * 富 Embed   MessageAccessoriesAdapter → EmbedViewHolder.bind(ChatEventHandler, EmbedMessageAccessory, …9 参)
  *              → EmbedView.setEmbed-fDtLluY(…, Embed, …)
@@ -31,15 +31,15 @@ import io.github.libxposed.api.XposedModule;
  *
  * <p>消息 ID 来源与正文一致：{@code MessageAccessory.getMessageId-3Eiw7ao()}
  * （声明在基类上，前缀匹配可取）。每段 Embed 文本用
- * {@link HookBridge#embedStateKey} 生成独立状态键——与正文共用整套翻译管线
+ * {@link HookBridge#embedStateKey} 生成独立状态键，与正文共用整套翻译管线
  * （去重/缓存/调度/替换），但互不覆盖。</p>
  *
- * <p><b>翻译范围</b>：富 Embed 的标题/描述/字段（用户内容）；
+ * <p>翻译范围：富 Embed 的标题/描述/字段（用户内容）；
  * 帖子预览的标题。作者名、页脚、提供者（站点/品牌名）、URL、图标等
- * <b>不登记</b>——翻译范围之外，且语言检测器（{@code EnglishDetector}）
+ * 在翻译范围之外，不登记；语言检测器（{@code EnglishDetector}）
  * 也会拦下 URL、过短与非拉丁内容。</p>
  *
- * <p><b>行内图标</b>：富 Embed 每张卡片只挂一个图标——主段优先取描述
+ * <p>行内图标：富 Embed 每张卡片只挂一个图标，主段优先取描述
  * （正文主体），回落标题、再回落首个字段；帖子预览挂在 footer 上
  * （标题是 String 不经 toSpannable，footer 经 {@code rememberIconOnlyContent}
  * 的「仅图标」身份解析，文本本身不被替换）。图标点击走
@@ -257,8 +257,8 @@ public final class EmbedHooks {
      * <ol>
      *   <li>用 {@link StructurableTextFactory#primitive} 把标题包成
      *       PrimitiveStructurableText，才能进入现有翻译管线；</li>
-     *   <li>译文替换不靠身份映射，而由
-     *       {@code setPostPreviewEmbed} 的参数替换 Hook 完成；</li>
+     *   <li>译文替换由 {@code setPostPreviewEmbed} 的参数替换 Hook 完成
+     *       （不走身份映射）；</li>
      *   <li>图标挂在 footer（卡片内唯一走 toSpannable 的字段）上：
      *       仅图标身份映射，footer 文本本身不被替换。</li>
      * </ol>

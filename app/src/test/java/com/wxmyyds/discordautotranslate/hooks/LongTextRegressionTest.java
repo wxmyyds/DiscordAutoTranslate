@@ -38,7 +38,7 @@ import java.util.List;
  *       长度比例，见 {@code Segments.plainTextViolation}）；</li>
  *   <li>渲染层三级对齐回填（段落块 1:1 → 非空行 1:1 → 段落级：每段译文
  *       进本段首片段、段内其余置空），模型跨段落合并/增删内容时才整条
- *       保留原文——不做跨段启发式分配（那是乱序与内容丢失的来源）；</li>
+ *       保留原文。不做跨段启发式分配，那是乱序与内容丢失的来源；</li>
  *   <li>结构对齐时每个标题拿到自己的片段，空行结构来自原节点。</li>
  * </ul>
  */
@@ -127,7 +127,7 @@ public class LongTextRegressionTest {
         // 40 行单换行刷屏（原文 15 个标题片段）：段落块与行数都对不上，
         // 整条保留原文。残留标记、占位符、长度异常（疑似复读/丢失）的
         // 译文在引擎一侧被拒（见 SegmentsTest）；结构对不上的译文在
-        // 渲染层在这里被拒。
+        // 渲染层被拒。
         StringBuilder spam = new StringBuilder();
         for (int i = 0; i < 40; i++) {
             spam.append("🔥🔥🔥 FREE CRACK 🔥🔥🔥\n");
@@ -338,9 +338,9 @@ public class LongTextRegressionTest {
 
     @Test
     public void styleMarkerPreservesItalicWhenModelKeepsTags() {
-        // 上报形态：***text*** 与相邻普通文字同段，模型合并成一块返回——
-        // 旧逻辑整块落进首片段、样式节点被清空（斜体丢失）。样式标记让
-        // 模型在译文里原样保留 <xN>…</xN>，回填按标记把译文精确落回
+        // 上报形态：***text*** 与相邻普通文字同段，模型合并成一块返回。
+        // 旧逻辑把整块落进首片段、样式节点被清空（斜体丢失）。样式标记
+        // 让模型在译文里原样保留 <xN>…</xN>，回填按标记把译文精确落回
         // 样式节点。
         List<Object> nodes = list(
                 new TextContentNode("plain "),
@@ -365,7 +365,7 @@ public class LongTextRegressionTest {
 
     @Test
     public void styleMarkerMissingFallsBackToMergedBackfill() {
-        // 模型没保留样式标记：自动回退到无标记对齐（合并处理）——
+        // 模型没保留样式标记：自动回退到无标记对齐（合并处理），
         // 译文保留、样式退化，不拒译。
         List<Object> nodes = list(
                 new TextContentNode("plain "),
@@ -408,8 +408,8 @@ public class LongTextRegressionTest {
 
     @Test
     public void emojiBetweenSegmentsNoLongerBlocksParagraphAlignment() {
-        // 日志实测（消息 1563814381303758918）：targets=40 unsafeParagraphs=3
-        // ——emoji/提及等自渲染节点夹在片段之间曾令段落级对齐整条拒绝
+        // 日志实测（消息 1563814381303758918，targets=40 unsafeParagraphs=3）：
+        // emoji/提及等自渲染节点夹在片段之间曾令段落级对齐整条拒绝
         // （模型返回的 4 块恰好等于 4 个段落）。这些节点自渲染、合并译文
         // 时原位保留、无内容丢失，段落对齐不再因它们拒绝。
         com.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmojiContentNode emoji =
@@ -454,7 +454,7 @@ public class LongTextRegressionTest {
     public void urlMarkerSplitsMergedTranslationAroundLinks() {
         // 上报形态（日志 targets=17 unsafeParagraphs=2 的最小复现）：URL 夹在
         // 同一段落的两个片段之间，模型把整段回成一行。URL 定位标记让回填
-        // 能按 URL 把这一行切开——两段译文各归其位，URL 链接节点原样保留。
+        // 能按 URL 把这一行切开，两段译文各归其位，URL 链接节点原样保留。
         LinkContentNode link = new LinkContentNode(list(new TextContentNode(
                 "https://clck.ru/3Wfv9G")), new Object());
         List<Object> nodes = list(
@@ -476,7 +476,7 @@ public class LongTextRegressionTest {
 
     @Test
     public void urlSpanMergedSegmentsFillFirstAndBlankRest() {
-        // URL 间隔内有多个相邻片段、模型合并成一块：间隔内段落级对齐——
+        // URL 间隔内有多个相邻片段、模型合并成一块：间隔内段落级对齐，
         // 译文落进首片段、其余置空（与无 URL 的段落对齐同语义）。
         // 此前 copySpan 把空片段当「内容丢失」误杀，导致日志中
         // targets=17 urlMarks=12 的消息被整条拒绝（2026-10 实测）。
@@ -558,7 +558,7 @@ public class LongTextRegressionTest {
     @Test
     public void repeatedBlocksWithUrlAfterBoldTranslateWithLinksInPlace() {
         // 多链接 + 重复段落：URL 在加粗行内部（行内只有一个可翻译片段），
-        // 不构成「夹在两片段之间」——逐块正常翻译，链接各就各位。
+        // 不构成「夹在两片段之间」，逐块正常翻译，链接各就各位。
         List<Object> nodes = new ArrayList<>();
         for (int g = 0; g < 2; g++) {
             nodes.add(new StrongContentNode(list(
@@ -638,7 +638,7 @@ public class LongTextRegressionTest {
         // 实测故障：链接 + 单文本块的消息，URL 回显后出现两遍，第二遍是
         // 纯文本（不可点击）。现在的防重复机制：URL 进请求当定位标记，
         // 译文原样回带；回填按 URL 切分对齐并删除回显部分，显示永远只有
-        // 原链接节点——回显不会成为额外文本。回显两份/丢失/改坏则拒绝。
+        // 原链接节点，回显不会成为额外文本。回显两份/丢失/改坏则拒绝。
         List<Object> nodes = list(
                 new LinkContentNode(list(new TextContentNode(
                         "https://codex-relay.codes/register?aff=oqr0")), new Object()),
@@ -659,7 +659,7 @@ public class LongTextRegressionTest {
                         + "https://api.yzmao.cn/sign-up?aff=IpHK \n"
                         + "free real gpt-6.1-sol, TRIAL WITHOUT REFS", r.text);
 
-        // 模型按规则 6 原样回带两个 URL：回填按 URL 切分——URL 之间的
+        // 模型按规则 6 原样回带两个 URL。回填按 URL 切分：URL 之间的
         // 间隔承载文本节点译文，回显的 URL 本身被删除，链接由原节点渲染，
         // 无重复行。
         List<Object> out = ContentNodes.replaceText(nodes,

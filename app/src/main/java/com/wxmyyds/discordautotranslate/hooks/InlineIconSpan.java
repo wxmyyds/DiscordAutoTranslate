@@ -22,7 +22,7 @@ import java.util.WeakHashMap;
  * 消息正文末尾的行内翻译图标。
  *
  * <p>继承 {@link ImageSpan}（其父类为 {@code android.text.style.ReplacementSpan}），
- * 因此图标是<b>文本流的一部分</b>：它紧跟正文最后一个字符，最后一行剩余空间不足时
+ * 因此图标是文本流的一部分：它紧跟正文最后一个字符，最后一行剩余空间不足时
  * 由 {@code Layout} 自然换到下一行，不使用任何屏幕绝对坐标或负边距。</p>
  *
  * <h3>为何自绘而不依赖 ImageSpan 默认实现</h3>
@@ -35,28 +35,28 @@ import java.util.WeakHashMap;
  * <p>{@link #getSize} 刻意不修改 {@code fm}，因此图标不会撑高行距，
  * 满足「不得挤压、遮挡或截断正文」的要求。</p>
  *
- * <h3>旋转动画如何可靠重绘（本类的关键约束）</h3>
+ * <h3>旋转动画如何可靠重绘</h3>
  * <p>{@code ReplacementSpan} 本身不会触发重绘，必须由外部驱动。行内 span 拿不到
  * 宿主 {@code TextView}，因此注入时通过 {@link #bindHost} 记下宿主 View（弱引用），
  * 翻译中状态用 {@code View.postOnAnimation} 自驱动重绘。宿主是 Embed 卡片
- * （ViewGroup）时，每帧除宿主外还需逐个失效其内部的 TextView——父视图的
+ * （ViewGroup）时，每帧除宿主外还需逐个失效其内部的 TextView：父视图的
  * invalidate 不会重录子视图的显示列表，见 {@link #spinTargets}。</p>
  *
  * <p>「翻译中图标卡死不动」有四条已知成因，本类逐一防御：</p>
  * <ol>
- *   <li><b>瞬时 detach 不能终止动画</b>。列表布局/复用过程中条目视图会被 detach
+ *   <li>瞬时 detach 不能终止动画。列表布局/复用过程中条目视图会被 detach
  *       再 attach；若 detach 时直接终止，动画就再也起不来。因此用两个状态区分：
  *       {@link #active}（动画应存在）与 {@link #running}（正在排帧）。detach 只把
  *       {@code running} 置假，{@link #active} 保持不变；重新附着时由
  *       {@link View.OnAttachStateChangeListener} 恢复排帧。</li>
- *   <li><b>过期链条必须能自行作废</b>。每次「重新启动」都新建 ticker 实例并登记为
+ *   <li>过期链条必须能自行作废。每次「重新启动」都新建 ticker 实例并登记为
  *       当前链条（同一链条内重复投递自己的实例，每帧不产生新对象），旧实例醒来时
  *       发现已不是当前链条就直接退出，避免同一帧被重复 invalidate
  *       （{@code View.removeCallbacks} 无法撤销 {@code postOnAnimation}
  *       已投递到 Choreographer 的回调）。</li>
- *   <li><b>视角按时间计算</b>，不用每帧固定增量，否则转速随刷新率变化，
- *       且暂停恢复后会跳变。</li>
- *   <li><b>不旋转的新 span 也必须接管旧动画</b>。翻译完成时新 span 不再旋转，
+ *   <li>视角按时间计算：每帧固定增量会让转速随刷新率变化，
+ *       暂停恢复后还会跳变。</li>
+ *   <li>不旋转的新 span 也必须接管旧动画。翻译完成时新 span 不再旋转，
  *       若不停止旧 span，旧 ticker 会持续 invalidate 该视图。</li>
  * </ol>
  *
@@ -223,8 +223,8 @@ public final class InlineIconSpan extends ImageSpan {
     /**
      * 绑定宿主 View。
      *
-     * <p><b>无条件接管</b>：无论本 span 是否需要旋转，都先停掉该视图上原有的动画
-     * span。否则翻译完成（新 span 不旋转）时旧 ticker 会持续 invalidate 该视图。</p>
+     * <p>无论本 span 是否需要旋转，都先停掉该视图上原有的动画
+     * span，否则翻译完成（新 span 不旋转）时旧 ticker 会持续 invalidate 该视图。</p>
      */
     void bindHost(@Nullable View view) {
         if (view == null) {

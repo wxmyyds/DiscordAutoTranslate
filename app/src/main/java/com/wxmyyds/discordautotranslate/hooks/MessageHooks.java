@@ -17,7 +17,7 @@ import io.github.libxposed.api.XposedModule;
 /**
  * Discord 消息渲染 Hook 的安装与实现。
  *
- * <p><b>已核对的真实渲染链（Discord 340.13）</b>：
+ * <p>已核对的真实渲染链（Discord 340.13）：
  * <pre>
  * 消息列表  MessageContentViewHolder.bind
  *             → MessageContentView.setMessageContent-hYrISQc$default
@@ -28,17 +28,17 @@ import io.github.libxposed.api.XposedModule;
  *
  * <p>因此本类只安装四个渲染 Hook：</p>
  * <ol>
- *   <li><b>bind</b>：{@code MessageContentViewHolder.bind} —— 唯一可靠的
+ *   <li>bind：{@code MessageContentViewHolder.bind}，唯一可靠的
  *       「视图 → 消息 ID」来源（{@code MessageContentAccessory.getMessageId}）。</li>
- *   <li><b>渲染入口</b>：{@code MessageContentView} 上的展开式 {@code setMessageContent}
- *       （参数最多、首参为 {@code MessageMargins} 的那个重载）——
+ *   <li>渲染入口：{@code MessageContentView} 上的展开式 {@code setMessageContent}
+ *       （参数最多、首参为 {@code MessageMargins} 的那个重载），
  *       提供「视图 + 内容」，用于登记重渲染、触发翻译，并把宿主视图传给行内图标注入器。
- *       注意：<b>不能</b> Hook 6 参的 {@code setMessageContent}，它只被
+ *       注意：不能 Hook 6 参的 {@code setMessageContent}，它只被
  *       {@code TextDisplayComponentView} 调用，不在消息路径上。</li>
- *   <li><b>文本漏斗</b>：{@code TextUtilsKt.toSpannable} —— 所有文本渲染的唯一汇聚点
+ *   <li>文本漏斗：{@code TextUtilsKt.toSpannable}，所有文本渲染的唯一汇聚点
  *       （含回复引用与 Embed）。翻译替换与行内图标注入都在此处完成，因为该方法是静态的、
  *       接收的 {@code StructurableText} 与 bind 阶段是同一实例，可用身份映射反查消息 ID。</li>
- *   <li><b>回复引用</b>：{@code MessageViewReplyPreview.configureReply} ——
+ *   <li>回复引用：{@code MessageViewReplyPreview.configureReply}，
  *       把引用内的正文视图关联到被引用消息 ID，使引用内译文也能更新。</li>
  * </ol>
  *
@@ -220,8 +220,8 @@ public final class MessageHooks {
     /**
      * 定位展开式 {@code setMessageContent}。
      *
-     * <p>筛选条件：名字以 {@code setMessageContent} 开头、参数最多、且<b>首参为
-     * {@code MessageMargins}</b>。最后一条用于排除 Kotlin 生成的
+     * <p>筛选条件：名字以 {@code setMessageContent} 开头、参数最多、且首参为
+     * {@code MessageMargins}。最后一条用于排除 Kotlin 生成的
      * {@code setMessageContent$default}（其首参是 {@code MessageContentView}）。
      * 不按方法名哈希后缀匹配，以耐受 Discord 版本更新。</p>
      */
@@ -272,7 +272,7 @@ public final class MessageHooks {
         Method toSpannable = null;
         for (Method m : textUtils.getDeclaredMethods()) {
             // 必须选中首参为 StructurableText 的重载。
-            // 注意 TextUtilsKt 中有<b>两个</b>方法名以 toSpannable 开头的重载：
+            // 注意 TextUtilsKt 中有两个方法名以 toSpannable 开头的重载：
             //   29 参 首参 StructurableText  ← 需要这个
             //    4 参 首参 List             ← 内部递归用，不能选
             // 原实现用 getParameterCount() >= 4 取第一个匹配，顺序不确定。
@@ -344,8 +344,8 @@ public final class MessageHooks {
 
     /**
      * Hook {@code MessageViewReplyPreview.configureReply}：把回复引用内的正文视图
-     * 关联到<b>被引用消息自己的 ID</b>，使引用内的内容也能被翻译。
-     * 行内图标<b>不</b>注入回复引用（{@link InlineIconInjector} 在无宿主时跳过），
+     * 关联到被引用消息自己的 ID，使引用内的内容也能被翻译。
+     * 行内图标不注入回复引用（{@link InlineIconInjector} 在无宿主时跳过），
      * 但引用内的译文切换仍需要重渲染登记。
      */
     private static void installReplyHook(XposedModule module, ClassLoader cl,

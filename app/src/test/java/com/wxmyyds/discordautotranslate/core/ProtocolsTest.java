@@ -14,7 +14,7 @@ import org.junit.Test;
  *
  * <p>断言一律先解析 JSON 再取字段（org.json 不保证键序），
  * 不做字符串整体比较。系统提示词与原文经过请求体必须无损往返，
- * 这是旧版模板引擎测试（JsonTemplateTest）核心保证的协议层延续。</p>
+ * 该保证延续自旧版模板引擎测试（JsonTemplateTest）。</p>
  */
 public class ProtocolsTest {
 
@@ -246,7 +246,7 @@ public class ProtocolsTest {
 
     /**
      * Responses 响应的 reasoning 项排在 message 项之前（推理模型官方结构），
-     * 必须按类型扫描而不是固定 output.0 下标。
+     * 必须按类型扫描，不能写死 output.0 下标。
      */
     @Test
     public void responsesExtractionSkipsReasoningItems() throws Exception {

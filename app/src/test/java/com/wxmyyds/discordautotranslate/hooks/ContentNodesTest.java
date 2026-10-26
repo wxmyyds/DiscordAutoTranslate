@@ -21,8 +21,8 @@ import java.util.List;
  *
  * <p>测试策略：Discord 的真实节点类在单测环境不存在，但 {@link ContentNodes}
  * 完全通过反射（{@code getContent}/{@code getItems}/{@code componentN}/{@code copy}/
- * {@code <init>(String)}）操作节点。因此这里定义<b>同名</b>的假节点类来模拟
- * Kotlin data class 的结构，从而真正执行被测的反射代码路径，而不是只测表面。</p>
+ * {@code <init>(String)}）操作节点。因此这里定义同名的假节点类来模拟
+ * Kotlin data class 的结构，让被测的反射代码路径真正执行起来。</p>
  *
  * <p>注意：假类的 {@code getSimpleName()} 必须与 Discord 的类名一致，
  * 因为 {@code ContentNodes} 按类名分类节点。</p>
@@ -598,8 +598,8 @@ public class ContentNodesTest {
 
     @Test
     public void urlLinkIsPreservedVerbatimAndNotTranslated() {
-        // 裸 URL 消息：链接显示文本就是 URL 本身。URL 不能交给模型——
-        // 模型会重新生成它，实测 IJYuv3wZ 被改成 lJYuv3wZ。
+        // 裸 URL 消息：链接显示文本就是 URL 本身，不能交给模型翻译。
+        // 模型会重新生成 URL，实测 IJYuv3wZ 被改成 lJYuv3wZ。
         Object ctx = new Object();
         List<Object> nodes = list(
                 new HeadingContentNode(list(new TextContentNode(
@@ -680,7 +680,6 @@ public class ContentNodesTest {
                 new TextContentNode(" now"));
         List<Object> out = ContentNodes.replaceText(nodes, "运行\n现在");
         assertNotNull(out);
-        // 行内代码节点原样保留
         assertSame("行内代码不得被翻译",
                 nodes.get(1), out.get(1));
         assertEquals("npm install", ((InlineCodeContentNode) out.get(1)).getContent());
@@ -914,7 +913,7 @@ public class ContentNodesTest {
 
     @Test
     public void plainMarkerlessMergedTranslationBackfillsIntoParagraph() {
-        // 同段两节点只回一块译文（模型合并了段内两行）：段落对齐——译文进
+        // 同段两节点只回一块译文（模型合并了段内两行）：段落对齐，译文进
         // 本段首片段，段内其余置空并裁剪。不跨段、不清空其他段落。
         List<Object> nodes = list(new TextContentNode("hi"), new NewLineContentNode(),
                 new TextContentNode("hi"));
@@ -1052,7 +1051,7 @@ public class ContentNodesTest {
     @Test
     public void alignSpanSingleChunkGoesToParagraphHead() {
         // 同段落的多个内联片段（如加粗+普通文本相邻），模型按段落返回一块：
-        // 译文进本段第一个片段，段内其余置空——有格式文本的翻译靠这级落位。
+        // 译文进本段第一个片段，段内其余置空。有格式文本的翻译靠这级落位。
         assertEquals(Arrays.asList("只有一行", "", ""),
                 ContentNodes.alignSpanToParts("只有一行",
                         groups(0, 0, 0), new java.util.BitSet()));
@@ -1107,7 +1106,7 @@ public class ContentNodesTest {
     @Test
     public void inlineFormattedParagraphBackfillsIntoFirstStyledFragment() {
         // 有格式的内联消息（加粗+普通文本相邻成一段）：纯文本请求里它们
-        // 连成一段，模型只能按段落返回一块——片段级永远对不上。段落对齐：
+        // 连成一段，模型只能按段落返回一块，片段级永远对不上。段落对齐：
         // 译文进本段首片段（加粗节点），段内其余片段置空并裁剪。
         // 9261dd5 的「精确对应或拒绝」让这类消息全部保持原文，此处回归。
         List<Object> nodes = list(
@@ -1130,7 +1129,7 @@ public class ContentNodesTest {
     public void multiParagraphFormattedPlacesEachParagraphInPlace() {
         // 两段消息：第一段由加粗片段+普通片段内联组成，第二段独立。
         // 模型按段落返回两块：第一块进第一段首片段（加粗），第二块进
-        // 第二段——段落各就各位，不跨段堆叠。
+        // 第二段。段落各就各位，不跨段堆叠。
         List<Object> nodes = list(
                 new StrongContentNode(list(new TextContentNode("bold"))),
                 new TextContentNode(" tail"),

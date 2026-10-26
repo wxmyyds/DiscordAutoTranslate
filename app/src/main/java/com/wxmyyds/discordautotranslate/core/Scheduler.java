@@ -125,7 +125,7 @@ public final class Scheduler {
     /**
      * 可缩减 permit 的信号量。
      *
-     * <p>{@link Semaphore#reducePermits(int)} 是 <b>protected</b>，无法从外部类调用，
+     * <p>{@link Semaphore#reducePermits(int)} 是 protected，无法从外部类调用，
      * 因此通过子类暴露一个包内可见的封装。</p>
      */
     static final class AdjustableSemaphore extends Semaphore {
@@ -385,7 +385,6 @@ public final class Scheduler {
             boolean acquired = false;
             Throwable attemptFailure = null;
             try {
-                // 并发闸门；仅在获取许可后确认任务仍有效，避免等待许可期间发出过期请求。
                 permits.acquire();
                 acquired = true;
                 // 检查必须发生在获得许可之后；等待许可期间失效的任务不会发请求。
