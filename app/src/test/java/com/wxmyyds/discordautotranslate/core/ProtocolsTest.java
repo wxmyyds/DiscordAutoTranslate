@@ -36,10 +36,13 @@ public class ProtocolsTest {
         JSONArray messages = json.getJSONArray("messages");
         assertEquals(2, messages.length());
         assertEquals("system", messages.getJSONObject(0).getString("role"));
-        assertEquals(Config.DEF_SYSTEM_PROMPT,
+        // 系统提示词 = 用户配置 + 请求层追加的包装协议说明（WRAPPER_RULE）。
+        assertEquals(Config.DEF_SYSTEM_PROMPT + "\n\n" + Protocols.WRAPPER_RULE,
                 messages.getJSONObject(0).getString("content"));
         assertEquals("user", messages.getJSONObject(1).getString("role"));
-        assertEquals("hii everyone", messages.getJSONObject(1).getString("content"));
+        // 待翻译正文整体包进 <translate> 标签。
+        assertEquals(Protocols.WRAPPER_OPEN + "hii everyone" + Protocols.WRAPPER_CLOSE,
+                messages.getJSONObject(1).getString("content"));
     }
 
     /** Responses 请求体用 instructions/input；不得携带官方接口不接受的 frequency_penalty。 */
@@ -49,8 +52,10 @@ public class ProtocolsTest {
                 "hii everyone", Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
         JSONObject json = new JSONObject(body);
         assertEquals(Config.DEF_MODEL, json.getString("model"));
-        assertEquals(Config.DEF_SYSTEM_PROMPT, json.getString("instructions"));
-        assertEquals("hii everyone", json.getString("input"));
+        assertEquals(Config.DEF_SYSTEM_PROMPT + "\n\n" + Protocols.WRAPPER_RULE,
+                json.getString("instructions"));
+        assertEquals(Protocols.WRAPPER_OPEN + "hii everyone" + Protocols.WRAPPER_CLOSE,
+                json.getString("input"));
         assertEquals(0, json.getDouble("temperature"), 0.0);
         assertFalse("Responses 接口不接受 frequency_penalty", json.has("frequency_penalty"));
         assertFalse("Responses 接口没有 messages 字段", json.has("messages"));
@@ -163,15 +168,17 @@ public class ProtocolsTest {
 
         JSONObject compat = new JSONObject(Protocols.requestBody(
                 Config.PROTOCOL_OPENAI_COMPATIBLE, nasty, prompt, "m"));
-        assertEquals(nasty, compat.getJSONArray("messages").getJSONObject(1)
-                .getString("content"));
-        assertEquals(prompt, compat.getJSONArray("messages").getJSONObject(0)
-                .getString("content"));
+        assertEquals(Protocols.WRAPPER_OPEN + nasty + Protocols.WRAPPER_CLOSE,
+                compat.getJSONArray("messages").getJSONObject(1).getString("content"));
+        assertEquals(prompt + "\n\n" + Protocols.WRAPPER_RULE,
+                compat.getJSONArray("messages").getJSONObject(0).getString("content"));
 
         JSONObject responses = new JSONObject(Protocols.requestBody(
                 Config.PROTOCOL_OPENAI_RESPONSES, nasty, prompt, "m"));
-        assertEquals(nasty, responses.getString("input"));
-        assertEquals(prompt, responses.getString("instructions"));
+        assertEquals(Protocols.WRAPPER_OPEN + nasty + Protocols.WRAPPER_CLOSE,
+                responses.getString("input"));
+        assertEquals(prompt + "\n\n" + Protocols.WRAPPER_RULE,
+                responses.getString("instructions"));
     }
 
     // ------------------------------------------------------------ 端点解析
@@ -213,6 +220,28 @@ public class ProtocolsTest {
                 + "\"content\":\"你好\"}}]}";
         assertEquals("你好",
                 Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, resp));
+    }
+
+    /** 模型不遵守「不输出标签」时回显包装层：首尾成对即剥离，不显示给用户。 */
+    @Test
+    public void echoedWrapperIsStrippedWhenPairedAtBoundaries() throws Exception {
+        String resp = "{\"choices\":[{\"message\":{\"content\":"
+                + "\"<translate>\\n你好\\n</translate>\"}}]}";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, resp));
+    }
+
+    /** 剥离后仍残留标签 = 输出结构损坏，按解析失败拒绝（宁显原文不显字面量）。 */
+    @Test
+    public void residualWrapperTagsAreRejectedAsParseError() {
+        String resp = "{\"choices\":[{\"message\":{\"content\":"
+                + "\"前言 <translate>你好</translate>\"}}]}";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, resp);
+            fail("残留包装标签必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
     }
 
     /**
@@ -264,8 +293,10 @@ public class ProtocolsTest {
     public void nullInputsAreDefendedWithoutCrashing() throws Exception {
         JSONObject json = new JSONObject(Protocols.requestBody(
                 Config.PROTOCOL_OPENAI_COMPATIBLE, null, null, "m"));
-        assertEquals("", json.getJSONArray("messages").getJSONObject(1).getString("content"));
-        assertEquals("", json.getJSONArray("messages").getJSONObject(0).getString("content"));
+        assertEquals(Protocols.WRAPPER_OPEN + Protocols.WRAPPER_CLOSE,
+                json.getJSONArray("messages").getJSONObject(1).getString("content"));
+        assertEquals(Protocols.WRAPPER_RULE,
+                json.getJSONArray("messages").getJSONObject(0).getString("content"));
         assertEquals("", Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, null));
         // 空白 URL 原样返回；实际请求前由 JsonApiEngine.validateConfig 拦截。
         assertEquals("  ", Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, "  "));

@@ -137,7 +137,8 @@ public class StructurableTextFactoryTest {
         assertNotNull(extracted);
         String request = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
                 extracted.text, Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
-        assertEquals(" " + body, JsonPath.extractString(request, "messages.1.content"));
+        assertEquals(Protocols.WRAPPER_OPEN + " " + body + Protocols.WRAPPER_CLOSE,
+                JsonPath.extractString(request, "messages.1.content"));
 
         // 模拟正常接口译文，仅验证本地回填；不声称测试了真实模型输出。
         String translation = "兄弟，给我推荐一些设计系统技能";
