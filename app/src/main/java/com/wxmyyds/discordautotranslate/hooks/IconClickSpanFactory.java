@@ -3,7 +3,6 @@ package com.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -12,8 +11,8 @@ import java.lang.reflect.Proxy;
 /**
  * 行内图标的可点击 span。
  *
- * <p>Discord 的文本点击不由标准 {@code ClickableSpan} 直接分发，而是走
- * {@code NestedScrollOnTouchTracker}：它在 {@code ACTION_DOWN} 用
+ * <p>Discord 的文本点击由 {@code NestedScrollOnTouchTracker} 分发，不走标准
+ * {@code ClickableSpan}：它在 {@code ACTION_DOWN} 用
  * {@code Layout.getOffsetForHorizontal} 把触点换算成字符位置，再取该位置上
  * {@code NestedClickableSpan} 类型的 span，命中后于 {@code ACTION_UP} 调用其
  * {@code onClick}。因此图标要与点击范围对齐，该 span 必须实现宿主接口
@@ -22,7 +21,7 @@ import java.lang.reflect.Proxy;
  * <p>该接口位于目标 APK 内、编译期不可见，因此用 {@link Proxy} 按接口名动态实现，
  * 避免编译期依赖 Discord 类。</p>
  *
- * <p><b>长按</b>：始终返回 {@code false}，将长按交给宿主消息菜单。</p>
+ * <p>长按始终返回 {@code false}，把长按交给宿主消息菜单。</p>
  */
 public final class IconClickSpanFactory {
 
@@ -48,7 +47,6 @@ public final class IconClickSpanFactory {
         }
         Class<?> iface = Reflect.loadClass(hostCl, CLS_NESTED_CLICKABLE);
         if (iface == null || !iface.isInterface()) {
-            XLog.w("NestedClickableSpan interface not found; inline icon not clickable");
             return null;
         }
         Object highPriority = resolveHighPriority(hostCl);
@@ -74,7 +72,6 @@ public final class IconClickSpanFactory {
                     case "toString":
                         return "InlineIconClickSpan(" + messageId + ")";
                     default:
-                        XLog.d("inline icon click span: unexpected method " + method.getName());
                         return null;
                 }
             }
@@ -83,7 +80,6 @@ public final class IconClickSpanFactory {
         try {
             return Proxy.newProxyInstance(hostCl, new Class<?>[]{iface}, handler);
         } catch (Throwable t) {
-            XLog.w("create inline icon click span failed", t);
             return null;
         }
     }
@@ -105,10 +101,8 @@ public final class IconClickSpanFactory {
                     return c;
                 }
             }
-            XLog.w("TouchPriority.HIGH not found; using default priority");
             return null;
         } catch (Throwable t) {
-            XLog.w("resolve TouchPriority.HIGH failed", t);
             return null;
         }
     }

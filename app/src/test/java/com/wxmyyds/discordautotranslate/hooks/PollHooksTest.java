@@ -12,7 +12,7 @@ import org.junit.Test;
  *
  * <p>投票替换依赖 Kotlin data class 的 copy/componentN 通用重建；这里用普通 Java
  * 类模拟相同的方法形态（宿主的 copy 名字带修饰后缀，JVM 无法声明，只能覆盖
- * 未修饰路径——修饰路径与前缀匹配逻辑共用同一实现）。</p>
+ * 未修饰路径；修饰路径与前缀匹配逻辑共用同一实现）。</p>
  */
 public class PollHooksTest {
 

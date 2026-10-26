@@ -14,13 +14,14 @@ import org.junit.Test;
  *
  * <p>断言一律先解析 JSON 再取字段（org.json 不保证键序），
  * 不做字符串整体比较。系统提示词与原文经过请求体必须无损往返，
- * 这是旧版模板引擎测试（JsonTemplateTest）核心保证的协议层延续。</p>
+ * 该保证延续自旧版模板引擎测试（JsonTemplateTest）。</p>
  */
 public class ProtocolsTest {
 
     // ------------------------------------------------------------ 请求体
 
-    /** Compatible 请求体必须与旧版默认模板逐字段等价，老用户升级后请求行为不变。 */
+    /** Compatible 请求体不带 frequency_penalty：频率惩罚抑制重复 token，
+     * 会让模型跳过/改写广告类消息里大段重复的段落（实测 7 组重复块被压掉若干组）。 */
     @Test
     public void compatibleBodyMatchesLegacyDefaultTemplate() throws Exception {
         String body = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
@@ -28,14 +29,20 @@ public class ProtocolsTest {
         JSONObject json = new JSONObject(body);
         assertEquals(Config.DEF_MODEL, json.getString("model"));
         assertEquals(0, json.getDouble("temperature"), 0.0);
-        assertEquals(0.2, json.getDouble("frequency_penalty"), 0.0);
+        assertFalse("频率惩罚与逐块照译重复内容冲突", json.has("frequency_penalty"));
+        // 流式：非流式接口生成完成前零字节返回，慢速供应商上长消息会被
+        // 总时长超时掐断；流式下读超时按字节间隔计算。
+        assertTrue("Compatible 协议必须请求流式", json.getBoolean("stream"));
         JSONArray messages = json.getJSONArray("messages");
         assertEquals(2, messages.length());
         assertEquals("system", messages.getJSONObject(0).getString("role"));
-        assertEquals(Config.DEF_SYSTEM_PROMPT,
+        // 系统提示词 = 用户配置 + 请求层追加的包装协议说明（WRAPPER_RULE）。
+        assertEquals(Config.DEF_SYSTEM_PROMPT + "\n\n" + Protocols.WRAPPER_RULE,
                 messages.getJSONObject(0).getString("content"));
         assertEquals("user", messages.getJSONObject(1).getString("role"));
-        assertEquals("hii everyone", messages.getJSONObject(1).getString("content"));
+        // 待翻译正文整体包进 <translate> 标签。
+        assertEquals(Protocols.WRAPPER_OPEN + "hii everyone" + Protocols.WRAPPER_CLOSE,
+                messages.getJSONObject(1).getString("content"));
     }
 
     /** Responses 请求体用 instructions/input；不得携带官方接口不接受的 frequency_penalty。 */
@@ -45,11 +52,110 @@ public class ProtocolsTest {
                 "hii everyone", Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
         JSONObject json = new JSONObject(body);
         assertEquals(Config.DEF_MODEL, json.getString("model"));
-        assertEquals(Config.DEF_SYSTEM_PROMPT, json.getString("instructions"));
-        assertEquals("hii everyone", json.getString("input"));
+        assertEquals(Config.DEF_SYSTEM_PROMPT + "\n\n" + Protocols.WRAPPER_RULE,
+                json.getString("instructions"));
+        assertEquals(Protocols.WRAPPER_OPEN + "hii everyone" + Protocols.WRAPPER_CLOSE,
+                json.getString("input"));
         assertEquals(0, json.getDouble("temperature"), 0.0);
         assertFalse("Responses 接口不接受 frequency_penalty", json.has("frequency_penalty"));
         assertFalse("Responses 接口没有 messages 字段", json.has("messages"));
+        assertFalse("Responses 协议暂不支持流式，不携带 stream", json.has("stream"));
+    }
+
+    // ------------------------------------------------------------ 流式响应提取
+
+    /** 流式帧按 delta 累积成完整译文；role/空帧与注释行不得混入。 */
+    @Test
+    public void streamedResponseAccumulatesDeltas() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n"
+                + "\n"
+                + ": keep-alive\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"，世界\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{}}]}\n"
+                + "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好，世界",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
+    /** 服务端忽略 stream 参数回普通 JSON 时，提取路径保持原样。 */
+    @Test
+    public void nonStreamedJsonResponseStillExtractsViaMessageContent() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"普通\"}}]}";
+        assertEquals("普通",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, json));
+    }
+
+    /** 只收到 role/usage 帧时累积为空，由引擎报“提取到的译文为空”。 */
+    @Test
+    public void streamedResponseWithoutContentDeltasIsEmpty() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n"
+                + "data: {\"usage\":{\"total_tokens\":10},\"choices\":[]}\n"
+                + "data: [DONE]\n";
+        assertEquals("",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
+    /** 流断在半路（网络中断/服务端断开）：部分 delta 拼出的译文缺尾巴，必须失败。 */
+    @Test
+    public void streamCutMidwayIsRejectedNotPartiallyExtracted() {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"，世\"}}]}\n";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse);
+            fail("残缺流必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
+    /** finish_reason=length：流走完了但生成被 max_tokens 掐断，译文不完整。 */
+    @Test
+    public void finishReasonLengthIsRejectedAsTruncated() {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"finish_reason\":\"length\",\"delta\":{}}]}\n"
+                + "data: [DONE]\n";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse);
+            fail("被截断的生成必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
+    /** 个别实现省略 [DONE] 但给出 finish_reason=stop：生成完整，照常提取。 */
+    @Test
+    public void finishReasonStopWithoutDoneMarkerStillExtracts() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
+    /** 中间帧的 finish_reason 显式为 null：不得被当成 "null" 字符串而误判截断。 */
+    @Test
+    public void explicitNullFinishReasonDoesNotFailTheGate() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你\"},"
+                + "\"finish_reason\":null}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"好\"},"
+                + "\"finish_reason\":null}]}\n"
+                + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+    }
+
+    /** role 帧的 content 显式为 null：不得作为 "null" 字符串混入译文。 */
+    @Test
+    public void explicitNullContentDeltaDoesNotEmitNullLiteral() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\","
+                + "\"content\":null}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
     }
 
     /**
@@ -62,15 +168,17 @@ public class ProtocolsTest {
 
         JSONObject compat = new JSONObject(Protocols.requestBody(
                 Config.PROTOCOL_OPENAI_COMPATIBLE, nasty, prompt, "m"));
-        assertEquals(nasty, compat.getJSONArray("messages").getJSONObject(1)
-                .getString("content"));
-        assertEquals(prompt, compat.getJSONArray("messages").getJSONObject(0)
-                .getString("content"));
+        assertEquals(Protocols.WRAPPER_OPEN + nasty + Protocols.WRAPPER_CLOSE,
+                compat.getJSONArray("messages").getJSONObject(1).getString("content"));
+        assertEquals(prompt + "\n\n" + Protocols.WRAPPER_RULE,
+                compat.getJSONArray("messages").getJSONObject(0).getString("content"));
 
         JSONObject responses = new JSONObject(Protocols.requestBody(
                 Config.PROTOCOL_OPENAI_RESPONSES, nasty, prompt, "m"));
-        assertEquals(nasty, responses.getString("input"));
-        assertEquals(prompt, responses.getString("instructions"));
+        assertEquals(Protocols.WRAPPER_OPEN + nasty + Protocols.WRAPPER_CLOSE,
+                responses.getString("input"));
+        assertEquals(prompt + "\n\n" + Protocols.WRAPPER_RULE,
+                responses.getString("instructions"));
     }
 
     // ------------------------------------------------------------ 端点解析
@@ -114,9 +222,31 @@ public class ProtocolsTest {
                 Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, resp));
     }
 
+    /** 模型不遵守「不输出标签」时回显包装层：首尾成对即剥离，不显示给用户。 */
+    @Test
+    public void echoedWrapperIsStrippedWhenPairedAtBoundaries() throws Exception {
+        String resp = "{\"choices\":[{\"message\":{\"content\":"
+                + "\"<translate>\\n你好\\n</translate>\"}}]}";
+        assertEquals("你好",
+                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, resp));
+    }
+
+    /** 剥离后仍残留标签 = 输出结构损坏，按解析失败拒绝（宁显原文不显字面量）。 */
+    @Test
+    public void residualWrapperTagsAreRejectedAsParseError() {
+        String resp = "{\"choices\":[{\"message\":{\"content\":"
+                + "\"前言 <translate>你好</translate>\"}}]}";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, resp);
+            fail("残留包装标签必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
     /**
      * Responses 响应的 reasoning 项排在 message 项之前（推理模型官方结构），
-     * 必须按类型扫描而不是固定 output.0 下标。
+     * 必须按类型扫描，不能写死 output.0 下标。
      */
     @Test
     public void responsesExtractionSkipsReasoningItems() throws Exception {
@@ -163,8 +293,10 @@ public class ProtocolsTest {
     public void nullInputsAreDefendedWithoutCrashing() throws Exception {
         JSONObject json = new JSONObject(Protocols.requestBody(
                 Config.PROTOCOL_OPENAI_COMPATIBLE, null, null, "m"));
-        assertEquals("", json.getJSONArray("messages").getJSONObject(1).getString("content"));
-        assertEquals("", json.getJSONArray("messages").getJSONObject(0).getString("content"));
+        assertEquals(Protocols.WRAPPER_OPEN + Protocols.WRAPPER_CLOSE,
+                json.getJSONArray("messages").getJSONObject(1).getString("content"));
+        assertEquals(Protocols.WRAPPER_RULE,
+                json.getJSONArray("messages").getJSONObject(0).getString("content"));
         assertEquals("", Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, null));
         // 空白 URL 原样返回；实际请求前由 JsonApiEngine.validateConfig 拦截。
         assertEquals("  ", Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, "  "));

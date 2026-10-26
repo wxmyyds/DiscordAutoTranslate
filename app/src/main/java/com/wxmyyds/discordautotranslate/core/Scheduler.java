@@ -125,7 +125,7 @@ public final class Scheduler {
     /**
      * 可缩减 permit 的信号量。
      *
-     * <p>{@link Semaphore#reducePermits(int)} 是 <b>protected</b>，无法从外部类调用，
+     * <p>{@link Semaphore#reducePermits(int)} 是 protected，无法从外部类调用，
      * 因此通过子类暴露一个包内可见的封装。</p>
      */
     static final class AdjustableSemaphore extends Semaphore {
@@ -215,8 +215,8 @@ public final class Scheduler {
             if (worker != null) {
                 try {
                     task.engine.cancel(worker);
-                } catch (Throwable t) {
-                    XLog.w("engine cancellation failed for " + task.key.messageId, t);
+                } catch (Throwable ignored) {
+                    // 取消失败不阻断线程池收尾。
                 }
             }
         }
@@ -252,7 +252,6 @@ public final class Scheduler {
                 permits.reduce(current - target);
             }
         }
-        XLog.i("max concurrency set to " + target);
     }
 
     public int completedCount() {
@@ -299,7 +298,6 @@ public final class Scheduler {
         if (shutdown) return;
         Task existing = inFlight.putIfAbsent(task.key, task);
         if (existing != null) {
-            XLog.d("dedupe: task already in flight for " + messageId + " / " + contentHash);
             return;
         }
         if (shutdown) {
@@ -311,7 +309,6 @@ public final class Scheduler {
         } catch (Throwable t) {
             inFlight.remove(task.key, task);
             if (shutdown) return;
-            XLog.w("submit rejected for " + messageId + ": " + t.getClass().getSimpleName());
             TranslationException error = new TranslationException(
                     TranslationException.Kind.UNKNOWN, "线程池已满或已关闭");
             postResult(task, null, error, false);
@@ -356,7 +353,6 @@ public final class Scheduler {
                         }
                     } else {
                         discarded.incrementAndGet();
-                        XLog.d("discard stale translation result for " + task.key.messageId);
                     }
                 } else if (!accepted) {
                     discarded.incrementAndGet();
@@ -370,7 +366,6 @@ public final class Scheduler {
         try {
             return task.acceptance.isStillValid(task.key.generation, task.key.contentHash);
         } catch (Throwable t) {
-            XLog.w("acceptance check failed for " + task.key.messageId, t);
             return false;
         }
     }
@@ -390,7 +385,6 @@ public final class Scheduler {
             boolean acquired = false;
             Throwable attemptFailure = null;
             try {
-                // 并发闸门；仅在获取许可后确认任务仍有效，避免等待许可期间发出过期请求。
                 permits.acquire();
                 acquired = true;
                 // 检查必须发生在获得许可之后；等待许可期间失效的任务不会发请求。
@@ -426,9 +420,6 @@ public final class Scheduler {
             }
             retried.incrementAndGet();
             long backoff = backoffMillis(attempt, attemptFailure);
-            XLog.w("attempt " + attempt + "/" + MAX_ATTEMPTS + " failed for "
-                    + task.key.messageId + " (" + attemptFailure.getClass().getSimpleName()
-                    + "), retry in " + backoff + "ms");
             if (shutdown || !sleepInterruptibly(backoff)) {
                 throw new TranslationException(TranslationException.Kind.CANCELLED,
                         "重试等待被中断", attemptFailure);

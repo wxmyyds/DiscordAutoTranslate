@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** 工厂回退策略：富文本替换失败时必须让调用方保留原文，而不是丢弃结构。 */
+/** 工厂回退策略：富文本替换失败时必须让调用方保留原文，不得丢弃结构。 */
 public class StructurableTextFactoryTest {
 
     @Before
@@ -90,16 +90,19 @@ public class StructurableTextFactoryTest {
     public void successfulRichTextReplacementKeepsTextAndEmoji() {
         TextContentNode shared = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");
-        AnnotatedStructurableText original = new AnnotatedStructurableText(list(shared, emoji, shared));
+        AnnotatedStructurableText original = new AnnotatedStructurableText(
+                list(shared, emoji, new ContentNodesTest.NewLineContentNode(), shared));
 
-        Object out = StructurableTextFactory.forTranslation(original, "你好");
+        Object out = StructurableTextFactory.forTranslation(original,
+                "你好\n你好");
 
         assertTrue(out instanceof AnnotatedStructurableText);
         List<Object> nodes = ((AnnotatedStructurableText) out).getContent();
-        // 末尾共享节点的空片段属于尾部空白，已被裁剪。
-        assertEquals(2, nodes.size());
+        // 共享实例在两个位置各拿一个片段，emoji 原样保留。
+        assertEquals(4, nodes.size());
         assertEquals("你好", ((TextContentNode) nodes.get(0)).getContent());
         assertSame(emoji, nodes.get(1));
+        assertEquals("你好", ((TextContentNode) nodes.get(3)).getContent());
         assertEquals("hello", shared.getContent());
     }
 
@@ -134,7 +137,8 @@ public class StructurableTextFactoryTest {
         assertNotNull(extracted);
         String request = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
                 extracted.text, Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
-        assertEquals(" " + body, JsonPath.extractString(request, "messages.1.content"));
+        assertEquals(Protocols.WRAPPER_OPEN + " " + body + Protocols.WRAPPER_CLOSE,
+                JsonPath.extractString(request, "messages.1.content"));
 
         // 模拟正常接口译文，仅验证本地回填；不声称测试了真实模型输出。
         String translation = "兄弟，给我推荐一些设计系统技能";

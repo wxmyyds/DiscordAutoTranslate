@@ -13,16 +13,16 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 视图重渲染登记表：把 messageId 映射到<b>一组</b>可重渲染目标。
+ * 视图重渲染登记表：把 messageId 映射到一组可重渲染目标。
  *
  * <p>翻译是异步完成的，完成时需要通过消息 ID 找回对应视图重新渲染。</p>
  *
- * <h3>为何需要“一组”而非单个视图</h3>
+ * <h3>为何每个消息登记一组目标</h3>
  * <p>同一条消息的正文可能同时出现在多个位置：消息自身所在的行，
  * 以及其他消息中引用它的回复预览（{@code MessageViewReplyPreview.replyText}）。
  * 若只记录一个视图，另一处就不会随译文更新。</p>
  *
- * <h3>为何记录“调用目标 + 方法 + 实参”而非只记录视图</h3>
+ * <h3>为何记录调用目标、方法与实参</h3>
  * <p>消息正文的重渲染入口是 {@code MessageContentView.setMessageContent}，
  * 而回复引用的重渲染入口是父容器
  * {@code MessageViewReplyPreview.configureReply}（回复引用的正文由它内部渲染）。
@@ -120,7 +120,7 @@ public final class RerenderRegistry {
      * 用最新状态重新渲染该消息的全部视图（消息行 + 所有引用它的回复预览）。
      *
      * <p>视图已回收或确认已被复用到其他消息时会跳过并清理。注意：
-     * “绑定未知”不等于“已复用”——{@code viewToMessageId} 是容量上限 512 的 LRU，
+     * “绑定未知”不等于“已复用”：{@code viewToMessageId} 是容量上限 512 的 LRU，
      * 长列表滚动后旧条目会被淘汰。若把未知也当成已复用而删除登记项，
      * 该消息就再也不会因译文完成而刷新，只有重新 bind（滚动）才恢复。</p>
      */

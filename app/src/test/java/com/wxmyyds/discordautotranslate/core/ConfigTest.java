@@ -10,7 +10,7 @@ import org.junit.Test;
 /**
  * 配置读取的回落规则。
  *
- * <p>核心约定：<b>未配置的项一律回落默认值</b>。
+ * <p>未配置的项一律回落默认值。
  * “未配置”包括：键不存在、值为 {@code null}、值为空白字符串、
  * 以及正整数项小于等于 0。</p>
  *
@@ -25,7 +25,6 @@ public class ConfigTest {
     @Test
     public void emptyPrefsUseAllDefaults() {
         Config.Snapshot s = Config.read(new MemoryPrefs());
-        assertFalse(s.verboseLog);
         assertEquals(Config.DEF_ENABLED, s.enabled);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
         assertEquals(Config.DEF_MODEL, s.model);
@@ -81,7 +80,7 @@ public class ConfigTest {
         assertFalse(keyChanged.contains("sk-test-key"));
     }
 
-    /** 密钥与额外请求头可为空；其他关键字段空白时回落默认。 */
+    /** 密钥与额外请求头可为空；其他字段空白时回落默认。 */
     @Test
     public void blankStringsFallBackToDefaults() {
         MemoryPrefs p = new MemoryPrefs()
@@ -150,7 +149,6 @@ public class ConfigTest {
         assertEquals("日本語", s.targetLang);
         assertEquals("只翻译。", s.systemPrompt);
         assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, s.protocol);
-        // 默认值不得生效
         assertNotEquals(Config.DEF_MODEL, s.model);
         assertNotEquals(Config.DEF_PROTOCOL, s.protocol);
     }
@@ -166,19 +164,6 @@ public class ConfigTest {
         assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, snapshot.protocol);
         Config.Snapshot defaults = Config.read(new MemoryPrefs());
         assertNotEquals(snapshot.version(), defaults.version());
-    }
-
-    @Test
-    public void verboseLoggingStillNeverIncludesMessageBody() {
-        String sensitive = "unique-private-message-body";
-        XLog.setVerbose(false);
-        assertFalse(XLog.text(sensitive).contains(sensitive));
-        XLog.setVerbose(true);
-        try {
-            assertFalse(XLog.text(sensitive).contains(sensitive));
-        } finally {
-            XLog.setVerbose(false);
-        }
     }
 
     /** 超时与并发为 0 或负数时回落默认值（否则请求会直接失败）。 */

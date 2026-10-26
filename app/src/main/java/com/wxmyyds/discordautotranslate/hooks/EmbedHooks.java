@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -18,7 +17,7 @@ import io.github.libxposed.api.XposedModule;
 /**
  * Embed 翻译 Hook（富 Embed 与原生帖子预览）。
  *
- * <p><b>已核对 smali（Discord 340.13）的渲染链</b>：
+ * <p>已核对 smali（Discord 340.13）的渲染链：
  * <pre>
  * 富 Embed   MessageAccessoriesAdapter → EmbedViewHolder.bind(ChatEventHandler, EmbedMessageAccessory, …9 参)
  *              → EmbedView.setEmbed-fDtLluY(…, Embed, …)
@@ -32,15 +31,15 @@ import io.github.libxposed.api.XposedModule;
  *
  * <p>消息 ID 来源与正文一致：{@code MessageAccessory.getMessageId-3Eiw7ao()}
  * （声明在基类上，前缀匹配可取）。每段 Embed 文本用
- * {@link HookBridge#embedStateKey} 生成独立状态键——与正文共用整套翻译管线
+ * {@link HookBridge#embedStateKey} 生成独立状态键，与正文共用整套翻译管线
  * （去重/缓存/调度/替换），但互不覆盖。</p>
  *
- * <p><b>翻译范围</b>：富 Embed 的标题/描述/字段（用户内容）；
+ * <p>翻译范围：富 Embed 的标题/描述/字段（用户内容）；
  * 帖子预览的标题。作者名、页脚、提供者（站点/品牌名）、URL、图标等
- * <b>不登记</b>——翻译范围之外，且语言检测器（{@code EnglishDetector}）
+ * 在翻译范围之外，不登记；语言检测器（{@code EnglishDetector}）
  * 也会拦下 URL、过短与非拉丁内容。</p>
  *
- * <p><b>行内图标</b>：富 Embed 每张卡片只挂一个图标——主段优先取描述
+ * <p>行内图标：富 Embed 每张卡片只挂一个图标，主段优先取描述
  * （正文主体），回落标题、再回落首个字段；帖子预览挂在 footer 上
  * （标题是 String 不经 toSpannable，footer 经 {@code rememberIconOnlyContent}
  * 的「仅图标」身份解析，文本本身不被替换）。图标点击走
@@ -81,11 +80,6 @@ public final class EmbedHooks {
         installRichEmbedBindHook(module, cl, handles);
         installPostPreviewBindHook(module, cl, handles);
         installPostPreviewSetHook(module, cl, handles);
-        if (handles.isEmpty()) {
-            XLog.w("no embed hooks installed; embed translation unavailable on this version");
-        } else {
-            XLog.i("embed hooks armed: " + handles.size());
-        }
         return handles;
     }
 
@@ -96,13 +90,11 @@ public final class EmbedHooks {
         Class<?> holder = Reflect.loadClass(cl, CLS_EMBED_VIEW_HOLDER);
         Class<?> accessory = Reflect.loadClass(cl, CLS_EMBED_ACCESSORY);
         if (holder == null || accessory == null) {
-            XLog.d("EmbedViewHolder/EmbedMessageAccessory not found; rich embed translation disabled");
             return;
         }
         Method bind = Reflect.findMethodAt(holder, "bind",
                 EMBED_BIND_PARAM_COUNT, 1, accessory);
         if (bind == null) {
-            XLog.w("EmbedViewHolder.bind not found (paramCount=" + EMBED_BIND_PARAM_COUNT + ")");
             return;
         }
         out.add(module.hook(bind)
@@ -117,8 +109,8 @@ public final class EmbedHooks {
                         if (!HookBridge.get().isRerendering()) {
                             try {
                                 richEmbedPre(chain, bind);
-                            } catch (Throwable t) {
-                                XLog.w("embed bind hook failed", t);
+                            } catch (Throwable ignored) {
+                                // 预处理失败不影响宿主绑定。
                             }
                         }
                         return chain.proceed();
@@ -126,7 +118,6 @@ public final class EmbedHooks {
                         InlineIconInjector.exitHost();
                     }
                 }));
-        XLog.i("hooked EmbedViewHolder.bind");
     }
 
     /**
@@ -189,7 +180,6 @@ public final class EmbedHooks {
         }
         RerenderRegistry.register(key, view, holder, bind, args);
         HookBridge.get().onMessageBound(view, key, text);
-        XLog.d("embed text registered msg=" + messageId + " via " + getter);
         return key;
     }
 
@@ -233,13 +223,11 @@ public final class EmbedHooks {
         Class<?> holder = Reflect.loadClass(cl, CLS_POST_PREVIEW_HOLDER);
         Class<?> model = Reflect.loadClass(cl, CLS_POST_PREVIEW);
         if (holder == null || model == null) {
-            XLog.d("PostPreviewEmbedViewHolder/PostPreviewEmbed not found; post preview translation disabled");
             return;
         }
         Method bind = Reflect.findMethodAt(holder, "bind",
                 POST_PREVIEW_BIND_PARAM_COUNT, 0, model);
         if (bind == null) {
-            XLog.w("PostPreviewEmbedViewHolder.bind not found");
             return;
         }
         out.add(module.hook(bind)
@@ -253,8 +241,8 @@ public final class EmbedHooks {
                         if (!HookBridge.get().isRerendering()) {
                             try {
                                 postPreviewPre(chain, bind);
-                            } catch (Throwable t) {
-                                XLog.w("post preview bind hook failed", t);
+                            } catch (Throwable ignored) {
+                                // 预处理失败不影响宿主绑定。
                             }
                         }
                         return chain.proceed();
@@ -262,7 +250,6 @@ public final class EmbedHooks {
                         InlineIconInjector.exitHost();
                     }
                 }));
-        XLog.i("hooked PostPreviewEmbedViewHolder.bind");
     }
 
     /**
@@ -270,8 +257,8 @@ public final class EmbedHooks {
      * <ol>
      *   <li>用 {@link StructurableTextFactory#primitive} 把标题包成
      *       PrimitiveStructurableText，才能进入现有翻译管线；</li>
-     *   <li>译文替换不靠身份映射，而由
-     *       {@code setPostPreviewEmbed} 的参数替换 Hook 完成；</li>
+     *   <li>译文替换由 {@code setPostPreviewEmbed} 的参数替换 Hook 完成
+     *       （不走身份映射）；</li>
      *   <li>图标挂在 footer（卡片内唯一走 toSpannable 的字段）上：
      *       仅图标身份映射，footer 文本本身不被替换。</li>
      * </ol>
@@ -303,14 +290,12 @@ public final class EmbedHooks {
         Object footer = Reflect.call(Reflect.findMethod(
                 model.getClass(), "getFooter", 0), model);
         HookBridge.get().rememberIconOnlyContent(key, footer);
-        XLog.d("post preview title registered msg=" + messageId);
     }
 
     private static void installPostPreviewSetHook(XposedModule module, ClassLoader cl,
                                                   List<XposedInterface.HookHandle> out) {
         Class<?> viewCls = Reflect.loadClass(cl, CLS_POST_PREVIEW_VIEW);
         if (viewCls == null) {
-            XLog.d("PostPreviewEmbedView not found; post preview substitution disabled");
             return;
         }
         Method set = null;
@@ -327,7 +312,6 @@ public final class EmbedHooks {
             break;
         }
         if (set == null) {
-            XLog.w("setPostPreviewEmbed not found (paramCount=" + POST_PREVIEW_SET_PARAM_COUNT + ")");
             return;
         }
         out.add(module.hook(set)
@@ -337,12 +321,11 @@ public final class EmbedHooks {
                     Object[] renderArgs = chain.getArgs().toArray();
                     try {
                         substitutePostPreviewTitle(renderArgs);
-                    } catch (Throwable t) {
-                        XLog.w("post preview substitution failed", t);
+                    } catch (Throwable ignored) {
+                        // 替换失败保留宿主原标题。
                     }
                     return chain.proceed(renderArgs);
                 }));
-        XLog.i("hooked PostPreviewEmbedView.setPostPreviewEmbed");
     }
 
     /**

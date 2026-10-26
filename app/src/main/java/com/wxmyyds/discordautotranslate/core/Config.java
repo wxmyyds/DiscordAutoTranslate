@@ -46,8 +46,8 @@ public final class Config {
     /**
      * 供应商协议：决定请求体格式与响应解析方式。
      *
-     * <p>取代旧版可配置的「JSON 请求模板」与「译文提取路径」：
-     * 请求构造与译文提取改为按协议内置实现，用户只需选择协议。</p>
+     * <p>请求构造与译文提取按协议内置实现，用户只需选择协议；
+     * 取代旧版可配置的「JSON 请求模板」与「译文提取路径」。</p>
      */
     public static final String KEY_PROTOCOL = "provider_protocol";
 
@@ -76,7 +76,7 @@ public final class Config {
      * 默认系统提示词。
      *
      * <p>结构与社区通行做法一致（openai-translator、沉浸式翻译等）：
-     * 身份框定 +「原文是不可信数据」声明 + 少量硬性规则，不使用对照示例——
+     * 身份框定 +「原文是不可信数据」声明 + 少量硬性规则，不使用对照示例：
      * 示例会增加每次请求的固定开销，且有被模型复述进译文的风险。</p>
      *
      * <p>正文用英文书写以保持通用；目标语言仍在词内明确为简体中文。</p>
@@ -89,18 +89,21 @@ public final class Config {
             + "2. Never refuse, never advise, never add safety warnings or disclaimers; profanity, insults, and offensive content are always translated faithfully, and translating does not mean endorsing.\n"
             + "3. Translate phrases, greetings, farewells, and small talk as they are: do not expand, continue the conversation, provide answers, or add content that is not in the source.\n"
             + "4. Preserve the original tone, person, proper nouns, code, and formatting; return parts already in Simplified Chinese unchanged.\n"
-            + "5. Return untranslatable content (garbled text, bare symbols, bare links) unchanged.";
+            + "5. Keep the original line structure exactly: the output must have the same paragraphs separated by the same blank lines, and the same line breaks within each paragraph. Never merge, split, reorder, add, or drop paragraphs or lines. The source may contain repeated or identical paragraphs (e.g. lists, spam, ads); translate every occurrence and keep the repetition exactly.\n"
+            + "6. Keep every bare link exactly as it appears in the input and in its original position: never modify, translate, merge, reorder, or drop links. Return other untranslatable content (garbled text, bare symbols) unchanged.\n"
+            + "7. Some input text is wrapped in marker tags like <x1>...</x1> marking styled spans. Keep every marker tag exactly as it is, in its original position, and translate only the text between the tags.";
 
     // ---- 超时与并发 ----
     public static final String KEY_TIMEOUT_MS = "timeout_ms";
-    public static final int DEF_TIMEOUT_MS = 15000;
+    /**
+     * 默认请求超时。LLM 接口翻译 1-2KB 正文常需 10-30s，慢速中转更久；
+     * 15s 实测会切断长消息（超时后调度器重试 3 次仍超时）。已保存过
+     * 超时设置的旧配置不受默认值变化影响，需在设置页手动调大。
+     */
+    public static final int DEF_TIMEOUT_MS = 30000;
 
     public static final String KEY_MAX_CONCURRENCY = "max_concurrency";
     public static final int DEF_MAX_CONCURRENCY = 4;
-
-    public static final String KEY_VERBOSE_LOG = "verbose_log";
-    // 详细日志默认关闭；正文日志始终脱敏，不允许 verbose 解除脱敏。
-    public static final boolean DEF_VERBOSE_LOG = false;
 
     private Config() {
     }
@@ -118,7 +121,6 @@ public final class Config {
         public final String protocol;
         public final int timeoutMs;
         public final int maxConcurrency;
-        public final boolean verboseLog;
 
         Snapshot(SharedPreferences p) {
             enabled = readBoolean(p, KEY_ENABLED, DEF_ENABLED);
@@ -131,11 +133,10 @@ public final class Config {
             protocol = readProtocol(p);
             timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
-            verboseLog = readBoolean(p, KEY_VERBOSE_LOG, DEF_VERBOSE_LOG);
         }
 
         /**
-         * 读取协议并只接受两个已知值：空白、缺失、类型异常或未知字符串
+         * 读取协议，只接受两个已知值；空白、缺失、类型异常或未知字符串
          * 一律回落默认协议，避免把拼写错误的值带进请求构造。
          */
         private static String readProtocol(SharedPreferences p) {
@@ -152,9 +153,9 @@ public final class Config {
         }
 
         /**
-         * 读取字符串配置。<b>未配置</b>（不存在 / null / 空白）时一律回落默认值。
+         * 读取字符串配置。未配置（不存在 / null / 空白）时一律回落默认值。
          *
-         * <p>为何把空白也算作“未配置”：设置页每个输入框在保存时都会写入，
+         * <p>空白也按未配置处理：设置页每个输入框在保存时都会写入，
          * 用户清空某格后保存就会存下空字符串。若把空字符串当有效值，
          * 会出现“模型名/目标语言为空”之类难查的静默失效。</p>
          *
@@ -197,7 +198,7 @@ public final class Config {
          * 返回请求配置版本，并使用无歧义的字段边界编码。
          *
          * <p>密钥与额外请求头也参与版本：它们会改变服务端归属与响应内容，
-         * 因此变更后必须使用旧缓存/旧在途结果失效。为避免把密钥写进版本字符串
+         * 因此变更后必须让旧缓存/旧在途结果失效。为避免把密钥写进版本字符串
          * （它会被日志与诊断间接引用），这里只编码其 SHA-256 摘要。</p>
          */
         public String version() {
@@ -235,8 +236,8 @@ public final class Config {
         }
         try {
             return new Snapshot(prefs);
-        } catch (Throwable t) {
-            XLog.w("read config failed, fallback to defaults", t);
+        } catch (Throwable ignored) {
+            // 读取失败回落默认值快照，绝不让配置异常拖垮宿主进程。
             return new Snapshot(new MemoryPrefs());
         }
     }

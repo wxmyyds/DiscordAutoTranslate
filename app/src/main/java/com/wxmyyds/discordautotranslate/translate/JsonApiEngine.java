@@ -6,7 +6,6 @@ import com.wxmyyds.discordautotranslate.core.Protocols;
 import com.wxmyyds.discordautotranslate.core.Scheduler;
 import com.wxmyyds.discordautotranslate.core.Segments;
 import com.wxmyyds.discordautotranslate.core.TranslationException;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 /**
  * JSON 翻译引擎（需求 §5.5）。
@@ -40,34 +39,43 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
         }
         validateConfig(cfg);
-
-        // 1) 按协议构造请求体
-        // 带分段标记的请求需要模型知道标记规则；追加在系统提示词末尾，
-        // 而不改动用户配置的提示词本身（避免影响配置版本与既有判定）。
-        String systemPrompt = cfg.systemPrompt;
-        if (Segments.isSegmented(text)) {
-            systemPrompt = (systemPrompt == null || systemPrompt.trim().isEmpty()
-                    ? "" : systemPrompt + "\n\n") + Segments.RULE;
+        // 单一链路（用户决策）：一次无标记纯文本请求，不重试、不降级。
+        // 失败由调度器的既有错误重试处理；译文按段落块回填到各文本节点。
+        String translated = requestOnce(text);
+        // 防损坏校验只检查这一次的响应（残留标记、占位符、长度比例异常）。
+        // 不合格直接判失败，宁可显示原文也不把复读/残缺内容送进节点树。
+        String violation = Segments.plainTextViolation(translated, text);
+        if (violation != null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "译文未通过防损坏校验：" + violation);
         }
-        String body = Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model);
+        return translated;
+    }
 
-        // 2) 组装请求头（认证 + 用户自定义头）
+    /**
+     * 发送一次请求并返回协议提取后的译文。
+     */
+    private String requestOnce(String text) throws Exception {
+        // 1) 按协议构造请求体（单链路：无标记纯文本，直接使用用户配置的提示词）
+        String body = Protocols.requestBody(cfg.protocol, text, cfg.systemPrompt, cfg.model);
         Http.Headers headers = buildHeaders();
 
-        // 3) 发送（任务被取消时通过线程中断尽早退出）
+        // 2) 发送（任务被取消时通过线程中断尽早退出）
         if (Thread.currentThread().isInterrupted()) {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
-        XLog.d("POST " + XLog.safeUrl(url) + " text=" + XLog.text(text));
-        Http.Response resp = http.postJson(url, body, headers);
+        // Compatible 协议请求体带 stream:true，按 SSE 读取（读到 [DONE] 为止）；
+        // Responses 协议保持非流式。
+        boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
+        Http.Response resp = http.postJson(url, body, headers, sse);
 
-        // 4) 状态码归类
+        // 3) 状态码归类
         if (!resp.isSuccess()) {
             throw classifyHttpError(resp);
         }
 
-        // 5) 按协议提取译文
+        // 4) 按协议提取译文
         String translated = Protocols.extractTranslation(cfg.protocol, resp.body);
         if (translated == null || translated.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");

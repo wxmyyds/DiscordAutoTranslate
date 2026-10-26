@@ -11,7 +11,6 @@ import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
 import com.wxmyyds.discordautotranslate.core.StateStore;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -23,7 +22,7 @@ import io.github.libxposed.api.XposedModule;
 /**
  * 投票卡片翻译 Hook。
  *
- * <p><b>已核对 smali（Discord 340.13）的渲染链</b>：
+ * <p>已核对 smali（Discord 340.13）的渲染链：
  * <pre>
  * MessageAccessoriesAdapter → PollViewHolder.bind(PollMessageAccessory, F3, F3, F8)
  *   → PollPresenter.bind → BasePollWithRecyclerView.bind
@@ -31,7 +30,7 @@ import io.github.libxposed.api.XposedModule;
  *       选项：PollMessageAccessory.getAnswers()（List&lt;PollAnswerAccessory&gt;）
  *              → PollAnswerAdapter → PollMediaView.setMedia → DraweeSpanStringBuilder
  * </pre>
- * 投票文本<b>全程不经 {@code toSpannable}</b>（无 Markdown 管线），因此采用
+ * 投票文本全程不经 {@code toSpannable}（无 Markdown 管线），因此采用
  * 「绑定参数深层重建」：bind 时若某段文本的译文已就绪，用 Kotlin data class 的
  * {@code copy} 链把译文换入 accessory（PollMessageAccessory → PollData → PollMedia /
  * PollMessageAccessory → PollAnswerAccessory → PollAnswer → PollMedia）；未就绪的
@@ -40,7 +39,7 @@ import io.github.libxposed.api.XposedModule;
  * <p>状态键复用 {@link HookBridge#embedTextStateKey}（行消息 ID + 内容哈希），
  * 与正文/Embed 共用整套翻译管线且互不覆盖。</p>
  *
- * <p><b>行内图标</b>：挂在<b>问题</b>文本末尾（{@code pollView.binding.questionText}）。
+ * <p>行内图标挂在问题文本末尾（{@code pollView.binding.questionText}）。
  * 该视图不在宿主的 NestedClickableSpan 分发链上，命中判定由自建触摸监听
  * （触点 → 字符位置 → span 区间）完成；点击行为与正文一致（成功切换原文/译文、
  * 失败重试），旋转动画复用 {@link InlineIconSpan}。选项文本不挂图标。</p>
@@ -70,13 +69,11 @@ public final class PollHooks {
         Class<?> holder = Reflect.loadClass(cl, CLS_POLL_HOLDER);
         Class<?> accessory = Reflect.loadClass(cl, CLS_POLL_ACCESSORY);
         if (holder == null || accessory == null) {
-            XLog.d("PollViewHolder/PollMessageAccessory not found; poll translation disabled");
             return handles;
         }
         Method bind = Reflect.findMethodAt(holder, "bind",
                 POLL_BIND_PARAM_COUNT, 0, accessory);
         if (bind == null) {
-            XLog.w("PollViewHolder.bind not found (paramCount=" + POLL_BIND_PARAM_COUNT + ")");
             return handles;
         }
         handles.add(module.hook(bind)
@@ -86,28 +83,27 @@ public final class PollHooks {
                     if (!HookBridge.get().isRerendering()) {
                         try {
                             registerPollTexts(chain, bind);
-                        } catch (Throwable t) {
-                            XLog.w("poll bind hook failed", t);
+                        } catch (Throwable ignored) {
+                            // 登记失败不影响宿主绑定。
                         }
                     }
                     // 无状态替换：每次 bind（含重渲染与滑回）都按当前译文重建。
                     Object[] renderArgs = chain.getArgs().toArray();
                     try {
                         renderArgs[0] = translatePollAccessory(renderArgs[0]);
-                    } catch (Throwable t) {
-                        XLog.w("poll accessory rebuild failed", t);
+                    } catch (Throwable ignored) {
+                        // 替换失败保留宿主原文。
                     }
                     Object result = chain.proceed(renderArgs);
                     // 图标同样无状态追加：bind 后问题文本已定型，随当前状态着色。
                     try {
                         attachQuestionIcon(chain.getArg(0),
                                 asView(Reflect.getField(chain.getThisObject(), "itemView")));
-                    } catch (Throwable t) {
-                        XLog.w("poll question icon failed", t);
+                    } catch (Throwable ignored) {
+                        // 图标失败不影响宿主渲染。
                     }
                     return result;
                 }));
-        XLog.i("hooked PollViewHolder.bind");
         return handles;
     }
 
@@ -189,7 +185,6 @@ public final class PollHooks {
         }
         RerenderRegistry.register(key, view, holder, bind, args);
         HookBridge.get().onMessageBound(view, key, wrapped);
-        XLog.d("poll text registered msg=" + messageId);
     }
 
     // ------------------------------------------------------------------ 重建
@@ -278,7 +273,7 @@ public final class PollHooks {
         return newItem != null ? newItem : item;
     }
 
-    /** 译文就绪则重建 PollMedia（换入译文本本），否则原样返回。 */
+    /** 译文就绪则重建 PollMedia（换入译文），否则原样返回。 */
     private static Object translateMedia(@Nullable Object media, String messageId) {
         if (media == null) {
             return media;
@@ -364,7 +359,6 @@ public final class PollHooks {
         questionText.setText(ssb);
         icon.bindHost(questionText);
         questionText.setOnTouchListener(new PollIconTouch(key));
-        XLog.d("poll question icon attached status=" + entry.status);
     }
 
     /** 取投票问题文本视图：{@code pollView.binding.questionText}。 */
@@ -378,7 +372,7 @@ public final class PollHooks {
     /**
      * 图标触摸命中：把触点换算为字符位置，落在图标 span 区间则触发切换/重试。
      *
-     * <p><b>必须在 ACTION_DOWN 命中时就认领手势</b>（返回 true）：问题视图自身
+     * <p>必须在 ACTION_DOWN 命中时就认领手势（返回 true）：问题视图自身
      * 不可点击，若 DOWN 放行，手势会被上层可点击的行/卡片认领，UP 不会再送到
      * 本视图。命中 DOWN 后整条手势归本视图，UP 到达即触发；其余情况一律放行，
      * 不影响投票与消息本身的交互。</p>
@@ -401,7 +395,6 @@ public final class PollHooks {
                     return hitIcon(tv, event);
                 case MotionEvent.ACTION_UP:
                     if (hitIcon(tv, event)) {
-                        XLog.d("poll icon clicked key=" + key);
                         HookBridge.get().onIconClicked(key);
                         tv.performClick();
                         return true;

@@ -15,7 +15,7 @@ import io.github.libxposed.api.XposedInterface;
 /**
  * 模块自身资源的加载器。
  *
- * <p><b>为什么需要它</b>：本模块运行在 Discord 进程内，该进程默认的资源表属于
+ * <p>本模块运行在 Discord 进程内，该进程默认的资源表属于
  * Discord，无法直接访问模块 APK 里的 drawable。必须用模块自己的
  * {@code ApplicationInfo} 取到模块的 {@code Resources} 才能解析这些图标。</p>
  *
@@ -83,18 +83,15 @@ public final class ModuleResources {
             }
             XposedInterface x = sXposed;
             if (x == null) {
-                XLog.w("ModuleResources used before attach(); cannot resolve module resources");
                 return false;
             }
             ApplicationInfo info;
             try {
                 info = x.getModuleApplicationInfo();
             } catch (Throwable t) {
-                XLog.w("getModuleApplicationInfo failed", t);
                 return false;
             }
             if (info == null || info.packageName == null) {
-                XLog.w("module ApplicationInfo unavailable");
                 return false;
             }
             sModulePkg = info.packageName;
@@ -105,11 +102,10 @@ public final class ModuleResources {
                 if (res != null) {
                     sModuleRes = res;
                     sResolved = true;
-                    XLog.i("module resources resolved via PackageManager");
                     return true;
                 }
-            } catch (Throwable t) {
-                XLog.d("getResourcesForApplication failed: " + t.getClass().getSimpleName());
+            } catch (Throwable ignored) {
+                // 路径一失败：继续尝试路径二。
             }
 
             // 路径二：创建模块的包上下文再取资源（部分 ROM 上路径一不可用）。
@@ -120,13 +116,11 @@ public final class ModuleResources {
                 if (res != null) {
                     sModuleRes = res;
                     sResolved = true;
-                    XLog.i("module resources resolved via createPackageContext");
                     return true;
                 }
-            } catch (Throwable t) {
-                XLog.w("createPackageContext failed", t);
+            } catch (Throwable ignored) {
+                // 路径二失败：图标留空，不影响宿主。
             }
-            XLog.w("cannot resolve module resources; icons will be blank");
             return false;
         }
     }
@@ -186,17 +180,11 @@ public final class ModuleResources {
         try {
             int id = res.getIdentifier(name, "drawable", pkg);
             if (id == 0) {
-                XLog.w("drawable '" + name + "' not found in module resources");
                 return null;
             }
             // 传 null 主题：矢量图内已移除主题属性引用，避免解析失败。
-            Drawable d = res.getDrawable(id, null);
-            if (d == null) {
-                XLog.w("drawable '" + name + "' resolved to null");
-            }
-            return d;
+            return res.getDrawable(id, null);
         } catch (Throwable t) {
-            XLog.w("resolve drawable '" + name + "' failed", t);
             return null;
         }
     }

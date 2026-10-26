@@ -11,7 +11,6 @@ import androidx.annotation.Nullable;
 import com.wxmyyds.discordautotranslate.core.ModuleResources;
 import com.wxmyyds.discordautotranslate.core.StateStore;
 import com.wxmyyds.discordautotranslate.core.TextExtractor;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 /**
  * 在消息正文渲染结果末尾注入行内翻译图标。
@@ -22,12 +21,12 @@ import com.wxmyyds.discordautotranslate.core.XLog;
  *
  * <h3>注入范围（需求：只处理正常消息正文的可翻译文本）</h3>
  * <ol>
- *   <li><b>必须有渲染宿主</b>：{@code MessageContentView.setMessageContent} 与
+ *   <li>必须有渲染宿主：{@code MessageContentView.setMessageContent} 与
  *       Embed 绑定（{@code EmbedHooks}）都会在调用链内设置 {@link #CURRENT_HOST}；
  *       回复引用（{@code MessageViewReplyPreview}）不设置宿主，天然被排除。</li>
- *   <li><b>必须有可翻译文本</b>：{@code TextExtractor} 的 {@code textNodeCount > 0}。
+ *   <li>必须有可翻译文本：{@code TextExtractor} 的 {@code textNodeCount > 0}。
  *       纯图片、纯表情、纯提及消息的文本节点数为 0，不注入。</li>
- *   <li><b>Embed 每卡片只挂一个图标</b>：只有 {@code HookBridge.markEmbedIconKey}
+ *   <li>Embed 每卡片只挂一个图标：只有 {@code HookBridge.markEmbedIconKey}
  *       标记的主段（富 Embed 的描述/标题/首字段）允许注入；帖子预览的标题是
  *       String，图标经「仅图标」身份映射挂在 footer 上，不参与文本替换。</li>
  * </ol>
@@ -138,7 +137,6 @@ public final class InlineIconInjector {
                     tinted, context.getResources().getDisplayMetrics().density,
                     entry.status, messageId);
             if (icon == null) {
-                XLog.w("inline icon: drawable unavailable for " + messageId);
                 return rendered;
             }
 
@@ -161,12 +159,8 @@ public final class InlineIconInjector {
             // 启动/续接旋转动画（仅翻译中状态）。
             icon.bindHost(host);
 
-            XLog.d("inline icon injected msg=" + messageId + " status=" + entry.status
-                    + " showingOriginal=" + entry.showingOriginal
-                    + " widthPx=" + icon.widthPx() + " clickable=" + (clickSpan != null));
             return ssb;
         } catch (Throwable t) {
-            XLog.w("inline icon injection failed", t);
             return rendered;
         }
     }

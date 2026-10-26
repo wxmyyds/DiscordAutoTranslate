@@ -96,7 +96,7 @@ public class EmbedStateKeyTest {
         assertNull(bridge.resolveIconOnlyKey(footer));
         bridge.rememberIconOnlyContent(key, footer);
         assertEquals(key, bridge.resolveIconOnlyKey(footer));
-        // 关键约束：仅图标映射不得泄漏进替换身份，否则译文会写进 footer。
+        // 仅图标映射不得泄漏进替换身份，否则译文会写进 footer。
         assertNull(bridge.resolveMessageId(footer));
         // null 容错。
         bridge.rememberIconOnlyContent(key, null);

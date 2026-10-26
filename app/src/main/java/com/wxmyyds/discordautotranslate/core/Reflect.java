@@ -28,7 +28,6 @@ public final class Reflect {
         try {
             return Class.forName(name, false, cl);
         } catch (Throwable t) {
-            XLog.d("loadClass failed: " + name + " (" + t.getClass().getSimpleName() + ")");
             return null;
         }
     }
@@ -144,7 +143,6 @@ public final class Reflect {
         try {
             return m.invoke(target, args);
         } catch (Throwable t) {
-            XLog.d("call " + m.getName() + " failed: " + t.getClass().getSimpleName());
             return null;
         }
     }

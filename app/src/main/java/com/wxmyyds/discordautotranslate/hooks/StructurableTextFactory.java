@@ -3,7 +3,6 @@ package com.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import com.wxmyyds.discordautotranslate.core.Reflect;
-import com.wxmyyds.discordautotranslate.core.XLog;
 
 import java.lang.reflect.Constructor;
 import java.util.List;
@@ -43,8 +42,6 @@ public final class StructurableTextFactory {
         sPrimitiveCtor = ctorOf(sPrimitiveClass, String.class);
         sAnnotatedCtor = ctorOf(sAnnotatedClass, List.class);
 
-        XLog.i("StructurableTextFactory ready: primitive=" + (sPrimitiveCtor != null)
-                + " annotated=" + (sAnnotatedCtor != null));
     }
 
     @Nullable
@@ -57,8 +54,6 @@ public final class StructurableTextFactory {
             c.setAccessible(true);
             return c;
         } catch (Throwable t) {
-            XLog.w("constructor " + cls.getSimpleName()
-                    + "(" + java.util.Arrays.toString(params) + ") not found", t);
             return null;
         }
     }
@@ -80,7 +75,6 @@ public final class StructurableTextFactory {
         try {
             return ctor.newInstance(text);
         } catch (Throwable t) {
-            XLog.w("construct PrimitiveStructurableText failed", t);
             return null;
         }
     }
@@ -95,7 +89,6 @@ public final class StructurableTextFactory {
         try {
             return ctor.newInstance(nodes);
         } catch (Throwable t) {
-            XLog.w("construct AnnotatedStructurableText failed", t);
             return null;
         }
     }
@@ -122,13 +115,11 @@ public final class StructurableTextFactory {
             if (replaced != null) {
                 Object out = annotated(replaced);
                 if (out != null) {
-                    XLog.d("markdown preserved for translation");
                     return out;
                 }
             }
             // 不接受部分重建，也不退化为纯文本（会丢失 emoji/提及/代码）。
             // 返回 null，让所有调用路径继续使用未修改的原始结构。
-            XLog.d("markdown replacement unavailable, keeping original content");
             return null;
         }
 
@@ -138,8 +129,6 @@ public final class StructurableTextFactory {
         }
 
         // 3) 未知类型：交给渲染器会抛异常，因此坚持不替换。
-        XLog.w("unknown StructurableText type, refusing to substitute: "
-                + original.getClass().getName());
         return null;
     }
 }

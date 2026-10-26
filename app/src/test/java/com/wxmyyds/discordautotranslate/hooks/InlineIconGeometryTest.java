@@ -162,9 +162,9 @@ public class InlineIconGeometryTest {
 
     @Test
     public void clickRangeStartsOneCharacterBeforeTheIcon() {
-        // 真机实测：手指落在图标靠左部分时，宿主用 getOffsetForHorizontal 算出的
-        // offset 是 iconStart - 1。该位置原本不属于任何图标 span（getSpans 只对
-        // span 末尾边界包含），因此点击 span 必须向前多覆盖一格。
+        // 点击 span 必须向前多覆盖一格：真机实测手指落在图标靠左部分时，
+        // 宿主 getOffsetForHorizontal 算出的 offset 是 iconStart - 1。该位置
+        // 原本不属于任何图标 span（getSpans 只对 span 末尾边界包含）。
         int[] range = InlineIconGeometry.clickRange(155, 156);
         assertEquals("点击区间必须覆盖 iconStart-1", 154, range[0]);
         assertEquals("点击区间必须覆盖到图标末尾", 156, range[1]);
