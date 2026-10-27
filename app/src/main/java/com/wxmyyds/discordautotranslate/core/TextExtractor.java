@@ -140,9 +140,9 @@ public final class TextExtractor {
             return s == null || s.isEmpty() ? null : s;
         }
         if (name.endsWith("CustomEmojiContentNode")) {
-            // 自定义 emoji 没有可读字符，用 :name: 形式标记位置。
+            // 使用宿主提供的 alt 原值；可能已含 :name: 等格式，不自行改写。
             String alt = Reflect.callString(node, "getAlt");
-            return alt == null || alt.isEmpty() ? null : ":" + alt + ":";
+            return alt == null || alt.isEmpty() ? null : alt;
         }
         return null;
     }
