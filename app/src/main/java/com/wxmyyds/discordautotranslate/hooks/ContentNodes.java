@@ -500,7 +500,7 @@ public final class ContentNodes {
      */
     @Nullable
     static List<String> alignTranslation(String plain, AlignmentPlan plan) {
-        if (plan.groupIds.isEmpty()) {
+        if (plan.groupIds.isEmpty() || !anchorsMatch(plain, plan)) {
             return null;
         }
         if (plan.hasStyleMarkers()) {
@@ -606,44 +606,35 @@ public final class ContentNodes {
         }
     }
 
-    /**
-     * 按树序令牌流切分译文并对齐片段。
-     *
-     * <p>令牌分为两类：定位标记（URL / emoji，不消费片段）与可翻译片段。
-     * 按令牌顺序在译文中依次定位标记，标记之间的文本就是一个间隔，交给
-     * {@link #alignSpanToParts} 分配给该间隔覆盖的片段。
-     *
-     * <p>emoji 是软锚点：模型可能改写/丢弃 emoji（字体选择器、自定义 emoji
-     * 名称、小模型直接删掉），硬性拒绝会让整条消息保持原文。因此单个 emoji
-     * 定位失败时退回无锚点对齐（译文保留），只有 URL 定位失败才整条拒绝
-     * （URL 改坏会真的显示错误内容）。</p>
-     */
-    @Nullable
-    private static List<String> alignTokens(String plain, AlignmentPlan plan) {
-        return alignTokens(plain, plan, true);
+    /** URL 与 emoji 锚点都必须按原数量出现；模型改写或丢失时不回填错位译文。 */
+    private static boolean anchorsMatch(String plain, AlignmentPlan plan) {
+        java.util.Map<String, Integer> expected = new java.util.HashMap<>();
+        for (String anchor : plan.urls) {
+            expected.merge(anchor, 1, Integer::sum);
+        }
+        for (String anchor : plan.emojiAnchors) {
+            expected.merge(anchor, 1, Integer::sum);
+        }
+        for (java.util.Map.Entry<String, Integer> e : expected.entrySet()) {
+            if (countOccurrences(plain, e.getKey()) != e.getValue()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
-     * @param useEmoji false 时忽略 emoji 锚点（emoji 已在译文里被剔除），
-     *                 只用 URL 切间隔；没有 URL 时退回整段对齐
+     * 按树序令牌流切分译文并对齐片段。
+     *
+     * <p>定位标记（URL / emoji）不消费译文片段。按树序依次定位标记，标记
+     * 之间的文本交给 {@link #alignSpanToParts} 分配。锚点缺失、改写或重复时
+     * 拒绝回填，避免错位，原消息保持不变。</p>
      */
     @Nullable
-    private static List<String> alignTokens(String plain, AlignmentPlan plan, boolean useEmoji) {
-        boolean hasUrl = !plan.urls.isEmpty();
-        boolean hasEmoji = useEmoji && !plan.emojiAnchors.isEmpty();
-        if (!hasUrl && !hasEmoji) {
+    private static List<String> alignTokens(String plain, AlignmentPlan plan) {
+        boolean hasAnchors = !plan.urls.isEmpty() || !plan.emojiAnchors.isEmpty();
+        if (!hasAnchors) {
             return alignSpanToParts(plain, plan.groupIds, plan.unsafe);
-        }
-        if (hasUrl) {
-            java.util.Map<String, Integer> expected = new java.util.HashMap<>();
-            for (String url : plan.urls) {
-                expected.merge(url, 1, Integer::sum);
-            }
-            for (java.util.Map.Entry<String, Integer> e : expected.entrySet()) {
-                if (countOccurrences(plain, e.getKey()) != e.getValue()) {
-                    return null; // URL 丢失/改坏/重复回显：不可安全定位
-                }
-            }
         }
         // 逐个令牌定位。锚点只切间隔、不产出片段；片段在其后的间隔里分配。
         List<String> parts = new ArrayList<>(
@@ -656,73 +647,32 @@ public final class ContentNodes {
             if (t.url == null) {
                 continue; // 可翻译片段令牌：由间隔分配处理
             }
-            boolean isEmoji = t.emoji;
-            if (isEmoji && !useEmoji) {
-                continue; // 已放弃 emoji 锚点：跳过，其前后的片段合并成一个间隔
-            }
             String anchor = t.url;
             int at = plain.indexOf(anchor, from);
             if (at < 0) {
-                if (isEmoji) {
-                    return alignByStrippingEmoji(plain, plan);
-                }
-                return null;
+                return null; // 数量校验后仍未找到，表示锚点顺序改变
             }
-            int segEnd = isEmoji
-                    ? plan.emojiSegIndex.get(emojiIndex)
-                    : plan.urlSegIndex.get(urlIndex);
+            int segEnd = t.emoji
+                    ? plan.emojiSegIndex.get(emojiIndex++)
+                    : plan.urlSegIndex.get(urlIndex++);
             List<String> spanParts = alignSpanToParts(plain.substring(from, at),
                     plan.groupIds.subList(segStart, segEnd),
                     plan.unsafeIn(segStart, segEnd));
             if (spanParts == null) {
-                if (isEmoji) {
-                    return alignByStrippingEmoji(plain, plan);
-                }
                 return null;
             }
             copySpan(spanParts, parts, segStart);
             from = at + anchor.length();
             segStart = segEnd;
-            if (isEmoji) {
-                emojiIndex++;
-            } else {
-                urlIndex++;
-            }
         }
         List<String> tailParts = alignSpanToParts(plain.substring(from),
                 plan.groupIds.subList(segStart, plan.groupIds.size()),
                 plan.unsafeIn(segStart, plan.groupIds.size()));
         if (tailParts == null) {
-            return hasEmoji ? alignByStrippingEmoji(plain, plan) : null;
+            return null;
         }
         copySpan(tailParts, parts, segStart);
         return parts;
-    }
-
-    /**
-     * emoji 锚点不可用时的回退：把译文里的 emoji 字符剔除后，只按 URL
-     * 切间隔（没有 URL 就整段对齐）。保证「模型没保留 emoji 位置」时
-     * 不会整条退成原文。
-     */
-    @Nullable
-    private static List<String> alignByStrippingEmoji(String plain, AlignmentPlan plan) {
-        String stripped = stripAnchors(plain, plan.emojiAnchors);
-        if (stripped.trim().isEmpty()) {
-            return null;
-        }
-        return alignTokens(stripped, plan, false);
-    }
-
-    /** 从译文中删除给定的锚点文本（emoji 字符或 :name:）。 */
-    private static String stripAnchors(String text, List<String> anchors) {
-        String out = text;
-        for (String a : anchors) {
-            if (a == null || a.isEmpty()) {
-                continue;
-            }
-            out = out.replace(a, " ");
-        }
-        return out;
     }
 
     private static int countOccurrences(String text, String needle) {
@@ -842,18 +792,15 @@ public final class ContentNodes {
         final List<String> urls = new ArrayList<>();
         /** 与 {@code urls} 平行：该 URL 之前的可翻译片段数（间隔边界）。 */
         final List<Integer> urlSegIndex = new ArrayList<>();
-        /** 按树序的 emoji 定位标记：文本 emoji 用字符（如 📢），自定义 emoji 用 :name: 。 */
+        /** 按树序的 emoji 定位标记：Unicode 字符或宿主提供的自定义 emoji alt。 */
         final List<String> emojiAnchors = new ArrayList<>();
         /** 与 {@code emojiAnchors} 平行：该 emoji 之前的可翻译片段数（间隔边界）。 */
         final List<Integer> emojiSegIndex = new ArrayList<>();
         /**
-         * 段落组号 → 该段内两个可翻译片段之间夹有不可翻译可见内容（emoji/提及/行内
-         * 代码等）的标记。段落级对齐会清空非首片段，夹在中间的可见节点会被孤立，
-         * 因此这些段落强制走更低层对齐（行级/字符级）。
-         *
-         * <p>历史机制：emoji/行内代码原被当作原位保留节点，但实测 emoji 在译文里
-         * 位置会乱掉，因此现在让 emoji 进入请求正文成为定位标记，并恢复对
-         * {@code unsafe} 的填充（URL 已在对齐前切分，不再触发 unsafe）。</p>
+         * 段落组号 → 段内两个可翻译片段之间夹有可见结构的标记。
+         * 段落级对齐会清空非首片段，若中间有未定位的可见节点会被孤立，
+         * 标记过的段落因此拒绝该级对齐。URL 与 emoji 已作为定位标记，
+         * 对齐时先按它们切分间隔。
          */
         final java.util.BitSet unsafe = new java.util.BitSet();
         /** 按树序的令牌流：URL 定位标记与可翻译片段。 */
@@ -1036,10 +983,8 @@ public final class ContentNodes {
     /**
      * 记录一个可翻译片段：空行分隔推进段落组。
      *
-     * <p>URL 已升级为定位标记（在段落对齐之前切分），不再触发 unsafe；
-     * emoji 仍会触发：段落级对齐清空非首片段时，夹在两个片段之间的
-     * emoji 会被孤立。
-     * </p>
+     * <p>URL 与 emoji 都作为定位标记在段落对齐前切分，不触发 unsafe；
+     * 其他未建模的可见节点仍由 unsafe 机制保护。</p>
      */
     private static void addSegment(PlanWalk w) {
         if (!w.plan.groupIds.isEmpty() && countNewlines(w.sep) >= 2) {

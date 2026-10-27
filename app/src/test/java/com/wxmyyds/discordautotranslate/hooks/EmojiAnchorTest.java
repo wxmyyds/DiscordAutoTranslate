@@ -112,9 +112,9 @@ public class EmojiAnchorTest {
     }
 
     @Test
-    public void customEmojiYieldsColonName() {
+    public void customEmojiYieldsOriginalAlt() {
         assertEquals(":blob:",
-                TextExtractor.nodeEmojiText(new CustomEmojiContentNode(7L, "blob")));
+                TextExtractor.nodeEmojiText(new CustomEmojiContentNode(7L, ":blob:")));
     }
 
     @Test
@@ -147,7 +147,7 @@ public class EmojiAnchorTest {
     public void customEmojiIsSentAsColonName() {
         TextExtractor.Result r = TextExtractor.extract(new AnnotatedStructurableText(
                 list(new TextContentNode("hello"),
-                        new CustomEmojiContentNode(3L, "party"),
+                        new CustomEmojiContentNode(3L, ":party:"),
                         new TextContentNode("world"))));
 
         assertNotNull(r);
@@ -189,22 +189,31 @@ public class EmojiAnchorTest {
     }
 
     @Test
-    public void droppedEmojiStillTranslatesBothSides() {
+    public void droppedEmojiRejectsMisalignedTranslationAndKeepsOriginalNodes() {
         TextContentNode first = new TextContentNode("Lower Rates");
         UnicodeEmojiContentNode emoji =
                 new UnicodeEmojiContentNode("\uD83D\uDCE2", "x", false);
         TextContentNode second = new TextContentNode("Are Back");
         List<Object> nodes = list(first, emoji, second);
 
-        // 模型把 emoji 丢了：不得整条退回原文，两侧仍要显示译文。
-        List<Object> out = ContentNodes.replaceText(nodes, "费率下调 回归了");
+        // 锚点丢失时无法证明两侧译文仍对应原位置，整条拒绝回填。
+        assertEquals(null, ContentNodes.replaceText(nodes, "费率下调 回归了"));
+        assertEquals("Lower Rates", first.getContent());
+        assertEquals("Are Back", second.getContent());
+        assertSame(emoji, nodes.get(1));
+    }
 
-        assertNotNull("emoji 丢失不应导致整条拒绝", out);
-        assertSame(emoji, out.get(1));
-        String joined = ((TextContentNode) out.get(0)).getContent()
-                + ((TextContentNode) out.get(2)).getContent();
-        assertTrue("译文必须保留，实际=" + joined, joined.contains("费率下调"));
-        assertTrue("译文必须保留，实际=" + joined, joined.contains("回归了"));
+    @Test
+    public void duplicateEmojiAnchorRejectsMisalignedTranslation() {
+        TextContentNode text = new TextContentNode("hello");
+        UnicodeEmojiContentNode emoji =
+                new UnicodeEmojiContentNode("\uD83D\uDCE2", "x", false);
+        List<Object> nodes = list(text, emoji);
+
+        // 重复锚点无法证明回填位置，整条拒绝而不污染原始节点。
+        assertEquals(null, ContentNodes.replaceText(nodes,
+                "你好 \uD83D\uDCE2 \uD83D\uDCE2"));
+        assertEquals("hello", text.getContent());
     }
 
     @Test
