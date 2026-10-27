@@ -109,13 +109,15 @@ public class ConfigTest {
         assertEquals(Config.DEF_PROTOCOL, s.protocol);
     }
 
-    /** 协议只接受两个已知值；空白与未知字符串（含类型异常）一律回落默认协议。 */
+    /** 协议只接受已知值；空白与未知字符串（含类型异常）一律回落默认协议。 */
     @Test
     public void protocolOnlyAcceptsKnownValues() {
         assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, Config.read(new MemoryPrefs()
                 .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_RESPONSES)).protocol);
         assertEquals(Config.PROTOCOL_OPENAI_COMPATIBLE, Config.read(new MemoryPrefs()
                 .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_COMPATIBLE)).protocol);
+        assertEquals(Config.PROTOCOL_ANTHROPIC_MESSAGES, Config.read(new MemoryPrefs()
+                .put(Config.KEY_PROTOCOL, Config.PROTOCOL_ANTHROPIC_MESSAGES)).protocol);
         assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
                 .put(Config.KEY_PROTOCOL, "gemini")).protocol);
         assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()

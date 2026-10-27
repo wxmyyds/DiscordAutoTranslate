@@ -62,6 +62,26 @@ public class ProtocolsTest {
         assertFalse("Responses 协议暂不支持流式，不携带 stream", json.has("stream"));
     }
 
+    /** Messages 请求体：system 顶层字段 + 仅 user 消息 + 必填 max_tokens + 流式。 */
+    @Test
+    public void messagesBodyUsesTopLevelSystemAndMaxTokens() throws Exception {
+        String body = Protocols.requestBody(Config.PROTOCOL_ANTHROPIC_MESSAGES,
+                "hii everyone", Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
+        JSONObject json = new JSONObject(body);
+        assertEquals(Config.DEF_MODEL, json.getString("model"));
+        assertEquals(Config.DEF_SYSTEM_PROMPT + "\n\n" + Protocols.WRAPPER_RULE,
+                json.getString("system"));
+        JSONArray messages = json.getJSONArray("messages");
+        assertEquals(1, messages.length());
+        assertEquals("user", messages.getJSONObject(0).getString("role"));
+        assertEquals(Protocols.WRAPPER_OPEN + "hii everyone" + Protocols.WRAPPER_CLOSE,
+                messages.getJSONObject(0).getString("content"));
+        assertTrue("max_tokens 是 Messages 协议必填项", json.getInt("max_tokens") > 0);
+        assertEquals(0, json.getDouble("temperature"), 0.0);
+        assertTrue("Messages 同样请求流式", json.getBoolean("stream"));
+        assertFalse("没有 OpenAI 系的 instructions 字段", json.has("instructions"));
+    }
+
     // ------------------------------------------------------------ 流式响应提取
 
     /** 流式帧按 delta 累积成完整译文；role/空帧与注释行不得混入。 */
@@ -118,7 +138,68 @@ public class ProtocolsTest {
                 + "data: [DONE]\n";
         try {
             Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse);
-            fail("被截断的生成必须失败");
+            fail("截断译文必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
+    // ------------------------------------------------------------ Anthropic Messages 提取
+
+    /** 非流式 Messages 响应：拼接 content 里全部 text 块，thinking 块跳过。 */
+    @Test
+    public void messagesExtractionConcatenatesTextBlocksOnly() throws Exception {
+        String resp = "{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\","
+                + "\"content\":[{\"type\":\"thinking\",\"thinking\":\"推理\"},"
+                + "{\"type\":\"text\",\"text\":\"你好\"},"
+                + "{\"type\":\"text\",\"text\":\"，世界\"}],"
+                + "\"model\":\"claude\",\"stop_reason\":\"end_turn\"}";
+        assertEquals("你好，世界",
+                Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, resp));
+    }
+
+    /** stop_reason=max_tokens：输出被 max_tokens 掐断，非流式同样拒绝。 */
+    @Test
+    public void messagesStopReasonMaxTokensIsRejected() {
+        String resp = "{\"content\":[{\"type\":\"text\",\"text\":\"你好\"}],"
+                + "\"stop_reason\":\"max_tokens\"}";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, resp);
+            fail("截断译文必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
+    }
+
+    /** 流式按 content_block_delta 增量累积；event: 行与 thinking 增量不混入。 */
+    @Test
+    public void streamedMessagesEventsAccumulateTextDeltas() throws Exception {
+        String sse = "event: message_start\n"
+                + "data: {\"type\":\"message_start\",\"message\":{}}\n"
+                + "\n"
+                + "event: content_block_delta\n"
+                + "data: {\"type\":\"content_block_delta\",\"index\":0,"
+                + "\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n"
+                + "data: {\"type\":\"content_block_delta\",\"index\":0,"
+                + "\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"推理\"}}\n"
+                + "data: {\"type\":\"content_block_delta\",\"index\":0,"
+                + "\"delta\":{\"type\":\"text_delta\",\"text\":\"，世界\"}}\n"
+                + "event: message_delta\n"
+                + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n"
+                + "event: message_stop\n"
+                + "data: {\"type\":\"message_stop\"}\n";
+        assertEquals("你好，世界",
+                Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, sse));
+    }
+
+    /** 流断在半路（无 message_stop 也无 stop_reason）必须失败，与 chat 流同规则。 */
+    @Test
+    public void messagesStreamCutMidwayIsRejected() {
+        String sse = "data: {\"type\":\"content_block_delta\",\"index\":0,"
+                + "\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, sse);
+            fail("残缺流必须失败");
         } catch (TranslationException e) {
             assertEquals(TranslationException.Kind.PARSE, e.kind());
         }
@@ -192,6 +273,9 @@ public class ProtocolsTest {
         assertEquals("https://api.openai.com/v1/responses",
                 Protocols.endpoint(Config.PROTOCOL_OPENAI_RESPONSES,
                         "https://api.openai.com/v1"));
+        assertEquals("https://api.anthropic.com/v1/messages",
+                Protocols.endpoint(Config.PROTOCOL_ANTHROPIC_MESSAGES,
+                        "https://api.anthropic.com/v1"));
         // 默认值本身也是基础地址形态。
         assertEquals("https://api.openai.com/v1/chat/completions",
                 Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, Config.DEF_API_URL));

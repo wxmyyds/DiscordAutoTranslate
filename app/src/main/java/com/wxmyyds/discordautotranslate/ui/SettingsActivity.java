@@ -37,8 +37,9 @@ import io.github.libxposed.service.XposedService;
 /** 设置界面（需求 §5.7）。 */
 public class SettingsActivity extends Activity implements XposedServiceConnectionHolder.Listener {
 
-    /** 下拉框显示顺序：0=OpenAI-Responses，1=OpenAI-Compatible。 */
-    private static final String[] PROTOCOL_ENTRIES = {"OpenAI-Responses", "OpenAI-Compatible"};
+    /** 下拉框显示顺序：0=OpenAI-Responses，1=OpenAI-Compatible，2=Anthropic-Messages。 */
+    private static final String[] PROTOCOL_ENTRIES =
+            {"OpenAI-Responses", "OpenAI-Compatible", "Anthropic-Messages"};
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService testExecutor = Executors.newSingleThreadExecutor();
@@ -162,7 +163,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         protocolHint.setTextSize(12f);
         protocolHint.setText("API URL 只填到 /v1 的基础地址，请求时按所选协议追加端点："
                 + "OpenAI-Compatible 追加 /chat/completions，OpenAI-Responses 追加 /responses，"
-                + "切换协议无需修改 URL。旧配置里填写的完整端点需删掉后缀只留基础地址。");
+                + "Anthropic-Messages 追加 /messages，切换协议无需修改 URL。"
+                + "旧配置里填写的完整端点需删掉后缀只留基础地址。");
         root.addView(protocolHint, matchWrap());
 
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
@@ -253,13 +255,24 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     /** 下拉框位置 → 协议存储值。未知位置回落默认协议。 */
     private static String protocolAt(int position) {
-        return position == 0
-                ? Config.PROTOCOL_OPENAI_RESPONSES : Config.PROTOCOL_OPENAI_COMPATIBLE;
+        if (position == 0) {
+            return Config.PROTOCOL_OPENAI_RESPONSES;
+        }
+        if (position == 2) {
+            return Config.PROTOCOL_ANTHROPIC_MESSAGES;
+        }
+        return Config.PROTOCOL_OPENAI_COMPATIBLE;
     }
 
     /** 协议存储值 → 下拉框位置；未知值按默认协议处理。 */
     private static int positionOf(String protocol) {
-        return Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol) ? 0 : 1;
+        if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
+            return 0;
+        }
+        if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
+            return 2;
+        }
+        return 1;
     }
 
     private int dp(int v) {

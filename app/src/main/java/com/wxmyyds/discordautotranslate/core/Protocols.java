@@ -26,6 +26,11 @@ import org.json.JSONObject;
  *       保持非流式（其流式事件格式不同，暂未支持）。
  *       译文在 {@code output} 数组中按类型扫描（推理模型会把 reasoning 项排在
  *       message 项之前，不能固定取 {@code output.0}）。</li>
+ *   <li>{@link Config#PROTOCOL_ANTHROPIC_MESSAGES}：{@code POST /v1/messages}，
+ *       请求体为顶层 {@code system} + {@code messages}（仅 user）+
+ *       {@code max_tokens}（必填）+ {@code stream:true}。译文取
+ *       {@code content} 数组中 {@code type=="text"} 块的拼接（thinking 块跳过），
+ *       流式按 {@code content_block_delta} 增量累积。</li>
  * </ul>
  *
  * <p>请求体用 org.json 构造，引号/换行/控制字符的转义由其保证，
@@ -55,6 +60,15 @@ public final class Protocols {
 
     private static final String SUFFIX_CHAT_COMPLETIONS = "/chat/completions";
     private static final String SUFFIX_RESPONSES = "/responses";
+    private static final String SUFFIX_MESSAGES = "/messages";
+
+    /**
+     * Anthropic Messages 的 max_tokens 必填。8192 是 claude-3.5 及之后
+     * 模型的输出上限；更老的 claude-3（上限 4096）会拒绝该值并报 400，
+     * 遇到时需调小。译文超限会以 stop_reason=max_tokens 结束，
+     * 由提取层按截断拒绝。
+     */
+    private static final int ANTHROPIC_MAX_TOKENS = 8192;
 
     private Protocols() {
     }
@@ -65,8 +79,9 @@ public final class Protocols {
      * <p>Compatible 协议携带 {@code stream:true}：非流式接口在生成完成前
      * 零字节返回，慢速供应商上长消息会被总时长超时掐断（实测 15s 读超时，
      * 同供应商聊天客户端流式发送很快）；流式下 token 持续到达，读超时按
-     * 字节间隔计算，总生成时长不再受限。Responses 协议保持非流式
-     * （其流式事件格式不同，暂未支持）。</p>
+     * 字节间隔计算，总生成时长不再受限。Anthropic Messages 同理走流式
+     * （事件格式不同，由提取层按 {@code data:} 帧的 type 字段区分）。
+     * Responses 协议保持非流式（其流式事件格式不同，暂未支持）。</p>
      *
      * @throws TranslationException 理论上仅在 org.json 拒绝值时发生，统一归类为配置错误
      */
@@ -86,6 +101,18 @@ public final class Protocols {
                 body.put("instructions", prompt);
                 body.put("input", wrapped);
                 body.put("temperature", TEMPERATURE);
+            } else if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
+                // system 是顶层字段而非消息；max_tokens 为该协议必填项。
+                body.put("system", prompt);
+                JSONArray messages = new JSONArray();
+                JSONObject user = new JSONObject();
+                user.put("role", "user");
+                user.put("content", wrapped);
+                messages.put(user);
+                body.put("messages", messages);
+                body.put("max_tokens", ANTHROPIC_MAX_TOKENS);
+                body.put("temperature", TEMPERATURE);
+                body.put("stream", true);
             } else {
                 JSONArray messages = new JSONArray();
                 JSONObject system = new JSONObject();
@@ -126,8 +153,15 @@ public final class Protocols {
         if (url.isEmpty()) {
             return apiUrl;
         }
-        return url + (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)
-                ? SUFFIX_RESPONSES : SUFFIX_CHAT_COMPLETIONS);
+        String suffix;
+        if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
+            suffix = SUFFIX_RESPONSES;
+        } else if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
+            suffix = SUFFIX_MESSAGES;
+        } else {
+            suffix = SUFFIX_CHAT_COMPLETIONS;
+        }
+        return url + suffix;
     }
 
     /**
@@ -140,7 +174,9 @@ public final class Protocols {
     public static String extractTranslation(String protocol, String responseBody)
             throws TranslationException {
         String text;
-        if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
+        if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
+            text = extractAnthropicText(responseBody);
+        } else if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
             text = extractResponsesText(responseBody);
         } else if (responseBody != null && responseBody.trim().startsWith("data:")) {
             text = extractStreamedChatText(responseBody);
@@ -240,6 +276,121 @@ public final class Protocols {
         if (!sawDone && finishReason == null) {
             throw new TranslationException(TranslationException.Kind.PARSE,
                     "流式响应不完整：未收到结束帧（[DONE]/finish_reason）");
+        }
+        return out.toString();
+    }
+
+    /**
+     * Anthropic Messages 提取：按 {@code data:}/{@code event:} 前缀区分流式与非流式。
+     *
+     * <p>非流式结构：顶层 {@code content} 数组，译文在 {@code type=="text"}
+     * 块的 {@code text} 字段（扩展思考模型的 thinking 块必须跳过）。
+     * {@code stop_reason=="max_tokens"} 说明输出被 max_tokens 掐断，
+     * 与流式同规则拒绝。</p>
+     */
+    private static String extractAnthropicText(String responseBody)
+            throws TranslationException {
+        // Anthropic 流以 event: 行开头（官方事件流带 event: 注记），
+        // 两种前缀都算流式，不能只认 data:。
+        if (responseBody != null) {
+            String head = responseBody.trim();
+            if (head.startsWith("data:") || head.startsWith("event:")) {
+                return extractStreamedAnthropicText(responseBody);
+            }
+        }
+        Object root = JsonPath.parse(responseBody);
+        if (!(root instanceof JSONObject)) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "Messages 响应不是 JSON 对象");
+        }
+        JSONObject json = (JSONObject) root;
+        JSONArray content = json.optJSONArray("content");
+        if (content == null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "Messages 响应缺少 content 数组");
+        }
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < content.length(); i++) {
+            JSONObject block = content.optJSONObject(i);
+            if (block == null || !"text".equals(block.optString("type"))) {
+                continue;
+            }
+            out.append(block.optString("text"));
+        }
+        Object stop = json.opt("stop_reason");
+        if ("max_tokens".equals(stop == null ? null : stop.toString())) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "生成被截断（stop_reason=max_tokens），译文不完整");
+        }
+        return out.toString();
+    }
+
+    /**
+     * 累积 Anthropic Messages 流式事件的文本增量。
+     *
+     * <p>事件形态：每帧 {@code data:{"type":"content_block_delta","index":0,
+     * "delta":{"type":"text_delta","text":"片"}}}，没有 [DONE] 哨兵，
+     * 以 {@code message_stop} 事件收尾（连接随后关闭，读取层读到 EOF）。
+     * {@code event:} 行与 ping 等事件不携带译文，跳过；thinking 增量走
+     * {@code thinking_delta}（无 text 字段），同样跳过。</p>
+     *
+     * <p>完整性把关与 chat/completions 流相同：结束信号
+     * （{@code message_stop}）或明确的 {@code stop_reason} 缺一不可，
+     * {@code max_tokens} 等非正常结束按截断拒绝，残缺流宁可失败。</p>
+     */
+    private static String extractStreamedAnthropicText(String responseBody)
+            throws TranslationException {
+        StringBuilder out = new StringBuilder();
+        String stopReason = null;
+        boolean sawMessageStop = false;
+        try {
+            for (String rawLine : responseBody.split("\n", -1)) {
+                String line = rawLine.trim();
+                if (!line.startsWith("data:")) {
+                    continue; // event: 行、注释行与空行
+                }
+                String payload = line.substring("data:".length()).trim();
+                if (payload.isEmpty()) {
+                    continue;
+                }
+                JSONObject frame = new JSONObject(payload);
+                String type = frame.optString("type");
+                if ("message_stop".equals(type)) {
+                    sawMessageStop = true;
+                } else if ("content_block_delta".equals(type)) {
+                    JSONObject delta = frame.optJSONObject("delta");
+                    // text 帧外的增量（thinking_delta 等）没有 text 字段，
+                    // 整体跳过，不能让 Android org.json 把 NULL 转成 "null"。
+                    if (delta == null || delta.isNull("text")) {
+                        continue;
+                    }
+                    String piece = delta.optString("text", "");
+                    if (!piece.isEmpty()) {
+                        out.append(piece);
+                    }
+                } else if ("message_delta".equals(type)) {
+                    JSONObject delta = frame.optJSONObject("delta");
+                    if (delta == null) {
+                        continue;
+                    }
+                    Object stop = delta.opt("stop_reason");
+                    if (stop != null && stop != JSONObject.NULL && !stop.toString().isEmpty()) {
+                        stopReason = stop.toString();
+                    }
+                }
+            }
+        } catch (JSONException e) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "流式响应帧不是合法 JSON：" + e.getMessage(), e);
+        }
+        if (stopReason != null && !"end_turn".equals(stopReason)
+                && !"stop_sequence".equals(stopReason)) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "生成被截断（stop_reason=" + stopReason + "），译文不完整");
+        }
+        if (!sawMessageStop && stopReason == null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "流式响应不完整：未收到结束事件（message_stop/stop_reason）");
         }
         return out.toString();
     }

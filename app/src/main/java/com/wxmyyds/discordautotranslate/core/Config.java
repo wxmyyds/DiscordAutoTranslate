@@ -58,6 +58,9 @@ public final class Config {
     /** OpenAI Responses 协议：{@code POST /v1/responses}，译文取 output 中 message 项的 output_text。 */
     public static final String PROTOCOL_OPENAI_RESPONSES = "openai-responses";
 
+    /** Anthropic Messages 协议：{@code POST /v1/messages}，译文取 content 数组中 text 块的拼接。 */
+    public static final String PROTOCOL_ANTHROPIC_MESSAGES = "anthropic-messages";
+
     /**
      * 默认协议必须是 OpenAI 兼容：它是历史默认请求模板的等价实现，
      * 已安装用户升级后即使不改配置，请求行为也与旧版一致。
@@ -118,7 +121,8 @@ public final class Config {
         public final String targetLang;
         public final String extraHeaders;
         public final String systemPrompt;
-        /** 供应商协议，取值为 {@link #PROTOCOL_OPENAI_COMPATIBLE} 或 {@link #PROTOCOL_OPENAI_RESPONSES}。 */
+        /** 供应商协议，取值为 {@link #PROTOCOL_OPENAI_COMPATIBLE}、
+         * {@link #PROTOCOL_OPENAI_RESPONSES} 或 {@link #PROTOCOL_ANTHROPIC_MESSAGES}。 */
         public final String protocol;
         public final int timeoutMs;
         public final int maxConcurrency;
@@ -149,6 +153,9 @@ public final class Config {
             }
             if (PROTOCOL_OPENAI_RESPONSES.equals(v)) {
                 return PROTOCOL_OPENAI_RESPONSES;
+            }
+            if (PROTOCOL_ANTHROPIC_MESSAGES.equals(v)) {
+                return PROTOCOL_ANTHROPIC_MESSAGES;
             }
             return PROTOCOL_OPENAI_COMPATIBLE;
         }
