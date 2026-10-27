@@ -281,7 +281,7 @@ public final class Protocols {
     }
 
     /**
-     * Anthropic Messages 提取：按 {@code data:} 前缀区分流式与非流式。
+     * Anthropic Messages 提取：按 {@code data:}/{@code event:} 前缀区分流式与非流式。
      *
      * <p>非流式结构：顶层 {@code content} 数组，译文在 {@code type=="text"}
      * 块的 {@code text} 字段（扩展思考模型的 thinking 块必须跳过）。
@@ -290,8 +290,13 @@ public final class Protocols {
      */
     private static String extractAnthropicText(String responseBody)
             throws TranslationException {
-        if (responseBody != null && responseBody.trim().startsWith("data:")) {
-            return extractStreamedAnthropicText(responseBody);
+        // Anthropic 流以 event: 行开头（官方事件流带 event: 注记），
+        // 两种前缀都算流式，不能只认 data:。
+        if (responseBody != null) {
+            String head = responseBody.trim();
+            if (head.startsWith("data:") || head.startsWith("event:")) {
+                return extractStreamedAnthropicText(responseBody);
+            }
         }
         Object root = JsonPath.parse(responseBody);
         if (!(root instanceof JSONObject)) {
