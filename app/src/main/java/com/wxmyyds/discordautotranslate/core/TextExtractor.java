@@ -116,6 +116,37 @@ public final class TextExtractor {
         return isUrlLike(s) ? s : null;
     }
 
+    /**
+     * 取 emoji 节点在请求正文里的文本形式。
+     *
+     * <p>emoji 在宿主里是独立绘制节点（{@code UnicodeEmojiContentNode} /
+     * {@code CustomEmojiContentNode}），旧实现只在请求里输出一个空格，模型
+     * 完全看不到 emoji 的位置，译文行结构与原文对不上（实测 emoji 被挤到
+     * 行尾/消息末尾）。这里把 emoji 字符（或 {@code :name:}）放进请求，让
+     * 模型看到真实位置；回填时再从译文里剔除，显示仍由原节点完成，因此
+     * emoji 永远是 Discord 原生绘制、位置来自节点树。</p>
+     *
+     * @return emoji 的文本形式；非 emoji 节点或无内容时返回 null
+     */
+    @Nullable
+    public static String nodeEmojiText(Object node) {
+        String name = node.getClass().getSimpleName();
+        if (name.endsWith("UnicodeEmojiContentNode")) {
+            String s = Reflect.callString(node, "getContent");
+            if (s == null || s.isEmpty()) {
+                // 部分版本把字符放在 surrogate 字段。
+                s = Reflect.callString(node, "getSurrogate");
+            }
+            return s == null || s.isEmpty() ? null : s;
+        }
+        if (name.endsWith("CustomEmojiContentNode")) {
+            // 自定义 emoji 没有可读字符，用 :name: 形式标记位置。
+            String alt = Reflect.callString(node, "getAlt");
+            return alt == null || alt.isEmpty() ? null : ":" + alt + ":";
+        }
+        return null;
+    }
+
     /** 拼接子树内全部 TextContentNode 文本（用于识别链接显示文本），非文本节点跳过。 */
     private static void appendDescendantText(List<?> nodes, StringBuilder out, int depth) {
         if (nodes == null || depth > MAX_DEPTH) {
@@ -385,7 +416,16 @@ public final class TextExtractor {
                 return;
             }
             default: {
-                // 提及、频道、emoji、时间戳等由原节点渲染，不再发送 @mention
+                // emoji 定位标记：写进请求正文，让模型看到它的真实位置；
+                // 回填时原位保留（显示由原节点完成），并据此切分译文间隔。
+                // 仍计入 opaque：它是不可翻译的结构节点，参与语言检测。
+                String emoji = nodeEmojiText(node);
+                if (emoji != null) {
+                    counters[1]++;
+                    out.append(' ').append(emoji).append(' ');
+                    return;
+                }
+                // 提及、频道、时间戳等由原节点渲染，不再发送 @mention
                 // 等可被模型复述/翻译的占位词，否则会与保留节点重复显示。
                 // 留空格避免节点两侧的单词被拼接；opaque 计数仍参与语言检测。
                 counters[1]++;
