@@ -275,14 +275,18 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         Config.Snapshot snapshot = Config.read(currentPrefs);
         enabledInput.setChecked(snapshot.enabled);
         protocolSpinner.setSelection(positionOf(snapshot.protocol));
-        urlInput.setText(snapshot.apiUrl);
-        keyInput.setText(snapshot.apiKey);
-        modelInput.setText(snapshot.model);
-        targetLangInput.setText(snapshot.targetLang);
-        headersInput.setText(snapshot.extraHeaders);
-        systemPromptInput.setText(snapshot.systemPrompt);
-        timeoutInput.setText(String.valueOf(snapshot.timeoutMs));
-        concurrencyInput.setText(String.valueOf(snapshot.maxConcurrency));
+        // 等于默认值的填空项留空，让灰色占位符（hint 即默认值）展示默认值，
+        // 不把默认值填成实际文本。
+        setTextOrPlaceholder(urlInput, snapshot.apiUrl, Config.DEF_API_URL);
+        setTextOrPlaceholder(keyInput, snapshot.apiKey, Config.DEF_API_KEY);
+        setTextOrPlaceholder(modelInput, snapshot.model, Config.DEF_MODEL);
+        setTextOrPlaceholder(targetLangInput, snapshot.targetLang, Config.DEF_TARGET_LANG);
+        setTextOrPlaceholder(headersInput, snapshot.extraHeaders, Config.DEF_EXTRA_HEADERS);
+        setTextOrPlaceholder(systemPromptInput, snapshot.systemPrompt, Config.DEF_SYSTEM_PROMPT);
+        setTextOrPlaceholder(timeoutInput, String.valueOf(snapshot.timeoutMs),
+                String.valueOf(Config.DEF_TIMEOUT_MS));
+        setTextOrPlaceholder(concurrencyInput, String.valueOf(snapshot.maxConcurrency),
+                String.valueOf(Config.DEF_MAX_CONCURRENCY));
     }
 
     private void save() {
@@ -307,14 +311,22 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             editor = targetPrefs.edit();
             editor.putBoolean(Config.KEY_ENABLED, snapshot.enabled);
             editor.putString(Config.KEY_PROTOCOL, snapshot.protocol);
-            editor.putString(Config.KEY_API_URL, snapshot.apiUrl);
-            editor.putString(Config.KEY_API_KEY, snapshot.apiKey);
-            editor.putString(Config.KEY_MODEL, snapshot.model);
-            editor.putString(Config.KEY_TARGET_LANG, snapshot.targetLang);
-            editor.putString(Config.KEY_EXTRA_HEADERS, snapshot.extraHeaders);
-            editor.putString(Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt);
-            editor.putInt(Config.KEY_TIMEOUT_MS, snapshot.timeoutMs);
-            editor.putInt(Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency);
+            // 等于默认值的填空项删除已存键而不是写入：默认值不固化为本机内容，
+            // 之后模块调整默认值时未自定义的配置自动跟随，清空输入框再保存
+            // 也能回到默认值。
+            putUnlessDefault(editor, Config.KEY_API_URL, snapshot.apiUrl, Config.DEF_API_URL);
+            putUnlessDefault(editor, Config.KEY_API_KEY, snapshot.apiKey, Config.DEF_API_KEY);
+            putUnlessDefault(editor, Config.KEY_MODEL, snapshot.model, Config.DEF_MODEL);
+            putUnlessDefault(editor, Config.KEY_TARGET_LANG, snapshot.targetLang,
+                    Config.DEF_TARGET_LANG);
+            putUnlessDefault(editor, Config.KEY_EXTRA_HEADERS, snapshot.extraHeaders,
+                    Config.DEF_EXTRA_HEADERS);
+            putUnlessDefault(editor, Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt,
+                    Config.DEF_SYSTEM_PROMPT);
+            putUnlessDefault(editor, Config.KEY_TIMEOUT_MS, snapshot.timeoutMs,
+                    Config.DEF_TIMEOUT_MS);
+            putUnlessDefault(editor, Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency,
+                    Config.DEF_MAX_CONCURRENCY);
         } catch (Throwable t) {
             updateStatus("保存失败：" + t.getClass().getSimpleName());
             return;
@@ -370,6 +382,29 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             return Integer.parseInt(editText.getText().toString().trim());
         } catch (Throwable t) {
             return defaultValue;
+        }
+    }
+
+    /** 值等于默认值时清空输入框，灰色占位符（hint）展示默认值；自定义值才写入。 */
+    private static void setTextOrPlaceholder(EditText field, String value, String def) {
+        field.setText(def.equals(value) ? "" : value);
+    }
+
+    private static void putUnlessDefault(SharedPreferences.Editor editor, String key,
+                                         String value, String def) {
+        if (def.equals(value)) {
+            editor.remove(key);
+        } else {
+            editor.putString(key, value);
+        }
+    }
+
+    private static void putUnlessDefault(SharedPreferences.Editor editor, String key,
+                                         int value, int def) {
+        if (value == def) {
+            editor.remove(key);
+        } else {
+            editor.putInt(key, value);
         }
     }
 
