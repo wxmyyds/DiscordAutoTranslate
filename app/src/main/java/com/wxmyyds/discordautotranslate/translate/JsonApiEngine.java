@@ -65,7 +65,8 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
-        // Compatible 协议请求体带 stream:true，按 SSE 读取（读到 [DONE] 为止）；
+        // Compatible 与 Anthropic Messages 请求体带 stream:true，按 SSE 读取
+        // （前者读到 [DONE] 为止，后者无 [DONE]、读到连接关闭）；
         // Responses 协议保持非流式。
         boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
         Http.Response resp = http.postJson(url, body, headers, sse);
@@ -109,12 +110,26 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
     }
 
-    /** 构造请求头。若用户已自定义 Authorization，则不覆盖。 */
+    /**
+     * 构造请求头。用户在额外请求头里已自定义的同名头不覆盖。
+     *
+     * <p>OpenAI 系协议用 {@code Authorization: Bearer}；Anthropic Messages
+     * 用 {@code x-api-key} 且必须携带版本头 {@code anthropic-version}。</p>
+     */
     private Http.Headers buildHeaders() {
         Http.Headers headers = Http.Headers.parse(cfg.extraHeaders);
-        if (cfg.apiKey != null && !cfg.apiKey.trim().isEmpty()
-                && headers.get("Authorization") == null) {
-            headers.add("Authorization", "Bearer " + cfg.apiKey.trim());
+        boolean anthropic = Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(cfg.protocol);
+        if (cfg.apiKey != null && !cfg.apiKey.trim().isEmpty()) {
+            if (anthropic) {
+                if (headers.get("x-api-key") == null) {
+                    headers.add("x-api-key", cfg.apiKey.trim());
+                }
+            } else if (headers.get("Authorization") == null) {
+                headers.add("Authorization", "Bearer " + cfg.apiKey.trim());
+            }
+        }
+        if (anthropic && headers.get("anthropic-version") == null) {
+            headers.add("anthropic-version", "2023-06-01");
         }
         return headers;
     }
