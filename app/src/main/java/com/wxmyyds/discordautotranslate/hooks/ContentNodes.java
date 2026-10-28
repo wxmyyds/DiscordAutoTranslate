@@ -92,8 +92,8 @@ public final class ContentNodes {
      *
      * <p>译文按结构对齐回填：URL 链接与 URL 文本块不参与翻译，原样保留；
      * 译文先按 URL 定位标记切分成间隔，再逐间隔对齐到可翻译片段
-     * （段落块 1:1 → 非空行 1:1 → 段落级：每段译文进本段首片段、段内其余
-     * 置空）。模型跨段落合并/增删内容导致结构对不上时整条保留原文，
+     * （段落块 1:1 → 整行 1:1 → 非空行 1:1 → 段落级：每段译文进本段首片段、
+     * 段内其余置空）。模型跨段落合并/增删内容导致结构对不上时整条保留原文，
      * 不让复读或错位内容进入节点树。</p>
      *
      * @param nodes        原始节点列表
@@ -111,9 +111,9 @@ public final class ContentNodes {
             return null;
         }
         // URL 链接在请求里是定位标记：先按译文中的 URL 出现位置把译文
-        // 切成若干间隔，每个间隔再独立三级对齐（段落块 1:1 → 非空行 1:1
-        // → 段落级：每段译文进本段首片段，段内其余置空；有格式的内联
-        // 消息只能这样落位）。URL 丢失/改坏/多份回显或间隔对不上时
+        // 切成若干间隔，每个间隔再独立四级对齐（段落块 1:1 → 整行 1:1
+        // → 非空行 1:1 → 段落级：每段译文进本段首片段，段内其余置空；
+        // 有格式的内联消息只能这样落位）。URL 丢失/改坏/多份回显或间隔对不上时
         // 整条保留原文。strip 是防御性的：正常链路下引擎校验已保证译文
         // 无分段标记，模型幻觉出的标记在这里被剥离，不会显示为字面量。
         String plain = normalize(Segments.strip(translated));
@@ -491,7 +491,7 @@ public final class ContentNodes {
      *   <li>请求含样式标记（{@code <xN>…</xN>}）时按标记扫描分配，样式
      *       精确落位；模型没保留/改坏标记时自动回退到无标记对齐
      *       （译文保留、样式退化为合并处理），不会拒译；</li>
-     *   <li>无标记回退：按定位标记切分间隔 + 每个间隔三级对齐
+     *   <li>无标记回退：按定位标记切分间隔 + 每个间隔四级对齐
      *       （见 {@link #alignSpanToParts}）。定位标记包括 URL 和 emoji：
      *       它们本身不消费译文片段（URL 由原节点渲染，emoji 由原节点绘制），
      *       但在请求正文里占位置，因此要求模型保持其出现次数与顺序；
@@ -549,6 +549,12 @@ public final class ContentNodes {
                 if (styled.isEmpty()) {
                     return null; // 样式标记内没有译文：标记不可信，回退
                 }
+                if (t.segIndex < plan.listFlags.size()
+                        && Boolean.TRUE.equals(plan.listFlags.get(t.segIndex))) {
+                    // 列表项内的样式片段：剔除模型回显的项目符号，
+                    // 显示符号由原节点渲染。
+                    styled = stripListMarker(styled);
+                }
                 parts.set(t.segIndex, styled);
                 cursor = end + close.length();
             } else {
@@ -571,6 +577,7 @@ public final class ContentNodes {
         int last = pending.get(pending.size() - 1);
         List<String> runParts = alignSpanToParts(run,
                 plan.groupIds.subList(first, last + 1),
+                plan.listFlagsIn(first, last + 1),
                 plan.unsafeIn(first, last + 1));
         if (runParts == null) {
             return false;
@@ -634,7 +641,7 @@ public final class ContentNodes {
     private static List<String> alignTokens(String plain, AlignmentPlan plan) {
         boolean hasAnchors = !plan.urls.isEmpty() || !plan.emojiAnchors.isEmpty();
         if (!hasAnchors) {
-            return alignSpanToParts(plain, plan.groupIds, plan.unsafe);
+            return alignSpanToParts(plain, plan.groupIds, plan.listFlags, plan.unsafe);
         }
         // 逐个令牌定位。锚点只切间隔、不产出片段；片段在其后的间隔里分配。
         List<String> parts = new ArrayList<>(
@@ -657,6 +664,7 @@ public final class ContentNodes {
                     : plan.urlSegIndex.get(urlIndex++);
             List<String> spanParts = alignSpanToParts(plain.substring(from, at),
                     plan.groupIds.subList(segStart, segEnd),
+                    plan.listFlagsIn(segStart, segEnd),
                     plan.unsafeIn(segStart, segEnd));
             if (spanParts == null) {
                 return null;
@@ -667,6 +675,7 @@ public final class ContentNodes {
         }
         List<String> tailParts = alignSpanToParts(plain.substring(from),
                 plan.groupIds.subList(segStart, plan.groupIds.size()),
+                plan.listFlagsIn(segStart, plan.groupIds.size()),
                 plan.unsafeIn(segStart, plan.groupIds.size()));
         if (tailParts == null) {
             return null;
@@ -687,14 +696,26 @@ public final class ContentNodes {
 
     /**
      * 把一个 URL 间隔内的译文对齐到该间隔的片段（{@code groups} 与片段
-     * 一一对应）。优先级：段落块 1:1（保结构）→ 非空行 1:1（单行分段）→
-     * 段落级对齐（每段译文进本段首片段，段内其余置空）。unsafe 段落
+     * 一一对应）。优先级：段落块 1:1（保结构）→ 整行 1:1 → 非空行 1:1
+     * （仅含列表项的间隔：列表项之间只有单换行，逐行对应）→ 段落级对齐
+     * （每段译文进本段首片段，段内其余置空）。unsafe 段落
      * （片段之间夹有 emoji/行内代码/列表符号等不可翻译可见内容）拒用
      * 段落级对齐：强行对齐会孤立这些节点，实测链接与描述分离。
      * 全部对不上返回 null。
+     *
+     * <p>{@code listFlags} 与 {@code groups} 平行，标记该片段是否位于
+     * 列表项内：列表项片段会剥离模型回显的项目符号（{@code - }、
+     * {@code • }、{@code 1. } 等），显示符号由原节点渲染，否则会重复。</p>
      */
     @Nullable
     static List<String> alignSpanToParts(String span, List<Integer> groups,
+                                         java.util.BitSet unsafe) {
+        return alignSpanToParts(span, groups, null, unsafe);
+    }
+
+    @Nullable
+    static List<String> alignSpanToParts(String span, List<Integer> groups,
+                                         @Nullable List<Boolean> listFlags,
                                          java.util.BitSet unsafe) {
         int segs = groups.size();
         String trimmed = span.trim();
@@ -708,11 +729,11 @@ public final class ContentNodes {
             }
             List<String> out = new ArrayList<>(1);
             out.add(trimmed);
-            return out;
+            return stripListMarkers(out, listFlags);
         }
         List<String> chunks = translatableChunks(span);
         if (chunks.size() == segs) {
-            return chunks;
+            return stripListMarkers(chunks, listFlags);
         }
         String[] lines = span.split("\n", -1);
         if (lines.length == segs) {
@@ -725,11 +746,24 @@ public final class ContentNodes {
                 }
             }
             if (allNonBlank) {
-                List<String> out = new ArrayList<>(segs);
-                for (String line : lines) {
-                    out.add(line);
+                return stripListMarkers(new ArrayList<>(java.util.Arrays.asList(lines)),
+                        listFlags);
+            }
+        }
+        // 非空行 1:1（仅限含列表项的间隔）：列表项之间的分隔只有一个换行，
+        // 模型保留「每项一行」时，空行块会把整张列表算成一块，与逐项片段
+        // 对不上；非空行数则恰好等于片段数。它比段落级更严格（要求逐行完全
+        // 对应），因此优先。限定列表片段是为了不改动普通段落既有的严格结构
+        // 校验（不含列表的消息走上面的层级，不会落到这一级）。
+        if (hasListSegment(listFlags)) {
+            List<String> nonBlank = new ArrayList<>(segs);
+            for (String line : span.split("\n", -1)) {
+                if (!line.trim().isEmpty()) {
+                    nonBlank.add(line);
                 }
-                return out;
+            }
+            if (nonBlank.size() == segs) {
+                return stripListMarkers(nonBlank, listFlags);
             }
         }
         int paraCount = distinctCount(groups);
@@ -745,9 +779,60 @@ public final class ContentNodes {
                     lastGroup = g;
                 }
             }
-            return out;
+            return stripListMarkers(out, listFlags);
         }
         return null;
+    }
+
+    private static boolean hasListSegment(@Nullable List<Boolean> listFlags) {
+        if (listFlags == null) {
+            return false;
+        }
+        for (Boolean flag : listFlags) {
+            if (Boolean.TRUE.equals(flag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 剥离列表项译文行首的项目符号。
+     *
+     * <p>请求正文里的列表项带 {@code • } 前缀（宿主渲染的符号），模型常把它
+     * 原样回显；节点本身会再渲染一次符号，不剥离就会显示成两个。只对
+     * {@code listFlags} 标记为列表项的片段生效，普通段落里以符号开头的文本
+     * 不受影响。</p>
+     */
+    private static List<String> stripListMarkers(List<String> parts,
+                                                 @Nullable List<Boolean> listFlags) {
+        if (listFlags == null) {
+            return parts;
+        }
+        List<String> out = new ArrayList<>(parts.size());
+        for (int i = 0; i < parts.size(); i++) {
+            String p = parts.get(i);
+            boolean list = i < listFlags.size() && Boolean.TRUE.equals(listFlags.get(i));
+            out.add(list ? stripListMarker(p) : p);
+        }
+        return out;
+    }
+
+    /** 行首项目符号：{@code • }、{@code - }、{@code 1. } 等（需有分隔空白）。 */
+    private static final java.util.regex.Pattern LIST_MARKER =
+            java.util.regex.Pattern.compile(
+                    "^\\s*(?:[-*+•◦·▪▫]\\s+|\\d+[.)]\\s+)");
+
+    /**
+     * 剔除行首项目符号。剥离后什么都不剩时保留原行：宁可多显示一个符号，
+     * 也不能把列表项的文本清空。
+     */
+    private static String stripListMarker(String line) {
+        if (line == null || line.isEmpty()) {
+            return line;
+        }
+        String stripped = LIST_MARKER.matcher(line).replaceFirst("");
+        return stripped.trim().isEmpty() ? line : stripped;
     }
 
     private static int distinctCount(List<Integer> groups) {
@@ -788,6 +873,8 @@ public final class ContentNodes {
     static final class AlignmentPlan {
         /** 每个可翻译片段的段落组号（0 起，与片段枚举同序）。 */
         final List<Integer> groupIds = new ArrayList<>();
+        /** 与 {@code groupIds} 平行：该片段是否位于列表项内（回填时剥离回显符号）。 */
+        final List<Boolean> listFlags = new ArrayList<>();
         /** 按树序的 URL 定位标记（原样 URL 文本）。 */
         final List<String> urls = new ArrayList<>();
         /** 与 {@code urls} 平行：该 URL 之前的可翻译片段数（间隔边界）。 */
@@ -827,6 +914,11 @@ public final class ContentNodes {
             }
             return out;
         }
+
+        /** [segStart, segEnd) 范围片段对应的列表项标记子列表。 */
+        List<Boolean> listFlagsIn(int segStart, int segEnd) {
+            return new ArrayList<>(listFlags.subList(segStart, segEnd));
+        }
     }
 
     /** 树序令牌：URL 定位标记 / emoji / 可翻译片段（样式号 &gt;0 表示包在 {@code <xN>…</xN>} 里）。 */
@@ -861,6 +953,10 @@ public final class ContentNodes {
         final AlignmentPlan plan = new AlignmentPlan();
         int group = 0;
         final StringBuilder sep = new StringBuilder();
+        /** 当前嵌套列表层数（>0 表示正在列表项内）：用于标记列表片段。 */
+        int listLevel;
+        /** 下一个片段强制新开段落组（列表项 / 列表后正文的边界）。 */
+        boolean forceNewGroup;
         /** 样式标记序号（与 TextExtractor.walkNode 同口径递增）。 */
         final int[] styleSeq = new int[1];
     }
@@ -942,14 +1038,30 @@ public final class ContentNodes {
             List<?> inner = childListOf(n, simple);
             if (inner != null) {
                 if (BULLET_LIST.equals(simple)) {
+                    // 列表项之间只有单换行（{@code "\n• "}），旧逻辑让整张列表
+                    // 属于同一个段落组，于是段落级对齐把整块列表译文塞进首项、
+                    // 其余项置空（实测列表只剩一行）。每个列表项各自成段，
+                    // 并标记列表片段，供回填时剔除模型回显的项目符号。
+                    int before = w.plan.groupIds.size();
                     for (Object item : inner) {
+                        if (!w.plan.groupIds.isEmpty()) {
+                            w.forceNewGroup = true;
+                        }
                         w.sep.append("\n• ");
+                        w.listLevel++;
                         if (item instanceof List) {
                             walkPlan((List<?>) item, w, depth + 1, styled);
                         } else if (item != null) {
                             walkPlan(java.util.Collections.singletonList(item),
                                     w, depth + 1, styled);
                         }
+                        w.listLevel--;
+                    }
+                    // 列表后的正文另属一段：列表项分隔只有单换行，不设边界
+                    // 会把紧随其后的段落并进最后一项。列表本身没有可翻译
+                    // 片段时不设边界，避免多切一个空段落组。
+                    if (w.plan.groupIds.size() > before) {
+                        w.forceNewGroup = true;
                     }
                     continue;
                 }
@@ -984,13 +1096,20 @@ public final class ContentNodes {
      * 记录一个可翻译片段：空行分隔推进段落组。
      *
      * <p>URL 与 emoji 都作为定位标记在段落对齐前切分，不触发 unsafe；
-     * 其他未建模的可见节点仍由 unsafe 机制保护。</p>
+     * 其他未建模的可见节点仍由 unsafe 机制保护。列表项内的片段额外标记
+     * {@code listFlags}，供回填时剔除重复的项目符号。列表项边界由
+     * {@code forceNewGroup} 推进段落组（列表项间只有单换行，不会自然
+     * 形成空行边界）。</p>
      */
     private static void addSegment(PlanWalk w) {
-        if (!w.plan.groupIds.isEmpty() && countNewlines(w.sep) >= 2) {
+        if (w.forceNewGroup) {
+            w.group++;
+            w.forceNewGroup = false;
+        } else if (!w.plan.groupIds.isEmpty() && countNewlines(w.sep) >= 2) {
             w.group++;
         }
         w.plan.groupIds.add(w.group);
+        w.plan.listFlags.add(w.listLevel > 0);
         w.sep.setLength(0);
     }
 
