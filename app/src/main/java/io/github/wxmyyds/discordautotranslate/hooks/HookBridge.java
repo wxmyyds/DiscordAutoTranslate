@@ -327,7 +327,7 @@ public final class HookBridge {
     public void requestRerender(@Nullable View contentView, @Nullable String messageId,
                                 @Nullable Object invocationTarget, @Nullable Method method,
                                 @Nullable Object[] args) {
-        if (!(invocationTarget instanceof View) || method == null || args == null) {
+        if (invocationTarget == null || method == null || args == null) {
             return;
         }
         String bound = messageIdOf(contentView);
