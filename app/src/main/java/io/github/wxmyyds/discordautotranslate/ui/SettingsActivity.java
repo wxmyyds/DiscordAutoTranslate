@@ -157,7 +157,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
         service = connectedService;
         serviceGeneration++;
+        saveInProgress = false;
         syncInProgress = false;
+        final long generation = serviceGeneration;
         try {
             remotePrefs = connectedService.getRemotePreferences(Config.GROUP);
         } catch (Throwable t) {
