@@ -34,9 +34,13 @@ import java.util.List;
  * <p>该消息在回填层（{@link ContentNodes#replaceText}）与 emoji 锚点相关：
  * 每行自定义 emoji 作为定位标记切分间隔（见 {@link TextExtractor#nodeEmojiText}
  * 与 {@code walkPlan} 的 {@code addEmojiToken}）。模型回译若不保留这些
- * {@code <:name:id>} 锚点（例如把整行当成「名字」翻译、或改写锚点文本），
- * {@code anchorsMatch} 数量/顺序校验失败，整条拒绝回填，界面保持英文
- * （状态仍是 TRANSLATED）。本测试记录该结构在当前实现下的行为并防止回归。</p>
+ * {@code <:name:id>} 锚点，旧实现的 {@code anchorsMatch} 校验会让整条拒绝
+ * 回填，界面保持英文（状态仍是 TRANSLATED）。</p>
+ *
+ * <p>修复后：emoji 锚点数量不符时降级对齐（剥离锚点回显、忽略 emoji
+ * 切分，按块/行逐级严格校验），译文逐行对应时能正常回填；行结构对
+ * 不上仍整条拒绝。URL 锚点仍保持原来的严格校验（丢失即拒），因为
+ * URL 字符必须由原节点保真。</p>
  */
 public class EmojiHeadingMentionRegressionTest {
 
@@ -99,17 +103,36 @@ public class EmojiHeadingMentionRegressionTest {
     }
 
     /**
-     * 模型丢弃或改写 {@code <:name:id>} 锚点时当前实现整条拒绝（保英文）。
-     * 记录该行为：若后续改为「降级留位置」需反向更新本断言。
+     * 上报现象的直接回归：模型丢弃 {@code :qwen:} / {@code :deepseek:} 锚点
+     * 但逐行翻译时，必须降级回填而不是整条保持英文。
      */
     @Test
-    public void modelDroppingEmojiAnchorKeepsOriginalEnglish() {
+    public void modelDroppingEmojiAnchorsStillTranslatesEveryLine() {
         List<Object> nodes = reportedTree();
         List<Object> out = ContentNodes.replaceText(nodes,
                 "宣布 2 款新的 abliterated 模型：\nQwen 3 27b\nDeepseek V4.1 Flash");
 
-        // 锚点丢失：无法证明 emoji 位置对应的两侧译文仍正确，整条保留原文。
-        assertNull("锚点全部丢失时应拒绝回填（保持英文）", out);
+        assertNotNull("锚点丢失但逐行对应时必须降级回填，不得保持英文", out);
+        HeadingContentNode heading = (HeadingContentNode) out.get(2);
+        assertEquals("宣布 2 款新的 abliterated 模型：",
+                ((TextContentNode) heading.getContent().get(0)).getContent());
+        assertSame("emoji 节点仍由原节点绘制", nodes.get(4), out.get(4));
+        assertEquals(" Qwen 3 27b", ((TextContentNode) out.get(5)).getContent());
+        assertSame(nodes.get(7), out.get(7));
+        assertEquals(" Deepseek V4.1 Flash", ((TextContentNode) out.get(8)).getContent());
+    }
+
+    /**
+     * 降级不得造成内容丢失：模型把三行合并成一段时行结构对不上，
+     * 仍整条保留原文（不能把三句塞进标题节点、清空另两个片段）。
+     */
+    @Test
+    public void mergedTranslationWithDroppedAnchorsKeepsOriginal() {
+        List<Object> nodes = reportedTree();
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "宣布 2 款新模型：Qwen 3 27b 与 Deepseek V4.1 Flash");
+
+        assertNull("段落/行结构对不上时必须保留原文", out);
         assertEquals("Announcing 2 new abliterated models:",
                 ((TextContentNode) ((HeadingContentNode) nodes.get(2))
                         .getContent().get(0)).getContent());

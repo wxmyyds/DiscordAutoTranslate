@@ -188,32 +188,61 @@ public class EmojiAnchorTest {
         assertTrue("emoji 右侧必须有译文，实际=" + right, right.contains("回归了"));
     }
 
+    /**
+     * 锚点丢失且译文只剩一行时仍拒绝：降级对齐只接受块/行逐一对得上的
+     * 译文，不允许把两行塞进一个片段（那会顶掉另一侧的文本）。
+     */
     @Test
-    public void droppedEmojiRejectsMisalignedTranslationAndKeepsOriginalNodes() {
+    public void droppedEmojiWithMergedSingleLineKeepsOriginalNodes() {
         TextContentNode first = new TextContentNode("Lower Rates");
         UnicodeEmojiContentNode emoji =
                 new UnicodeEmojiContentNode("\uD83D\uDCE2", "x", false);
         TextContentNode second = new TextContentNode("Are Back");
         List<Object> nodes = list(first, emoji, second);
 
-        // 锚点丢失时无法证明两侧译文仍对应原位置，整条拒绝回填。
+        // 两个片段只拿到一行译文：行结构对不上，整条保留原文。
         assertEquals(null, ContentNodes.replaceText(nodes, "费率下调 回归了"));
         assertEquals("Lower Rates", first.getContent());
         assertEquals("Are Back", second.getContent());
         assertSame(emoji, nodes.get(1));
     }
 
+    /**
+     * 锚点丢失但译文逐行对应时降级回填：emoji 显示由原节点提供，
+     * 不依赖模型回显；上报的角色提及 + 标题 + 自定义 emoji 消息此前
+     * 在这里整条被拒、界面保持英文。
+     */
     @Test
-    public void duplicateEmojiAnchorRejectsMisalignedTranslation() {
+    public void droppedEmojiWithLinePerSegmentStillTranslates() {
+        TextContentNode first = new TextContentNode("Lower Rates");
+        UnicodeEmojiContentNode emoji =
+                new UnicodeEmojiContentNode("\uD83D\uDCE2", "x", false);
+        TextContentNode second = new TextContentNode("Are Back");
+        List<Object> nodes = list(first, emoji, second);
+
+        List<Object> out = ContentNodes.replaceText(nodes, "费率下调\n回归了");
+
+        assertNotNull("逐行对应的译文不得因锚点丢失被拒", out);
+        assertSame("emoji 节点仍原样保留", emoji, out.get(1));
+        assertEquals("费率下调", ((TextContentNode) out.get(0)).getContent());
+        assertEquals("回归了", ((TextContentNode) out.get(2)).getContent());
+    }
+
+    /** 重复回显的锚点被剥离后照常回填，不得在文本里留下重复 emoji。 */
+    @Test
+    public void duplicateEmojiAnchorEchoIsStrippedAndStillTranslates() {
         TextContentNode text = new TextContentNode("hello");
         UnicodeEmojiContentNode emoji =
                 new UnicodeEmojiContentNode("\uD83D\uDCE2", "x", false);
         List<Object> nodes = list(text, emoji);
 
-        // 重复锚点无法证明回填位置，整条拒绝而不污染原始节点。
-        assertEquals(null, ContentNodes.replaceText(nodes,
-                "你好 \uD83D\uDCE2 \uD83D\uDCE2"));
-        assertEquals("hello", text.getContent());
+        List<Object> out = ContentNodes.replaceText(nodes,
+                "你好 \uD83D\uDCE2 \uD83D\uDCE2");
+
+        assertNotNull("重复锚点是回显问题，不该丢弃整条译文", out);
+        String rendered = ((TextContentNode) out.get(0)).getContent();
+        assertEquals("你好", rendered);
+        assertSame(emoji, out.get(1));
     }
 
     @Test
