@@ -92,9 +92,9 @@ public class EmojiHeadingMentionRegressionTest {
                 ((TextContentNode) heading.getContent().get(0)).getContent());
         // emoji 节点原样保留（同实例，位置来自节点树）
         assertSame(nodes.get(4), out.get(4));
-        assertEquals("Qwen 3 27b", ((TextContentNode) out.get(5)).getContent());
+        assertEquals(" Qwen 3 27b", ((TextContentNode) out.get(5)).getContent());
         assertSame(nodes.get(7), out.get(7));
-        assertEquals("Deepseek V4.1 Flash", ((TextContentNode) out.get(8)).getContent());
+        assertEquals(" Deepseek V4.1 Flash", ((TextContentNode) out.get(8)).getContent());
     }
 
     /**
@@ -108,9 +108,9 @@ public class EmojiHeadingMentionRegressionTest {
                 "宣布 2 款新的 abliterated 模型：\nQwen 3 27b\nDeepseek V4.1 Flash");
 
         // 锚点丢失：无法证明 emoji 位置对应的两侧译文仍正确，整条保留原文。
-        assertTrue("锚点全部丢失时应拒绝回填（保持英文）",
-                out == null || ((TextContentNode) ((HeadingContentNode) nodes.get(2))
-                        .getContent().get(0)).getContent().equals(
-                        "Announcing 2 new abliterated models:"));
+        assertNull("锚点全部丢失时应拒绝回填（保持英文）", out);
+        assertEquals("Announcing 2 new abliterated models:",
+                ((TextContentNode) ((HeadingContentNode) nodes.get(2))
+                        .getContent().get(0)).getContent());
     }
 }
