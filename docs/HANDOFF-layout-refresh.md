@@ -125,7 +125,7 @@ iput-object v1, v0, ...->lastMessageContent:...
 | LSPosed 导出日志 | 无模块行 | 用户导出的 `full.log`（4MB）**不含 Discord 进程的 logcat**，`com.discord` PID 在 main 段出现 0 次 |
 | 屏幕 Toast | **能用，但刷屏**｜用户明确拒绝（"一秒弹好几个"） |
 | 设置页远程配置 | 有时能读到，后来一直空 | 见下 |
-| 模块私有目录文件 | 文件从未生成 | **设计错误**：`getModuleApplicationInfo().dataDir` 指向模块包 `/data/user/0/com.wxmyyds.discordautotranslate/files`，而模块运行在 `com.discord` 进程，跨应用 dataDir 写入被 SELinux/权限拒绝，异常被 `catch (Throwable ignored)` 吞掉 |
+| 模块私有目录文件 | 文件从未生成 | **设计错误**：`getModuleApplicationInfo().dataDir` 指向模块包 `/data/user/0/io.github.wxmyyds.discordautotranslate/files`，而模块运行在 `com.discord` 进程，跨应用 dataDir 写入被 SELinux/权限拒绝，异常被 `catch (Throwable ignored)` 吞掉 |
 
 ### 关于远程配置通道的关键分析
 

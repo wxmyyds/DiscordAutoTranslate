@@ -7,13 +7,13 @@ plugins {
 }
 
 android {
-    namespace "com.wxmyyds.discordautotranslate"
+    namespace "io.github.wxmyyds.discordautotranslate"
     // compileSdk 37 为强制项：io.github.libxposed:api:102.0.0 与 :service:102.0.0
     // 的 AAR 元数据均声明 minCompileSdk=37，低于该值 Gradle 会直接报错。
     compileSdk 37
 
     defaultConfig {
-        applicationId "com.wxmyyds.discordautotranslate"
+        applicationId "io.github.wxmyyds.discordautotranslate"
         // libxposed api/service 的 AAR 均声明 minSdkVersion 26。
         minSdk 26
         targetSdk 37
