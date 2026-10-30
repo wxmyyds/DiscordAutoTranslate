@@ -1,46 +1,58 @@
-# Discord AutoTranslate — LSPosed 模块
+<div align="center">
 
-为 Discord Android 官方稳定版提供消息自动翻译（英文 → 简体中文）的 LSPosed 模块。
+# Discord AutoTranslate
+
+**Discord 消息自动翻译（英文 → 简体中文）的 LSPosed 模块**
 
 基于 [LibXposed API 102](https://github.com/libxposed/api)（现代 Xposed API），
 **不使用**旧的 `de.robv.android.xposed` API。
 
-## 当前状态
+[![GitHub release](https://img.shields.io/github/v/release/wxmyyds/DiscordAutoTranslate)](https://github.com/wxmyyds/DiscordAutoTranslate/releases)
+[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/wxmyyds/DiscordAutoTranslate/build.yml?label=build)](https://github.com/wxmyyds/DiscordAutoTranslate/actions)
 
-**模块功能已完整，可日常使用**
+</div>
 
-- 模块骨架、API 102 入口与热重载生命周期
-- 通用 JSON 翻译引擎：支持 OpenAI-Compatible / OpenAI-Responses / Anthropic
-  Messages 三种供应商协议、流式（SSE）响应、并发调度、重试与缓存
-- 保留 Markdown 的正文替换与行内图标交互：标题/列表/提及/表情/代码保留，
-  含列表消息逐项回填、文字保留与尾部空行修剪
-- 独立设置 Activity（配置检查 / 测试连接 / 测试翻译、供应商协议与系统提示词）
-- Embed 翻译（富 Embed 标题/描述/字段与原生帖子预览标题）与投票卡片翻译
-- 稳定性与隐私加固：防串位身份映射、热重载重建与在途请求取消、日志脱敏
-- 布局即时刷新：重渲染移出宿主布局遍历、行高立即更新
-- 正式签名发布流程：keystore 经 GitHub Secrets 注入，Debug/Release 均签名
-- GitHub Actions 构建（APK + 单元测试 + 签名校验）
+---
 
-详见 [docs/architecture.md](docs/architecture.md) 与 [docs/rendering.md](docs/rendering.md)。
+## 功能
 
-## 目标版本
+- **自动翻译**：Discord 消息英文 → 简体中文，翻译完成自动替换正文
+- **保留 Markdown**：标题 / 列表 / 提及 / 表情 / 代码等结构完整保留
+- **行内翻译图标**：翻译中 / 成功 / 失败三态，点击切换原文 / 译文，失败可重试
+- **回复引用**：被引用消息的译文同步显示在回复预览中
+- **Embed 与投票**：富 Embed（标题 / 描述 / 字段 / 原生帖子预览）与投票卡片可翻译
+- **编辑重译**：消息被编辑后自动重新翻译
+- **供应商协议**：支持 OpenAI-Compatible / OpenAI-Responses / Anthropic Messages，
+  以及流式（SSE）响应
+- **独立设置界面**：配置检查 / 测试连接 / 测试翻译
+- **隐私友好**：消息正文与译文不写入日志，API 密钥仅保存在本机
 
-Discord **340.13 Stable**（`versionCode` 340013，`com.discord`）。
-其他版本不承诺兼容；模块启动时会比对版本并打印警告。
+## 系统要求
+
+- Android 8.0+（API 26+）
+- 已 Root 且安装 [LSPosed](https://github.com/LSPosed/LSPosed)（支持 API 102）
+- Discord **340.13 Stable**（`versionCode` 340013）。其他版本不承诺兼容；
+  模块启动时会比对版本并打印警告。
+
+## 安装与激活
+
+1. 在本仓库 [Releases](https://github.com/wxmyyds/DiscordAutoTranslate/releases) 下载 APK 并安装。
+2. 打开 LSPosed，启用 **Discord AutoTranslate**，作用域勾选 `com.discord`。
+3. 强制停止并重启 Discord。
+4. 打开模块的设置界面，填写 API URL、密钥、模型等配置即可开始翻译。
+
+> 需要支持 API 102 的 LSPosed 版本。
+
+## 使用说明
+
+- 翻译默认开启；可在设置界面调整目标语言、供应商协议、系统提示词、并发与超时等参数。
+- 打开模块设置 →「测试连接」可验证 API 配置，「测试翻译」可预览翻译效果。
+- 消息右下角 / 行内图标：翻译中为旋转状态，完成后可点击在原文 / 译文间切换。
 
 ## 构建
 
 **本仓库禁止本地构建。** 所有编译与打包通过 GitHub Actions 执行：
 `.github/workflows/build.yml`（手动触发或推送分支时运行），产物为 APK artifact。
-
-## 安装与使用
-
-1. 安装构建产物 APK。
-2. 在 LSPosed 中启用模块，作用域勾选 `com.discord`。
-3. 强制停止并重启 Discord。
-4. 打开模块的设置界面，填写 API URL、密钥、模型等配置。
-
-> 需要支持 API 102 的 LSPosed 版本。
 
 ## 隐私
 
@@ -48,30 +60,22 @@ Discord **340.13 Stable**（`versionCode` 340013，`com.discord`）。
 API 密钥仅保存在本机（LSPosed remote preferences），不会写入日志。
 消息正文与译文始终不会写入日志；详细日志开关只影响诊断信息的详细程度。
 
-## 目录结构
+## 常见问题
 
-```
-app/src/main/java/io/github/wxmyyds/discordautotranslate/
-  ModuleEntry.java                 模块唯一入口（API 102 生命周期 + 热重载）
-  core/                            配置、状态、调度、文本提取、英文识别、反射工具
-  hooks/                           Discord Hook 与图标
-  ui/SettingsActivity.java         独立设置界面
-app/src/main/resources/META-INF/xposed/
-  java_init.list                   入口类声明
-  module.prop                      模块元数据（minApiVersion/targetApiVersion/autoHotReload）
-  scope.list                       作用域（com.discord）
-docs/architecture.md              架构总览（入口/Hook/状态/热重载）
-docs/rendering.md                 渲染与回填（toSpannable 漏斗/对齐/节点重建）
-docs/translation-engine.md        翻译引擎与配置（协议/调度/缓存/隐私）
-docs/icons-and-layout.md          行内图标/点击/布局刷新
-docs/maintenance-notes.md         维护经验与边界
-smali/                             Discord APK 的反编译产物（仅供本地分析，不纳入版本控制）
-```
+**翻译后列表项不在原位？**
+列表按“每项一行”对齐回填；若模型把多项合并成一行，会保留原文而不是错位塞入。
 
-## 分支与发布约定
+**图标显示成功但正文仍是英文？**
+说明译文结构与原文对不上被拒绝回填（保留原文），请用设置页「复制诊断」反馈。
 
-仓库只保留 `main` 作为长期分支。所有修改先建短期分支，
-经 GitHub Actions 验证与人工确认后，再通过 PR 合并回 `main`。
+**切换协议后译文还是旧的？**
+协议参与配置版本计算，切换后旧缓存自动失效并重新请求。
+
+## 相关文档
+
+- [架构总览](docs/architecture.md) / [渲染与回填](docs/rendering.md)
+- [翻译引擎与配置](docs/translation-engine.md)
+- [行内图标与布局](docs/icons-and-layout.md) / [维护经验](docs/maintenance-notes.md)
 
 ## 免责声明
 
