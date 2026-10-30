@@ -116,6 +116,13 @@ public final class Config {
     private Config() {
     }
 
+    /** 默认系统提示词按请求目标语言生成；自定义提示词由调用方原样使用。 */
+    public static String defaultSystemPromptFor(String targetLanguage) {
+        String language = targetLanguage == null || targetLanguage.trim().isEmpty()
+                ? DEF_TARGET_LANG : targetLanguage.trim();
+        return DEF_SYSTEM_PROMPT.replace("Simplified Chinese", language);
+    }
+
     /** 配置快照，读取一次后供本次使用，避免渲染路径反复访问 SharedPreferences。 */
     public static class Snapshot {
         public final boolean enabled;

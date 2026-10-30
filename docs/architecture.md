@@ -1,7 +1,7 @@
 # 架构总览
 
 Discord AutoTranslate 是运行在 Discord 进程内的 LSPosed 模块（LibXposed API **102**），
-为 Discord Android 官方稳定版提供英文 → 简体中文的消息自动翻译。
+为 Discord Android 官方稳定版提供多语言消息到可配置目标语言的自动翻译。
 
 ## 模块入口与生命周期
 

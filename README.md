@@ -2,7 +2,7 @@
 
 # Discord AutoTranslate
 
-**Discord 消息自动翻译（英文 → 简体中文）的 LSPosed 模块**
+**Discord 消息自动翻译（多语言 → 可配置目标语言）的 LSPosed 模块**
 
 基于 [LibXposed API 102](https://github.com/libxposed/api)（现代 Xposed API），
 **不使用**旧的 `de.robv.android.xposed` API。
@@ -16,7 +16,7 @@
 
 ## 功能
 
-- **自动翻译**：Discord 消息英文 → 简体中文，翻译完成自动替换正文
+- **自动翻译**：英文、俄语、日语、韩语等非目标语言消息可翻译到设置的目标语言，完成后自动替换正文
 - **保留 Markdown**：标题 / 列表 / 提及 / 表情 / 代码等结构完整保留
 - **行内翻译图标**：翻译中 / 成功 / 失败三态，点击切换原文 / 译文，失败可重试
 - **回复引用**：被引用消息的译文同步显示在回复预览中

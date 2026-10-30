@@ -56,7 +56,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
     private String requestOnce(String text) throws Exception {
         // 1) 按协议构造请求体（单链路：无标记纯文本，直接使用用户配置的提示词）
         boolean sse = Protocols.supportsStreaming(cfg.protocol) && cfg.streaming;
-        String body = Protocols.requestBody(cfg.protocol, text, cfg.systemPrompt, cfg.model,
+        String systemPrompt = Config.DEF_SYSTEM_PROMPT.equals(cfg.systemPrompt)
+                ? Config.defaultSystemPromptFor(cfg.targetLang) : cfg.systemPrompt;
+        String body = Protocols.requestBody(cfg.protocol, text, systemPrompt, cfg.model,
                 sse);
         Http.Headers headers = buildHeaders();
 

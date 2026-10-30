@@ -31,6 +31,16 @@ public class ConfigTest {
     }
 
     @Test
+    public void defaultPromptUsesConfiguredTargetLanguage() {
+        Config.Snapshot japanese = Config.read(new MemoryPrefs()
+                .put(Config.KEY_TARGET_LANG, "日本語"));
+        assertEquals(Config.DEF_SYSTEM_PROMPT, japanese.systemPrompt);
+        assertTrue(Config.defaultSystemPromptFor(japanese.targetLang).contains("into 日本語"));
+        assertFalse(Config.defaultSystemPromptFor(japanese.targetLang)
+                .contains("Simplified Chinese"));
+    }
+
+    @Test
     public void wrongTypedPreferenceMarksSnapshotInvalid() {
         Config.Snapshot s = Config.read(new MemoryPrefs()
                 .put(Config.KEY_API_URL, 17)

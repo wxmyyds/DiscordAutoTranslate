@@ -436,7 +436,8 @@ public final class HookBridge {
         }
 
         EnglishDetector.Verdict v = EnglishDetector.evaluate(
-                ex.text, ex.textNodeCount, ex.opaqueNodeCount, ex.codeHeavy);
+                ex.text, ex.textNodeCount, ex.opaqueNodeCount, ex.codeHeavy,
+                cfg.targetLang);
         if (!v.shouldTranslate) {
             return;
         }
