@@ -276,7 +276,15 @@ jobs:
 
           if [[ "$MODE" == "stable" ]]; then
             # Previous stable tag, used to build the changelog range.
-            PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+            # LSPosed tags are stored in detached commit history, so `git describe --tags`
+            # from the tag commit's parent cannot find the previous release. Instead we
+            # compute the previous versionCode and match its `{code}-{version}` tag.
+            if [[ "$VERSION_CODE" -eq 1 ]]; then
+              PREV="2-1.0.0"
+            else
+              PREVCODE=$((VERSION_CODE - 1))
+              PREV=$(git tag --list | grep -E "^${PREVCODE}-" | head -1 || true)
+            fi
             RANGE="${PREV:+$PREV..}HEAD"
             echo "变更范围：$RANGE（上一个正式版：${PREV:-无}）"
             LOG=$(git log "$RANGE" --no-merges --pretty=format:'%s' 2>/dev/null \
