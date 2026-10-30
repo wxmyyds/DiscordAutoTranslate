@@ -77,7 +77,8 @@ public class EmojiHeadingMentionRegressionTest {
     /** 模型保留 emoji 锚点且逐行翻译时，消息正常回填。 */
     @Test
     public void modelKeepingEmojiAnchorsTranslatesEveryLine() {
-        List<Object> out = ContentNodes.replaceText(reportedTree(),
+        List<Object> nodes = reportedTree();
+        List<Object> out = ContentNodes.replaceText(nodes,
                 "宣布 2 款新的 abliterated 模型：\n"
                         + ":qwen: Qwen 3 27b\n"
                         + ":deepseek: Deepseek V4.1 Flash");
@@ -89,10 +90,10 @@ public class EmojiHeadingMentionRegressionTest {
         HeadingContentNode heading = (HeadingContentNode) out.get(2);
         assertEquals("宣布 2 款新的 abliterated 模型：",
                 ((TextContentNode) heading.getContent().get(0)).getContent());
-        // emoji 节点原样保留
-        assertSame(reportedTree().get(4), out.get(4));
+        // emoji 节点原样保留（同实例，位置来自节点树）
+        assertSame(nodes.get(4), out.get(4));
         assertEquals("Qwen 3 27b", ((TextContentNode) out.get(5)).getContent());
-        assertTrue(out.get(7) instanceof CustomEmojiContentNode);
+        assertSame(nodes.get(7), out.get(7));
         assertEquals("Deepseek V4.1 Flash", ((TextContentNode) out.get(8)).getContent());
     }
 
