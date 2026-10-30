@@ -39,6 +39,14 @@ import io.github.libxposed.service.XposedService;
 /** 设置界面（需求 §5.7）。 */
 public class SettingsActivity extends Activity implements XposedServiceConnectionHolder.Listener {
 
+    /** 目标语言下拉选项；目标值直接作为请求语言名保存。 */
+    private static final String[] TARGET_LANGUAGE_ENTRIES = {
+            "简体中文", "繁體中文", "English", "日本語", "한국어", "Русский",
+            "Українська", "Español", "Français", "Deutsch", "Português", "Italiano",
+            "العربية", "فارسی", "हिन्दी", "বাংলা", "ไทย", "עברית", "Ελληνικά",
+            "Tiếng Việt", "Türkçe", "Bahasa Indonesia"
+    };
+
     /** 下拉框显示顺序：0=OpenAI-Responses，1=OpenAI-Compatible，2=Anthropic-Messages。 */
     private static final String[] PROTOCOL_ENTRIES =
             {"OpenAI-Responses", "OpenAI-Compatible", "Anthropic-Messages"};
@@ -60,10 +68,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private boolean destroyed;
 
     private Spinner protocolSpinner;
+    private Spinner targetLanguageSpinner;
+    @Nullable
+    private ArrayAdapter<String> targetLanguageAdapter;
     private EditText urlInput;
     private EditText keyInput;
     private EditText modelInput;
-    private EditText targetLangInput;
     private EditText headersInput;
     private EditText systemPromptInput;
     private EditText timeoutInput;
@@ -191,7 +201,18 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         keyInput = addField(root, "API 密钥（仅保存在本机）", "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
-        targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
+        TextView targetLanguageLabel = new TextView(this);
+        targetLanguageLabel.setText("目标语言");
+        targetLanguageLabel.setPadding(0, dp(8), 0, 0);
+        root.addView(targetLanguageLabel, matchWrap());
+        targetLanguageSpinner = new Spinner(this);
+        targetLanguageAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, TARGET_LANGUAGE_ENTRIES);
+        targetLanguageAdapter.setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+        targetLanguageSpinner.setAdapter(targetLanguageAdapter);
+        targetLanguageSpinner.setSelection(targetLanguagePosition(Config.DEF_TARGET_LANG));
+        root.addView(targetLanguageSpinner, matchWrap());
         headersInput = addField(root, "额外请求头（每行 Name: Value）", "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         systemPromptInput = addField(root, "系统提示词（多行）",
@@ -309,6 +330,37 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
     }
 
+    /** 显示旧配置中的列表外语言，避免升级后静默改写用户设置。 */
+    private void ensureTargetLanguageAvailable(String language) {
+        if (language == null || targetLanguageAdapter == null) {
+            return;
+        }
+        for (int i = 0; i < targetLanguageAdapter.getCount(); i++) {
+            if (language.equals(targetLanguageAdapter.getItem(i))) {
+                return;
+            }
+        }
+        targetLanguageAdapter.add(language);
+    }
+
+    private int targetLanguagePosition(String language) {
+        if (targetLanguageAdapter == null) {
+            return AdapterView.INVALID_POSITION;
+        }
+        for (int i = 0; i < targetLanguageAdapter.getCount(); i++) {
+            if (language.equals(targetLanguageAdapter.getItem(i))) {
+                return i;
+            }
+        }
+        return AdapterView.INVALID_POSITION;
+    }
+
+    @Nullable
+    private String selectedTargetLanguage() {
+        Object selected = targetLanguageSpinner.getSelectedItem();
+        return selected instanceof String ? (String) selected : null;
+    }
+
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
@@ -333,7 +385,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         setTextOrPlaceholder(urlInput, snapshot.apiUrl, Config.DEF_API_URL);
         setTextOrPlaceholder(keyInput, snapshot.apiKey, Config.DEF_API_KEY);
         setTextOrPlaceholder(modelInput, snapshot.model, Config.DEF_MODEL);
-        setTextOrPlaceholder(targetLangInput, snapshot.targetLang, Config.DEF_TARGET_LANG);
+        ensureTargetLanguageAvailable(snapshot.targetLang);
+        targetLanguageSpinner.setSelection(targetLanguagePosition(snapshot.targetLang));
         setTextOrPlaceholder(headersInput, snapshot.extraHeaders, Config.DEF_EXTRA_HEADERS);
         setTextOrPlaceholder(systemPromptInput, snapshot.systemPrompt, Config.DEF_SYSTEM_PROMPT);
         setTextOrPlaceholder(timeoutInput, String.valueOf(snapshot.timeoutMs),
@@ -491,8 +544,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         memoryPrefs.put(Config.KEY_API_URL, textOrDefault(urlInput, Config.DEF_API_URL));
         memoryPrefs.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_MODEL, textOrDefault(modelInput, Config.DEF_MODEL));
-        memoryPrefs.put(Config.KEY_TARGET_LANG,
-                textOrDefault(targetLangInput, Config.DEF_TARGET_LANG));
+        memoryPrefs.put(Config.KEY_TARGET_LANG, selectedTargetLanguage());
         memoryPrefs.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
         memoryPrefs.put(Config.KEY_SYSTEM_PROMPT,
                 promptOrDefault(systemPromptInput, Config.DEF_SYSTEM_PROMPT));

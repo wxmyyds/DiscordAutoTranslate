@@ -42,6 +42,11 @@ public class EnglishDetectorTest {
     }
 
     @Test
+    public void skipsTextAlreadyInBengaliTargetLanguage() {
+        assertFalse(detect("বাংলা ভাষার একটি বাক্য", "বাংলা").shouldTranslate);
+    }
+
+    @Test
     public void preservesEnglishDetection() {
         assertTrue(detect("Hello, how are you?", "简体中文").shouldTranslate);
     }

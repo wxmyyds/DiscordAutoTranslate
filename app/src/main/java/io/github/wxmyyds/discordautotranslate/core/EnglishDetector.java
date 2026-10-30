@@ -117,7 +117,7 @@ public final class EnglishDetector {
 
     private enum TargetScript {
         NONE, HAN, JAPANESE, HANGUL, CYRILLIC, ARABIC, GREEK, HEBREW,
-        DEVANAGARI, THAI
+        DEVANAGARI, BENGALI, THAI
     }
 
     private static TargetScript targetScript(@Nullable String language) {
@@ -140,7 +140,7 @@ public final class EnglishDetector {
         if (containsAny(value, "рус", "russian", "ru", "укра", "ukrainian", "uk")) {
             return TargetScript.CYRILLIC;
         }
-        if (containsAny(value, "العربية", "arabic", "ar")) {
+        if (containsAny(value, "العربية", "arabic", "ar", "فارسی", "persian", "farsi", "fa")) {
             return TargetScript.ARABIC;
         }
         if (containsAny(value, "ελλην", "greek", "el")) {
@@ -151,6 +151,9 @@ public final class EnglishDetector {
         }
         if (containsAny(value, "हिन्दी", "hindi", "hi")) {
             return TargetScript.DEVANAGARI;
+        }
+        if (containsAny(value, "বাংলা", "bengali", "bn")) {
+            return TargetScript.BENGALI;
         }
         if (containsAny(value, "ไทย", "thai", "th")) {
             return TargetScript.THAI;
@@ -178,6 +181,8 @@ public final class EnglishDetector {
                 return script == Character.UnicodeScript.HEBREW;
             case DEVANAGARI:
                 return script == Character.UnicodeScript.DEVANAGARI;
+            case BENGALI:
+                return script == Character.UnicodeScript.BENGALI;
             case THAI:
                 return script == Character.UnicodeScript.THAI;
             default:

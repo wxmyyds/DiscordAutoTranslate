@@ -57,7 +57,7 @@
 | `api_url` | `https://api.openai.com/v1` | API 基础 URL |
 | `api_key` | 空 | 仅存本机 remote preferences，不回显 |
 | `api_model` | `gpt-4o-mini` | 模型名 |
-| `target_lang` | `简体中文` | 目标语言；默认系统提示词会使用此值，用户自定义提示词保持原样 |
+| `target_lang` | `简体中文` | 设置页下拉选择目标语言（含简/繁中、英、日、韩、俄、乌克兰语、西语、法语、德语、葡语、意语、阿拉伯语、波斯语、印地语、孟加拉语、泰语、希伯来语、希腊语、越南语、土耳其语、印尼语）；旧版列表外值继续显示并保留 |
 | `extra_headers` | 空 | 额外请求头（每行一个 `Key: Value`） |
 | `provider_protocol` | `openai-compatible` | 见上表 |
 | `streaming_enabled` | true | Compatible 与 Anthropic Messages 使用流式请求；Responses 固定非流式 |
