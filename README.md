@@ -17,7 +17,7 @@ Embed 翻译（富 Embed 标题/描述/字段与原生帖子预览标题）与�
 未完成：阶段 4 设置界面完善、阶段 5 稳定性加固、
 阶段 6 热重载真机验收。
 
-详见 [docs/design-stage3.md](docs/design-stage3.md)。
+详见 [docs/architecture.md](docs/architecture.md) 与 [docs/rendering.md](docs/rendering.md)。
 
 ## 目标版本
 
@@ -47,7 +47,7 @@ API 密钥仅保存在本机（LSPosed remote preferences），不会写入日�
 ## 目录结构
 
 ```
-app/src/main/java/com/wxmyyds/discordautotranslate/
+app/src/main/java/io/github/wxmyyds/discordautotranslate/
   ModuleEntry.java                 模块唯一入口（API 102 生命周期 + 热重载）
   core/                            配置、状态、调度、文本提取、英文识别、反射工具
   hooks/                           Discord Hook 与图标
@@ -56,7 +56,11 @@ app/src/main/resources/META-INF/xposed/
   java_init.list                   入口类声明
   module.prop                      模块元数据（minApiVersion/targetApiVersion/autoHotReload）
   scope.list                       作用域（com.discord）
-docs/design-stage1.md              阶段 1 设计与依据
+docs/architecture.md              架构总览（入口/Hook/状态/热重载）
+docs/rendering.md                 渲染与回填（toSpannable 漏斗/对齐/节点重建）
+docs/translation-engine.md        翻译引擎与配置（协议/调度/缓存/隐私）
+docs/icons-and-layout.md          行内图标/点击/布局刷新
+docs/maintenance-notes.md         维护经验与边界
 smali/                             Discord APK 的反编译产物（仅供本地分析，不纳入版本控制）
 ```
 
