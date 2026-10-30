@@ -179,9 +179,9 @@ public class ModuleEntry extends XposedModule {
                     + created.size() + "/" + MessageHooks.MIN_REQUIRED_HOOKS);
         }
         hooks.addAll(created);
-        // Embed 翻译是增强能力：目标版本缺少对应类时静默降级，不影响核心 Hook 数。
+        // Embed 翻译为可选功能；目标版本缺少对应类时不安装该 Hook。
         hooks.addAll(EmbedHooks.install(this, cl));
-        // 投票卡片翻译同为增强能力，独立降级。
+        // 投票翻译为可选功能；目标版本缺少对应类时不安装该 Hook。
         hooks.addAll(PollHooks.install(this, cl));
     }
 
@@ -229,8 +229,8 @@ public class ModuleEntry extends XposedModule {
             final SharedPreferences prefs = getRemotePreferences(Config.GROUP);
             Config.Snapshot snapshot = Config.read(prefs);
             HookBridge.get().updateConfig(snapshot);
-        } catch (Throwable ignored) {
-            // 读取失败沿用上次配置（首次则为默认值）。
+        } catch (Throwable t) {
+            HookBridge.get().updateConfig(Config.invalidSnapshot());
         }
     }
 }

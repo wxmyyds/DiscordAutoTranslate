@@ -20,7 +20,8 @@ public class ProtocolsTest {
 
     private static String requestBody(String protocol, String text, String prompt, String model)
             throws TranslationException {
-        return Protocols.requestBody(protocol, text, prompt, model, Config.DEF_STREAMING);
+        boolean streaming = Protocols.supportsStreaming(protocol) && Config.DEF_STREAMING;
+        return Protocols.requestBody(protocol, text, prompt, model, streaming);
     }
 
     private static String extractByFixtureMode(String protocol, String body)
@@ -122,12 +123,16 @@ public class ProtocolsTest {
                 extractByFixtureMode(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
     }
 
-    /** 服务端忽略 stream 参数回普通 JSON 时，提取路径保持原样。 */
+    /** 流式模式不接受服务端忽略 stream 参数后返回的普通 JSON。 */
     @Test
-    public void nonStreamedJsonResponseStillExtractsViaMessageContent() throws Exception {
+    public void streamingModeRejectsNonStreamingJson() throws Exception {
         String json = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"普通\"}}]}";
-        assertEquals("普通",
-                Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, json, true));
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, json, true);
+            fail("流式模式必须拒绝 JSON 响应");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
     }
 
     /** 只收到 role/usage 帧时累积为空，由引擎报“提取到的译文为空”。 */
@@ -178,7 +183,7 @@ public class ProtocolsTest {
                 + "{\"type\":\"text\",\"text\":\"，世界\"}],"
                 + "\"model\":\"claude\",\"stop_reason\":\"end_turn\"}";
         assertEquals("你好，世界",
-                Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, resp, true));
+                Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, resp, false));
     }
 
     /** stop_reason=max_tokens：输出被 max_tokens 掐断，非流式同样拒绝。 */
@@ -203,6 +208,18 @@ public class ProtocolsTest {
         assertEquals("你好", Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES,
                 "{\"content\":[{\"type\":\"text\",\"text\":\"你好\"}],"
                         + "\"stop_reason\":\"end_turn\"}", false));
+    }
+
+    @Test
+    public void messagesStreamingModeRejectsJsonResponse() {
+        String json = "{\"content\":[{\"type\":\"text\",\"text\":\"你好\"}],"
+                + "\"stop_reason\":\"end_turn\"}";
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_ANTHROPIC_MESSAGES, json, true);
+            fail("流式模式必须拒绝 JSON 响应");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
     }
 
     /** 流式按 content_block_delta 增量累积；event: 行与 thinking 增量不混入。 */
@@ -239,13 +256,17 @@ public class ProtocolsTest {
         }
     }
 
-    /** 个别实现省略 [DONE] 但给出 finish_reason=stop：生成完整，照常提取。 */
+    /** finish_reason 不能替代协议唯一的 [DONE] 结束帧。 */
     @Test
-    public void finishReasonStopWithoutDoneMarkerStillExtracts() throws Exception {
+    public void finishReasonWithoutDoneMarkerIsRejected() {
         String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
                 + "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n";
-        assertEquals("你好",
-                extractByFixtureMode(Config.PROTOCOL_OPENAI_COMPATIBLE, sse));
+        try {
+            Protocols.extractTranslation(Config.PROTOCOL_OPENAI_COMPATIBLE, sse, true);
+            fail("finish_reason 不能替代 [DONE]");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
     }
 
     /** 中间帧的 finish_reason 显式为 null：不得被当成 "null" 字符串而误判截断。 */
@@ -337,13 +358,17 @@ public class ProtocolsTest {
                 extractByFixtureMode(Config.PROTOCOL_OPENAI_COMPATIBLE, resp));
     }
 
-    /** 模型不遵守「不输出标签」时回显包装层：首尾成对即剥离，不显示给用户。 */
+    /** 模型回显包装标签时严格拒绝，不剥离后继续回填。 */
     @Test
-    public void echoedWrapperIsStrippedWhenPairedAtBoundaries() throws Exception {
+    public void echoedWrapperTagsAreRejected() throws Exception {
         String resp = "{\"choices\":[{\"message\":{\"content\":"
                 + "\"<translate>\\n你好\\n</translate>\"}}]}";
-        assertEquals("你好",
-                extractByFixtureMode(Config.PROTOCOL_OPENAI_COMPATIBLE, resp));
+        try {
+            extractByFixtureMode(Config.PROTOCOL_OPENAI_COMPATIBLE, resp);
+            fail("包装标签必须明确失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.PARSE, e.kind());
+        }
     }
 
     /** 剥离后仍残留标签 = 输出结构损坏，按解析失败拒绝（宁显原文不显字面量）。 */
@@ -374,14 +399,13 @@ public class ProtocolsTest {
                 extractByFixtureMode(Config.PROTOCOL_OPENAI_RESPONSES, resp));
     }
 
-    /** 多段 output_text 时取第一段非空文本。 */
+    /** 多段 output_text 时只取响应顺序中的第一个候选，不跳过空文本。 */
     @Test
-    public void responsesExtractionPrefersFirstNonEmptyText() throws Exception {
+    public void responsesExtractionUsesFirstTextCandidate() throws Exception {
         String resp = "{\"output\":[{\"type\":\"message\",\"content\":["
                 + "{\"type\":\"output_text\",\"text\":\"\"},"
                 + "{\"type\":\"output_text\",\"text\":\"第二段\"}]}]}";
-        assertEquals("第二段",
-                extractByFixtureMode(Config.PROTOCOL_OPENAI_RESPONSES, resp));
+        assertEquals("", extractByFixtureMode(Config.PROTOCOL_OPENAI_RESPONSES, resp));
     }
 
     /** 找不到可译文本、缺 output 数组、响应非 JSON 对象都是明确的解析错误。 */
@@ -405,15 +429,52 @@ public class ProtocolsTest {
     // ------------------------------------------------------------ 空值防御
 
     @Test
-    public void nullInputsAreDefendedWithoutCrashing() throws Exception {
-        JSONObject json = new JSONObject(requestBody(
-                Config.PROTOCOL_OPENAI_COMPATIBLE, null, null, "m"));
-        assertEquals(Protocols.WRAPPER_OPEN + Protocols.WRAPPER_CLOSE,
-                json.getJSONArray("messages").getJSONObject(1).getString("content"));
-        assertEquals(Protocols.WRAPPER_RULE,
-                json.getJSONArray("messages").getJSONObject(0).getString("content"));
-        assertEquals("", Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, null));
-        // 空白 URL 原样返回；实际请求前由 JsonApiEngine.validateConfig 拦截。
-        assertEquals("  ", Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, "  "));
+    public void nullRequestInputsAreRejected() throws Exception {
+        try {
+            Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE, null,
+                    null, "m", false);
+            fail("空原文必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.EMPTY, e.kind());
+        }
+        try {
+            Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE, "hello",
+                    "prompt", null, false);
+            fail("空模型必须失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.CONFIG, e.kind());
+        }
+        assertEndpointInvalid(null);
+        assertEndpointInvalid("  ");
+    }
+
+    @Test
+    public void invalidExtraHeaderIsRejected() {
+        try {
+            Http.Headers.parse("Authorization Bearer key");
+            fail("非法请求头必须明确失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.CONFIG, e.kind());
+        }
+    }
+
+    private static void assertEndpointInvalid(String url) {
+        boolean rejected = false;
+        try {
+            Protocols.endpoint(Config.PROTOCOL_OPENAI_COMPATIBLE, url);
+        } catch (IllegalArgumentException expected) {
+            rejected = true;
+        }
+        assertTrue(rejected);
+    }
+
+    @Test
+    public void unknownProtocolIsRejected() {
+        try {
+            Protocols.extractTranslation("unknown", "{}", false);
+            fail("未知协议必须明确失败");
+        } catch (TranslationException e) {
+            assertEquals(TranslationException.Kind.CONFIG, e.kind());
+        }
     }
 }

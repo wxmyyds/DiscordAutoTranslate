@@ -25,7 +25,7 @@ Discord AutoTranslate 是运行在 Discord 进程内的 LSPosed 模块（LibXpos
 io.github.wxmyyds.discordautotranslate
   ModuleEntry.java            模块唯一入口：生命周期、Hook 安装、状态重建
   core/                       与 Discord 无关的纯逻辑
-    Config / MemoryPrefs      配置读取与回落默认值
+    Config / MemoryPrefs      默认值初始化与显式配置错误
     StateStore / Scheduler / TranslationCache / IdentityMessageMap
     TextExtractor / BlankLines / Segments / EnglishDetector
     Http / Protocols / JsonPath / JsonApiEngine（JSON 请求与响应提取）
@@ -64,7 +64,7 @@ io.github.wxmyyds.discordautotranslate
 - 异步结果回写前双重校验：
   - `contentHash = SHA-256(正文 + 配置版本)` —— 消息被编辑后旧结果不落位；
   - `generation` —— 热重载/配置变更后旧结果不落位。
-- 提交前、重试前、回写前三道校验，过期请求丢弃并把状态回退为可重试。
+- 提交、获得并发许可后及回写前校验；每项任务只调用一次引擎，过期结果丢弃。
 
 ## 热重载
 
@@ -84,5 +84,5 @@ io.github.wxmyyds.discordautotranslate
 
 - 正文（含 Markdown/提及/表情/代码/链接/标题/列表）；回复引用；
   编辑后重新翻译；富 Embed（标题/描述/字段/原生帖子预览标题）与投票卡片。
-- 失败后不自动重试（避免请求风暴），由用户点击图标重试。
+- 严格协议/结构不匹配时保留原节点并标记失败，不保存无效译文；用户点击图标可手动重试。
 - 行内翻译图标：三态（翻译中/成功/原文）、旋转动画、点击切换/重试。

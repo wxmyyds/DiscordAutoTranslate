@@ -1,5 +1,7 @@
 package io.github.wxmyyds.discordautotranslate.hooks;
 
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 
 import androidx.annotation.Nullable;
@@ -325,7 +327,7 @@ public final class HookBridge {
     public void requestRerender(@Nullable View contentView, @Nullable String messageId,
                                 @Nullable Object invocationTarget, @Nullable Method method,
                                 @Nullable Object[] args) {
-        if (invocationTarget == null || method == null || args == null) {
+        if (!(invocationTarget instanceof View) || method == null || args == null) {
             return;
         }
         String bound = messageIdOf(contentView);
@@ -340,16 +342,7 @@ public final class HookBridge {
             }
             invokeRerender(invocationTarget, contentView, messageId, method, args);
         };
-        if (invocationTarget instanceof View) {
-            View host = (View) invocationTarget;
-            // View.post 把执行移出当前布局遍历；视图未附着时排队到下一次 attach。
-            if (!host.post(task)) {
-                task.run();
-            }
-            return;
-        }
-        // 非视图目标（理论上不出现）：没有可用的布局时机，保持原同步行为。
-        task.run();
+        new Handler(Looper.getMainLooper()).post(task);
     }
 
     private void invokeRerender(Object invocationTarget, @Nullable View contentView,
@@ -437,7 +430,7 @@ public final class HookBridge {
 
         if (!cfg.isUsable()) {
             entry.status = StateStore.Status.FAILED;
-            entry.lastError = "API 未配置";
+            entry.lastError = cfg.configError != null ? cfg.configError : "API 未配置";
             RerenderRegistry.rerender(messageId);
             return;
         }
@@ -510,6 +503,21 @@ public final class HookBridge {
         }
         return t.getClass().getSimpleName()
                 + (t.getMessage() == null ? "" : ": " + t.getMessage());
+    }
+
+    /** 富文本结构未能按严格规则重建时，将网络成功转换为可见翻译失败。 */
+    public void onTranslationRenderRejected(String id, String translated) {
+        StateStore.Entry entry = StateStore.get().peek(id);
+        if (entry == null || entry.status != StateStore.Status.TRANSLATED
+                || !translated.equals(entry.translatedText)) {
+            return;
+        }
+        TranslationCache.get().remove(entry.contentHash);
+        entry.translatedText = null;
+        entry.showingOriginal = true;
+        entry.status = StateStore.Status.FAILED;
+        entry.lastError = "译文结构与原消息不匹配，已保留原文。";
+        RerenderRegistry.rerender(id);
     }
 
     /** 原文/译文切换：由图标点击触发，不触发新请求（需求 §2.4）。 */

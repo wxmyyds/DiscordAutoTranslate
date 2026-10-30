@@ -11,7 +11,7 @@
   提供 `org.json:json`。
 - 支持非流式（一次性 JSON）与流式（SSE，`Http.postJson(..., sse=true)`）两种
   响应：由设置中的“使用流式请求”开关选择，Compatible 与 Anthropic Messages
-  支持切换，Responses 暂固定为非流式；SSE 时按行读取并由协议层累积 delta。
+  支持切换，Responses 固定非流式。响应解析严格服从所选模式；格式不符时失败，不改走另一解析器。
 
 ## 供应商协议
 
@@ -32,12 +32,8 @@
 - 线程池异步执行，`AdjustableSemaphore` 限制并发（`max_concurrency`，可运行时调整）。
 - 去重：`Scheduler.inFlight`（按 messageId + contentHash + generation）+ `TranslationCache`。
 - 错误分类：`CONFIG / NETWORK / TIMEOUT / HTTP / RATE_LIMIT / PARSE / EMPTY / CANCELLED`。
-- 重试：仅 `isRetryable()` 为 true 的错误，最多 3 次尝试：
-  - `TIMEOUT`/`NETWORK`/5xx：临时性，重试；
-  - `RATE_LIMIT`(429)：退避更长（2s/4s/8s），并采用服务端 `Retry-After` 建议值
-    与指数退避两者较大值，最长等待 60 秒；
-  - `HTTP` 4xx（含 401/403）/`CONFIG`/`PARSE`/`EMPTY`：不重试。
-- 过期请求丢弃：提交前 + 重试前 + 回写前三重校验（见 architecture.md）。
+- 自动重试：无；一次失败后由用户手动点击图标重新发起请求。
+- 过期请求丢弃：提交、获得并发许可后及回写前校验任务是否仍有效。
 
 ## 缓存
 
@@ -45,7 +41,7 @@
 配置版本纳入 `apiUrl / model / targetLang / protocol / streaming / systemPrompt /
 凭据 SHA-256 指纹`：任何影响结果的配置变化都会使旧条目不再命中。
 
-## 配置项（core/Config，未配置一律回落默认值）
+## 配置项（core/Config；缺省键使用默认值，显式非法值使快照无效）
 
 | 键 | 默认值 | 说明 |
 |---|---|---|
@@ -60,8 +56,8 @@
 | `system_prompt` | 英文规则式提示词 | 只翻译、不接话、不拒译侮辱性内容、无对照示例 |
 | `timeout_ms` / `max_concurrency` | 正整数 | 超时与并发上限，≤0 视为未配置 |
 
-- `apiKey` 与 `extraHeaders` 默认值为空串，“空白回落”对它们等价，
-  不影响“无需认证 / 无额外请求头”用法。
+- `apiKey` 与 `extraHeaders` 默认值为空串；空密钥与空请求头是有效配置。
+- 缺省配置键使用默认值；已保存的类型或必填值无效会使配置整体不可用。
 - 保存用 `commit()` 后台执行，按返回值报告成功/失败；提示语不声称目标进程
   已即时生效（目标进程侧未注册 remote preferences 变更监听，运行中的 Discord
   可能需重启才生效）。
@@ -70,5 +66,5 @@
 
 - 消息正文与译文**始终不写入日志**；详细日志开关只影响诊断信息详细程度。
 - `XLog.redact`：密钥只输出 `<configured>` / `<empty>`；`safeUrl` 只记录
-  scheme + host（含端口）；非法请求头行只记录行号。
+  scheme + host（含端口）；非法请求头会以配置错误拒绝，并只报告行号。
 - 配置版本中凭据只以 SHA-256 指纹参与，不含原始值。

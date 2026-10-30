@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 翻译调度：异步执行、并发限制、按“消息 ID + 内容版本”去重、可重试、丢弃过期结果。
+ * 翻译调度：异步执行、并发限制、按“消息 ID + 内容版本”去重、丢弃过期结果。
  *
  * <p>需求映射：
  * <ul>
@@ -56,9 +56,6 @@ public final class Scheduler {
 
     /** 线程池上限。实际并发由 {@link #permits} 按配置控制。 */
     private static final int POOL_MAX = 8;
-
-    /** 可重试错误的最大尝试次数（含首次）。 */
-    private static final int MAX_ATTEMPTS = 3;
 
     private static volatile Scheduler sInstance;
 
@@ -194,7 +191,6 @@ public final class Scheduler {
     private final AtomicInteger completed = new AtomicInteger();
     private final AtomicInteger discarded = new AtomicInteger();
     private final AtomicInteger failed = new AtomicInteger();
-    private final AtomicInteger retried = new AtomicInteger();
     /** 是否已关闭；关闭后的实例拒绝新任务并抑制未交付回调。 */
     private volatile boolean shutdown;
     private final Object lifecycleLock = new Object();
@@ -266,21 +262,16 @@ public final class Scheduler {
         return failed.get();
     }
 
-    public int retriedCount() {
-        return retried.get();
-    }
-
     public String stats() {
         return "scheduler[completed=" + completed.get()
                 + ", discarded=" + discarded.get()
                 + ", failed=" + failed.get()
-                + ", retried=" + retried.get()
                 + ", inFlight=" + inFlight.size()
                 + ", concurrency=" + configuredConcurrency.get() + "]";
     }
 
     /**
-     * 提交翻译任务。带指数退避重试（仅对可重试错误）。
+     * 提交翻译任务；每个去重键最多执行一次引擎调用。
      *
      * @param messageId   消息 ID
      * @param contentHash 内容版本（含翻译配置版本）
@@ -323,7 +314,7 @@ public final class Scheduler {
             if (shutdown) {
                 throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
             }
-            result = translateWithRetry(task);
+            result = translateOnce(task);
         } catch (Throwable t) {
             error = t;
         } finally {
@@ -370,102 +361,37 @@ public final class Scheduler {
         }
     }
 
-    /**
-     * 带指数退避的重试。仅对 {@link TranslationException#isRetryable()} 为 true 的错误重试，
-     * 并在重试前检查任务是否已失效，避免为已过期内容浪费请求（需求 §5.4）。
-     */
-    @Nullable
-    private String translateWithRetry(Task task) throws Throwable {
-        Throwable last = null;
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    private String translateOnce(Task task) throws Throwable {
+        if (shutdown || Thread.currentThread().isInterrupted()) {
+            throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
+        }
+
+        boolean acquired = false;
+        try {
+            permits.acquire();
+            acquired = true;
             if (shutdown || Thread.currentThread().isInterrupted()) {
                 throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
             }
-
-            boolean acquired = false;
-            Throwable attemptFailure = null;
-            try {
-                permits.acquire();
-                acquired = true;
-                // 检查必须发生在获得许可之后；等待许可期间失效的任务不会发请求。
-                if (shutdown || Thread.currentThread().isInterrupted()) {
-                    throw new TranslationException(
-                            TranslationException.Kind.CANCELLED, "任务已取消");
-                }
-                if (!isStillValid(task)) {
-                    throw new TranslationException(
-                            TranslationException.Kind.CANCELLED, "任务已失效");
-                }
-                if (shutdown || Thread.currentThread().isInterrupted()) {
-                    throw new TranslationException(
-                            TranslationException.Kind.CANCELLED, "任务已取消");
-                }
-                return task.engine.translate(task.text);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消", ie);
-            } catch (Throwable t) {
-                attemptFailure = t;
-            } finally {
-                if (acquired) {
-                    synchronized (concurrencyLock) {
-                        permits.release();
-                    }
-                }
+            if (!isStillValid(task)) {
+                throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已失效");
             }
-
-            last = attemptFailure;
-            if (!isRetryable(attemptFailure) || attempt == MAX_ATTEMPTS) {
-                throw attemptFailure;
-            }
-            retried.incrementAndGet();
-            long backoff = backoffMillis(attempt, attemptFailure);
-            if (shutdown || !sleepInterruptibly(backoff)) {
-                throw new TranslationException(TranslationException.Kind.CANCELLED,
-                        "重试等待被中断", attemptFailure);
-            }
-        }
-        throw last != null ? last
-                : new TranslationException(TranslationException.Kind.UNKNOWN, "未知失败");
-    }
-
-    private static boolean isRetryable(Throwable t) {
-        return t instanceof TranslationException
-                && ((TranslationException) t).isRetryable();
-    }
-
-    static long backoffMillis(int attempt, Throwable t) {
-        long exponential = Math.min(4000L, 1000L * (1L << (attempt - 1)));
-        if (t instanceof TranslationException) {
-            TranslationException error = (TranslationException) t;
-            if (error.httpStatus() == 429) {
-                long rateLimitBackoff = Math.min(8000L, 2000L * (1L << (attempt - 1)));
-                long retryAfter = error.retryAfterSeconds() * 1000L;
-                return Math.min(60000L, Math.max(retryAfter, rateLimitBackoff));
-            }
-        }
-        return exponential;
-    }
-
-    /** @return true 表示正常睡满；false 表示被中断 */
-    private static boolean sleepInterruptibly(long ms) {
-        try {
-            Thread.sleep(ms);
-            return true;
-        } catch (InterruptedException e) {
+            return task.engine.translate(task.text);
+        } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            return false;
+            throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消", ie);
+        } finally {
+            if (acquired) {
+                synchronized (concurrencyLock) {
+                    permits.release();
+                }
+            }
         }
     }
 
     /** 稳定内容哈希：内容 + 配置版本（需求 §5.6 缓存键要求）。 */
     public static String contentHash(String text, String configVersion) {
-        String hex = Sha256.digestHex(text, configVersion);
-        if (hex != null) {
-            return hex;
-        }
-        // 理论不可达；退化为稳定但非加密强度的哈希。
-        return Integer.toHexString((text + "|" + configVersion).hashCode());
+        return Sha256.digestHex(text, configVersion);
     }
 
     /** 主线程投递工具。Discord 消息渲染全部发生在主线程。 */

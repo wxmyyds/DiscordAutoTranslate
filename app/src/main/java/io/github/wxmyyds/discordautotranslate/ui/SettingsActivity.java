@@ -271,32 +271,41 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
-    /** 下拉框位置 → 协议存储值。未知位置回落默认协议。 */
+    /** 下拉框位置 → 协议存储值；无效位置返回 null 供配置校验拒绝。 */
+    @Nullable
     private static String protocolAt(int position) {
         if (position == 0) {
             return Config.PROTOCOL_OPENAI_RESPONSES;
         }
+        if (position == 1) {
+            return Config.PROTOCOL_OPENAI_COMPATIBLE;
+        }
         if (position == 2) {
             return Config.PROTOCOL_ANTHROPIC_MESSAGES;
         }
-        return Config.PROTOCOL_OPENAI_COMPATIBLE;
+        return null;
     }
 
-    /** 协议存储值 → 下拉框位置；未知值按默认协议处理。 */
+    /** 协议存储值 → 下拉框位置；未知值返回无选中位置。 */
     private static int positionOf(String protocol) {
         if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
             return 0;
         }
+        if (Config.PROTOCOL_OPENAI_COMPATIBLE.equals(protocol)) {
+            return 1;
+        }
         if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
             return 2;
         }
-        return 1;
+        return AdapterView.INVALID_POSITION;
     }
 
     private void updateStreamingAvailability() {
         if (streamingInput != null && protocolSpinner != null) {
-            streamingInput.setEnabled(Protocols.supportsStreaming(
-                    protocolAt(protocolSpinner.getSelectedItemPosition())));
+            int position = protocolSpinner.getSelectedItemPosition();
+            boolean hasSelection = position >= 0 && position < 3;
+            streamingInput.setEnabled(hasSelection && Protocols.supportsStreaming(
+                    protocolAt(position)));
         }
     }
 
@@ -312,6 +321,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             return;
         }
         Config.Snapshot snapshot = Config.read(currentPrefs);
+        if (snapshot.configError != null) {
+            updateStatus(snapshot.configError);
+        }
         enabledInput.setChecked(snapshot.enabled);
         protocolSpinner.setSelection(positionOf(snapshot.protocol));
         streamingInput.setChecked(snapshot.streaming);
@@ -335,7 +347,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             updateStatus("未连接 LSPosed 服务，无法保存。请确认模块已在 LSPosed 中启用并勾选作用域。");
             return;
         }
-        commitSnapshot(snapshotFromUi());
+        Config.Snapshot snapshot = snapshotFromUi();
+        if (snapshot.configError != null) {
+            updateStatus(snapshot.configError);
+            return;
+        }
+        commitSnapshot(snapshot);
     }
 
     private void commitSnapshot(Config.Snapshot snapshot) {
@@ -419,12 +436,21 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
     }
 
-    private static int parseInt(EditText editText, int defaultValue) {
-        try {
-            return Integer.parseInt(editText.getText().toString().trim());
-        } catch (Throwable t) {
+    private static Object parseIntInput(EditText editText, int defaultValue) {
+        String value = editText.getText().toString().trim();
+        if (value.isEmpty()) {
             return defaultValue;
         }
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException e) {
+            return value;
+        }
+    }
+
+    private static String textOrDefault(EditText editText, String defaultValue) {
+        String value = editText.getText().toString().trim();
+        return value.isEmpty() ? defaultValue : value;
     }
 
     /** 值等于默认值时清空输入框，灰色占位符（hint）展示默认值；自定义值才写入。 */
@@ -450,24 +476,29 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
     }
 
-    // ------------------------------------------------------------ 测试功能
+    private static String promptOrDefault(EditText editText, String defaultValue) {
+        String value = editText.getText().toString();
+        return value.trim().isEmpty() ? defaultValue : value;
+    }
 
-    /** 用界面当前值构造快照，配置检查、网络测试和保存共用同一套字段读取。 */
+
     private Config.Snapshot snapshotFromUi() {
         MemoryPrefs memoryPrefs = new MemoryPrefs();
         memoryPrefs.put(Config.KEY_ENABLED, enabledInput.isChecked());
         memoryPrefs.put(Config.KEY_PROTOCOL,
                 protocolAt(protocolSpinner.getSelectedItemPosition()));
         memoryPrefs.put(Config.KEY_STREAMING, streamingInput.isChecked());
-        memoryPrefs.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_API_URL, textOrDefault(urlInput, Config.DEF_API_URL));
         memoryPrefs.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
-        memoryPrefs.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
-        memoryPrefs.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_MODEL, textOrDefault(modelInput, Config.DEF_MODEL));
+        memoryPrefs.put(Config.KEY_TARGET_LANG,
+                textOrDefault(targetLangInput, Config.DEF_TARGET_LANG));
         memoryPrefs.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
-        memoryPrefs.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
-        memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
+        memoryPrefs.put(Config.KEY_SYSTEM_PROMPT,
+                promptOrDefault(systemPromptInput, Config.DEF_SYSTEM_PROMPT));
+        memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseIntInput(timeoutInput, Config.DEF_TIMEOUT_MS));
         memoryPrefs.put(Config.KEY_MAX_CONCURRENCY,
-                parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
+                parseIntInput(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
         return Config.read(memoryPrefs);
     }
 

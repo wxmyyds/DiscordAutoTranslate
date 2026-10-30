@@ -39,11 +39,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
         }
         validateConfig(cfg);
-        // 单一链路（用户决策）：一次无标记纯文本请求，不重试、不降级。
-        // 失败由调度器的既有错误重试处理；译文按段落块回填到各文本节点。
+        // 单次无标记纯文本请求，不重试、不切换协议或响应格式。
         String translated = requestOnce(text);
-        // 防损坏校验只检查这一次的响应（残留标记、占位符、长度比例异常）。
-        // 不合格直接判失败，宁可显示原文也不把复读/残缺内容送进节点树。
+        // 防损坏校验只检查本次响应；不合格直接失败，保留原消息。
         String violation = Segments.plainTextViolation(translated, text);
         if (violation != null) {
             throw new TranslationException(TranslationException.Kind.PARSE,
@@ -57,8 +55,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
      */
     private String requestOnce(String text) throws Exception {
         // 1) 按协议构造请求体（单链路：无标记纯文本，直接使用用户配置的提示词）
+        boolean sse = Protocols.supportsStreaming(cfg.protocol) && cfg.streaming;
         String body = Protocols.requestBody(cfg.protocol, text, cfg.systemPrompt, cfg.model,
-                cfg.streaming);
+                sse);
         Http.Headers headers = buildHeaders();
 
         // 2) 发送（任务被取消时通过线程中断尽早退出）
@@ -66,7 +65,6 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
-        boolean sse = Protocols.supportsStreaming(cfg.protocol) && cfg.streaming;
         Http.Response resp = http.postJson(url, body, headers, sse);
 
         // 3) 状态码归类
@@ -98,6 +96,9 @@ public final class JsonApiEngine implements Scheduler.Engine {
      * 请求体与译文提取由 {@link Protocols} 按协议内置实现，无需再校验模板与路径。</p>
      */
     public static void validateConfig(Config.Snapshot cfg) throws TranslationException {
+        if (cfg.configError != null) {
+            throw new TranslationException(TranslationException.Kind.CONFIG, cfg.configError);
+        }
         if (cfg.apiUrl == null || cfg.apiUrl.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.CONFIG, "API URL 未配置");
         }
@@ -106,6 +107,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "API URL 必须以 http:// 或 https:// 开头");
         }
+        Http.Headers.parse(cfg.extraHeaders);
     }
 
     /**
@@ -114,7 +116,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
      * <p>OpenAI 系协议用 {@code Authorization: Bearer}；Anthropic Messages
      * 用 {@code x-api-key} 且必须携带版本头 {@code anthropic-version}。</p>
      */
-    private Http.Headers buildHeaders() {
+    private Http.Headers buildHeaders() throws TranslationException {
         Http.Headers headers = Http.Headers.parse(cfg.extraHeaders);
         boolean anthropic = Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(cfg.protocol);
         if (cfg.apiKey != null && !cfg.apiKey.trim().isEmpty()) {
@@ -136,10 +138,8 @@ public final class JsonApiEngine implements Scheduler.Engine {
     private TranslationException classifyHttpError(Http.Response resp) {
         int status = resp.status;
         if (status == 429) {
-            String hint = resp.retryAfterSeconds > 0
-                    ? "，建议 " + resp.retryAfterSeconds + "s 后重试" : "";
             return new TranslationException(TranslationException.Kind.RATE_LIMIT,
-                    "限流" + hint, status, resp.retryAfterSeconds, null);
+                    "限流", status, null);
         }
         if (status == 401 || status == 403) {
             return new TranslationException(TranslationException.Kind.HTTP,

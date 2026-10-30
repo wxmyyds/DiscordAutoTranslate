@@ -36,10 +36,7 @@ import java.util.List;
  *       译文丢失/多份回显/挪动 URL 时整条拒绝；</li>
  *   <li>请求恒为无标记纯文本，引擎返回前做防损坏校验（残留标记/占位符/
  *       长度比例，见 {@code Segments.plainTextViolation}）；</li>
- *   <li>渲染层对齐回填（段落块 1:1 → 整行 1:1 → 段落级：每段译文
- *       进本段首片段、段内其余置空；含列表项的间隔另有非空行 1:1），
- *       模型跨段落合并/增删内容时才整条保留原文。不做跨段启发式分配，
- *       那是乱序与内容丢失的来源；</li>
+ *   <li>渲染层按原树结构选择唯一的行、段落块、列表项或锚点映射；结构不匹配整条拒绝；</li>
  *   <li>结构对齐时每个标题拿到自己的片段，空行结构来自原节点。</li>
  * </ul>
  */
@@ -263,7 +260,10 @@ public class LongTextRegressionTest {
                 translation.append("\n\n");
             }
             translation.append("免费 GEMINI 4 ARGON")
-                    .append("\n\n链接 GEMINI 4 ARGON - https://clck.ru/3Wfv9G")
+                    .append("\n\n<x").append(g + 1).append(">")
+                    .append("链接 GEMINI 4 ARGON - ")
+                    .append("</x").append(g + 1).append(">")
+                    .append("https://clck.ru/3Wfv9G")
                     .append("\n\n仅限 TELEGRAM");
         }
         List<Object> out = ContentNodes.replaceText(repeatedAdTree(), translation.toString());
@@ -365,20 +365,15 @@ public class LongTextRegressionTest {
     }
 
     @Test
-    public void styleMarkerMissingFallsBackToMergedBackfill() {
-        // 模型没保留样式标记：自动回退到无标记对齐（合并处理），
-        // 译文保留、样式退化，不拒译。
+    public void styleMarkerMissingRejectsBackfill() {
+        // 模型没保留样式标记：结构信息丢失，整条拒绝回填。
         List<Object> nodes = list(
                 new TextContentNode("plain "),
                 new io.github.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmphasisContentNode(
                         list(new TextContentNode("styled text"))),
                 new TextContentNode(" tail"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "普通 斜体 尾巴");
-
-        assertNotNull("标记缺失必须回退而不是拒译", out);
-        // 首片段承载全部合并译文；原节点的尾随空格由 rebuild 保留。
-        assertEquals("普通 斜体 尾巴 ", ((TextContentNode) out.get(0)).getContent());
+        assertNull(ContentNodes.replaceText(nodes, "普通 斜体 尾巴"));
         assertEquals("原节点未被动过", "styled text",
                 ((TextContentNode) ((io.github.wxmyyds.discordautotranslate.hooks
                         .ContentNodesTest.EmphasisContentNode) nodes.get(1))
@@ -408,11 +403,8 @@ public class LongTextRegressionTest {
     }
 
     @Test
-    public void emojiBetweenSegmentsNoLongerBlocksParagraphAlignment() {
-        // 日志实测（消息 1563814381303758918，targets=40 unsafeParagraphs=3）：
-        // emoji/提及等自渲染节点夹在片段之间曾令段落级对齐整条拒绝
-        // （模型返回的 4 块恰好等于 4 个段落）。这些节点自渲染、合并译文
-        // 时原位保留、无内容丢失，段落对齐不再因它们拒绝。
+    public void emojiWithoutAnchorCannotAlignFollowingText() {
+        // 缺少 emoji 锚点时不通过位置猜测回填，原文与 emoji 节点保持不变。
         io.github.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmojiContentNode emoji =
                 new io.github.wxmyyds.discordautotranslate.hooks.ContentNodesTest.EmojiContentNode("1");
         List<Object> nodes = list(
@@ -420,11 +412,10 @@ public class LongTextRegressionTest {
                 emoji,
                 new TextContentNode("beta"));
 
-        List<Object> out = ContentNodes.replaceText(nodes, "甲 乙");
-
-        assertNotNull("自渲染节点不得阻断段落级对齐", out);
-        assertEquals("甲 乙", ((TextContentNode) out.get(0)).getContent());
-        assertSame("emoji 原位保留", emoji, out.get(1));
+        assertNull("缺少 emoji 锚点时必须拒绝回填",
+                ContentNodes.replaceText(nodes, "甲 乙"));
+        assertEquals("alpha", ((TextContentNode) nodes.get(0)).getContent());
+        assertEquals("beta", ((TextContentNode) nodes.get(2)).getContent());
     }
 
     @Test
@@ -466,7 +457,7 @@ public class LongTextRegressionTest {
                 new TextContentNode("trailing text"));
 
         List<Object> out = ContentNodes.replaceText(nodes,
-                "描述 https://clck.ru/3Wfv9G 尾巴");
+                "<x1>描述</x1> https://clck.ru/3Wfv9G 尾巴");
 
         assertNotNull(out);
         StrongContentNode strong = (StrongContentNode) out.get(0);
@@ -476,11 +467,8 @@ public class LongTextRegressionTest {
     }
 
     @Test
-    public void urlSpanMergedSegmentsFillFirstAndBlankRest() {
-        // URL 间隔内有多个相邻片段、模型合并成一块：间隔内段落级对齐，
-        // 译文落进首片段、其余置空（与无 URL 的段落对齐同语义）。
-        // 此前 copySpan 把空片段当「内容丢失」误杀，导致日志中
-        // targets=17 urlMarks=12 的消息被整条拒绝（2026-10 实测）。
+    public void urlIntervalWithAmbiguousTextNodesIsRejected() {
+        // URL 间隔包含两个同段文字节点但响应只给一块，缺少可验证边界时拒绝。
         List<Object> nodes = list(
                 new TextContentNode("alpha"),
                 new TextContentNode("beta"),
@@ -488,16 +476,10 @@ public class LongTextRegressionTest {
                         "https://clck.ru/3Wfv9G")), new Object()),
                 new TextContentNode("gamma"));
 
-        List<Object> out = ContentNodes.replaceText(nodes,
-                "甲乙 https://clck.ru/3Wfv9G 丙");
-
-        assertNotNull(out);
-        assertEquals(4, out.size());
-        assertEquals("甲乙", ((TextContentNode) out.get(0)).getContent());
-        assertEquals("间隔内置空的片段原节点未被动过",
-                "beta", ((TextContentNode) nodes.get(1)).getContent());
-        assertSame("URL 链接节点原样保留", nodes.get(2), out.get(2));
-        assertEquals("丙", ((TextContentNode) out.get(3)).getContent());
+        assertNull(ContentNodes.replaceText(nodes,
+                "甲乙 https://clck.ru/3Wfv9G 丙"));
+        assertEquals("alpha", ((TextContentNode) nodes.get(0)).getContent());
+        assertEquals("beta", ((TextContentNode) nodes.get(1)).getContent());
     }
 
     @Test
@@ -576,7 +558,9 @@ public class LongTextRegressionTest {
             if (g > 0) {
                 translation.append("\n\n");
             }
-            translation.append("链接 GEMINI 4 ARGON - https://clck.ru/3Wfv9G");
+            translation.append("<x").append(g + 1).append(">链接 GEMINI 4 ARGON - ")
+                    .append("</x").append(g + 1).append(">")
+                    .append("https://clck.ru/3Wfv9G");
         }
         List<Object> out = ContentNodes.replaceText(nodes, translation.toString());
 
@@ -595,7 +579,7 @@ public class LongTextRegressionTest {
     // ---------------------------------------------------------------- 混合格式的长文本
 
     @Test
-    public void formattedLongTextWithCodeAndUrlsKeepsStructure() {
+    public void formattedLongTextWithAmbiguousCodeBoundaryIsRejected() {
         // 加粗 + 行内代码 + URL 链接混排：代码节点与 URL 原样，文本逐段回填。
         InlineCodeContentNode code = new InlineCodeContentNode("npm install");
         List<Object> nodes = list(
@@ -606,20 +590,9 @@ public class LongTextRegressionTest {
                 new TextContentNode("now"),
                 new TextContentNode("\n"),
                 new LinkContentNode(list(new TextContentNode(URLS[1])), new Object()));
-        List<Object> out = ContentNodes.replaceText(nodes,
-                "加粗标题\n运行\n现在" + URLS[1]);
-
-        assertNotNull(out);
-        StrongContentNode strong = (StrongContentNode) out.get(0);
-        assertEquals("加粗标题", ((TextContentNode) strong.getContent().get(0)).getContent());
-        assertEquals("\n\n", ((TextContentNode) out.get(1)).getContent());
-        assertEquals("运行", ((TextContentNode) out.get(2)).getContent());
-        assertSame("行内代码原样保留", code, out.get(3));
-        assertEquals("现在", ((TextContentNode) out.get(4)).getContent());
-        assertSame("URL 链接原样保留", nodes.get(6), out.get(6));
-        assertEquals(URLS[1],
-                ((TextContentNode) ((LinkContentNode) out.get(6)).getContent().get(0))
-                        .getContent());
+        assertNull("代码两侧没有精确定位标记时拒绝回填",
+                ContentNodes.replaceText(nodes,
+                        "<x1>加粗标题</x1>\n\n运行\n现在" + URLS[1]));
     }
 
     @Test

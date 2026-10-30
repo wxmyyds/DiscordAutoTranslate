@@ -10,7 +10,6 @@
 - **挂载时机（主路径）**：Hook `MessageView.setMessage`（7 参），其 `this`
   就是行控件本身，无需沿父链上溯；在 `chain.proceed()` 之后挂载（此时子视图
   状态稳定），并处理行复用到新消息的清理，避免图标串位。
-  `MessageHooks.findRowContainer` 保留为兼容回退。
 - **三态**（`@drawable` + `setColorFilter` 着色）：
   - 翻译中：`progress_activity_24`（旋转，灰 `#B9BBBE`）；
   - 翻译成功：`translate_24`（主题蓝 `#5865F2`）；
@@ -27,8 +26,8 @@
 - **注入范围**：只处理正常消息正文（文本节点数 > 0 且非 IDLE）；回复引用
   内不注入；富 Embed 每卡片一个（主段优先）；帖子预览挂在 footer；
   投票卡片挂在问题文本末尾。
-- 图标资源是模块自带（非 Discord 的），用 `ModuleResources` 在 Discord 进程
-  内解析模块的资源表；预加载失败时图标构造时再取一次（已缓存）。
+- 图标资源是模块自带（非 Discord 的），使用 `PackageManager.getResourcesForApplication`
+  解析一次模块资源；失败后该进程不再尝试其它资源 API，图标保持缺失。
 
 ## 布局刷新（译文/切换后行高立即更新）
 
@@ -43,20 +42,12 @@
 
 修复：
 
-- `HookBridge.requestRerender` 改用 `View.post(...)` 把执行移出宿主布局遍历
-  （post 失败回退同步执行）；执行前用 `RerenderRegistry.stillBound(expected,
-  actual)` 再校验一次视图绑定，仅确认绑定到其他消息才拒绝执行。
+- `HookBridge.requestRerender` 统一投递到主线程消息队列，把执行移出宿主布局遍历；
+  执行前用 `RerenderRegistry.stillBound(expected, actual)` 再校验一次视图绑定，
+  仅确认绑定到其他消息才拒绝执行。
 - 重渲染成功后：`forceLayout()` + `requestLayout()` + `invalidate()`，并从正文
   视图沿父链向上刷新最多 3 层（行高由父容器测量决定，只对 TextView
   requestLayout 不足以重测）。
 - 对承载该消息的 `RecyclerView` 调用 `notifyItemChanged(bindingAdapterPosition)`
   （宿主自身刷新单行的方式）；因渲染漏斗运行在宿主布局过程内，投递到下一轮
   消息队列，并按消息 ID 同一帧去重，避免重入布局抛异常。
-
-## 判读记录（排查时用）
-
-- `RerenderRegistry.rerender` 记录 `no-target` / `target(h=…,attached=…)`；
-  `requestRerender` 记录 `dispatch` / `rebound` / `post-rejected`；
-  `invokeRerender` 记录 `invoked(before=…)` / `invoke-failed:异常类名`；
-  `postInvalidateRow` 记录 `row-refresh(before=X,after=Y)`。
-- 隐私：记录只含消息 ID、视图类名、高度、布尔状态与结论标签。

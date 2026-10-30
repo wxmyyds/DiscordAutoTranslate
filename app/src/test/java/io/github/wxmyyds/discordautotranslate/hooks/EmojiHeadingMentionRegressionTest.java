@@ -31,16 +31,8 @@ import java.util.List;
  * &lt;:deepseek:1520140362390438120&gt; Deepseek V4.1 Flash
  * </pre>
  *
- * <p>该消息在回填层（{@link ContentNodes#replaceText}）与 emoji 锚点相关：
- * 每行自定义 emoji 作为定位标记切分间隔（见 {@link TextExtractor#nodeEmojiText}
- * 与 {@code walkPlan} 的 {@code addEmojiToken}）。模型回译若不保留这些
- * {@code <:name:id>} 锚点，旧实现的 {@code anchorsMatch} 校验会让整条拒绝
- * 回填，界面保持英文（状态仍是 TRANSLATED）。</p>
- *
- * <p>修复后：emoji 锚点数量不符时降级对齐（剥离锚点回显、忽略 emoji
- * 切分，按块/行逐级严格校验），译文逐行对应时能正常回填；行结构对
- * 不上仍整条拒绝。URL 锚点仍保持原来的严格校验（丢失即拒），因为
- * URL 字符必须由原节点保真。</p>
+ * <p>严格回填要求 URL、emoji 与样式标记均按请求结构原样保留；缺失或错位时，
+ * 整条拒绝回填并保持原消息，不走忽略锚点或其它降级对齐。</p>
  */
 public class EmojiHeadingMentionRegressionTest {
 
@@ -103,28 +95,21 @@ public class EmojiHeadingMentionRegressionTest {
     }
 
     /**
-     * 上报现象的直接回归：模型丢弃 {@code :qwen:} / {@code :deepseek:} 锚点
-     * 但逐行翻译时，必须降级回填而不是整条保持英文。
+     * 上报现象回归：模型丢弃自定义 emoji 锚点时必须拒绝回填，不按行猜测。
      */
     @Test
-    public void modelDroppingEmojiAnchorsStillTranslatesEveryLine() {
+    public void modelDroppingEmojiAnchorsRejectsLinewiseTranslation() {
         List<Object> nodes = reportedTree();
-        List<Object> out = ContentNodes.replaceText(nodes,
-                "宣布 2 款新的 abliterated 模型：\nQwen 3 27b\nDeepseek V4.1 Flash");
-
-        assertNotNull("锚点丢失但逐行对应时必须降级回填，不得保持英文", out);
-        HeadingContentNode heading = (HeadingContentNode) out.get(2);
-        assertEquals("宣布 2 款新的 abliterated 模型：",
-                ((TextContentNode) heading.getContent().get(0)).getContent());
-        assertSame("emoji 节点仍由原节点绘制", nodes.get(4), out.get(4));
-        assertEquals(" Qwen 3 27b", ((TextContentNode) out.get(5)).getContent());
-        assertSame(nodes.get(7), out.get(7));
-        assertEquals(" Deepseek V4.1 Flash", ((TextContentNode) out.get(8)).getContent());
+        assertNull("emoji 锚点丢失时必须保持原消息",
+                ContentNodes.replaceText(nodes,
+                        "宣布 2 款新的 abliterated 模型：\nQwen 3 27b\nDeepseek V4.1 Flash"));
+        assertEquals("Announcing 2 new abliterated models:",
+                ((TextContentNode) ((HeadingContentNode) nodes.get(2))
+                        .getContent().get(0)).getContent());
     }
 
     /**
-     * 降级不得造成内容丢失：模型把三行合并成一段时行结构对不上，
-     * 仍整条保留原文（不能把三句塞进标题节点、清空另两个片段）。
+     * 结构不匹配时整条保留原文。
      */
     @Test
     public void mergedTranslationWithDroppedAnchorsKeepsOriginal() {

@@ -31,7 +31,6 @@ public class TranslationException extends Exception {
 
     private final Kind kind;
     private final int httpStatus;
-    private final int retryAfterSeconds;
 
     public TranslationException(Kind kind, String message) {
         this(kind, message, 0, null);
@@ -42,15 +41,9 @@ public class TranslationException extends Exception {
     }
 
     public TranslationException(Kind kind, String message, int httpStatus, Throwable cause) {
-        this(kind, message, httpStatus, 0, cause);
-    }
-
-    public TranslationException(Kind kind, String message, int httpStatus,
-                                int retryAfterSeconds, Throwable cause) {
         super(message, cause);
         this.kind = kind;
         this.httpStatus = httpStatus;
-        this.retryAfterSeconds = Math.max(0, retryAfterSeconds);
     }
 
     public Kind kind() {
@@ -59,26 +52,6 @@ public class TranslationException extends Exception {
 
     public int httpStatus() {
         return httpStatus;
-    }
-
-    public int retryAfterSeconds() {
-        return retryAfterSeconds;
-    }
-
-    /** 是否值得自动重试（限流与临时网络/服务端错误）。 */
-    public boolean isRetryable() {
-        switch (kind) {
-            case RATE_LIMIT:
-                return true;
-            case HTTP:
-                // 5xx 视为服务端临时故障，可重试；4xx（除 429）为客户端错误，重试无意义。
-                return httpStatus >= 500;
-            case NETWORK:
-            case TIMEOUT:
-                return true;
-            default:
-                return false;
-        }
     }
 
     /** 面向用户的可读提示（设置页与诊断日志共用）。 */

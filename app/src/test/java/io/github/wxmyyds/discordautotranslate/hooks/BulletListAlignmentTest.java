@@ -20,30 +20,11 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * 含列表项的消息回填回归（2026-10 上报：Codex Relay 广告消息保持英文）。
+ * 列表项严格回填回归。
  *
- * <p>上报原文结构：标题段 / 引导句 / "What it offers:" / 5 项无序列表 /
- * 结尾段 / "Sign up here: " + 裸 URL，共 10 个可翻译片段。</p>
- *
- * <p>旧实现的两处缺陷（均可从源码核对，非对模型输出的猜测）：</p>
- * <ol>
- *   <li>{@code addSegment} 只在分隔符含 ≥2 个换行时推进段落组，而列表项
- *       之间的分隔是 {@code "\n• "}（单换行）。5 个列表项因此同属一个
- *       段落组，整条消息只有 6 个段落组（标题 / 引导句 / "What it
- *       offers:" / 整张列表 / 结尾段 / "Sign up here:"）。</li>
- *   <li>对齐层级只有「空行块 1:1 → 整行 1:1 → 段落级」。模型保留「每项
- *       一行」时，空行块数是 6（列表整体一块）而片段数是 10，整行数
- *       （含空行）也不等于 10——这两级都要求数量相等，对不上。此时若空行
- *       块数恰好等于段落组数（6）且 URL 锚点完好，段落级会把整块列表
- *       译文塞进首项、其余 4 项置空；块数不等于 6，或模型丢了/改坏了 URL
- *       锚点，则整条拒绝回填，界面保持英文（状态仍是 TRANSLATED）。上报
- *       时正文全部保持英文，说明当时不满足「6 块 + 锚点完好」这一组合；
- *       原始译文未留存，此处不宣称具体是哪一种。</li>
- * </ol>
- *
- * <p>修复约定：列表项各自成段落组；新增「非空行 1:1」层级（仅对含列表项
- * 的间隔生效，且要求非空行数 == 片段数）；列表片段剥离模型回显的项目
- * 符号（显示符号由原节点渲染）。不含列表的消息仍走原有判定，不启用该层级。</p>
+ * <p>源树中的每个列表项独立成组。译文必须按相同顺序逐行给出；
+ * 列表项之间新增空段落、合并或缺失译文时整条拒绝。请求中的 URL 与 emoji
+ * 仍是必须保留的定位标记。</p>
  */
 public class BulletListAlignmentTest {
 
@@ -153,7 +134,7 @@ public class BulletListAlignmentTest {
     }
 
     @Test
-    public void modelDroppingBlankLineBeforeListStillAlignsByNonBlankLines() {
+    public void modelDroppingListLeadBlankLineUsesKnownRowBoundaries() {
         StringBuilder t = new StringBuilder();
         t.append("Codex Relay — 面向编程的 AI API\n\n")
                 .append("如果你正在为 AI 编程工具寻找 API 提供商，可以看看 Codex Relay。\n\n")
@@ -166,7 +147,7 @@ public class BulletListAlignmentTest {
 
         List<Object> out = ContentNodes.replaceText(reportedTree(), t.toString());
 
-        assertNotNull("缺少列表前的空行也必须能对齐", out);
+        assertNotNull("源树列表项边界仍可按原行逐项映射", out);
         BulletListContentNode bullets = (BulletListContentNode) out.get(6);
         for (int i = 0; i < ZH_BULLETS.length; i++) {
             assertEquals(ZH_BULLETS[i],
@@ -244,9 +225,8 @@ public class BulletListAlignmentTest {
     }
 
     @Test
-    public void modelPuttingBlankLinesBetweenItemsStillTranslatesEveryBullet() {
-        // 部分模型会把列表项之间也写成空行：空行块数恰好等于片段数，
-        // 走「空行块 1:1」层级，同样需要逐项落位并剔除项目符号。
+    public void listItemsSeparatedByBlankParagraphsAreRejected() {
+        // 原结构要求列表项逐行对应。模型在项目之间另插空段落，结构不再一致。
         StringBuilder t = new StringBuilder();
         t.append("Codex Relay — 面向编程的 AI API\n\n")
                 .append("如果你正在为 AI 编程工具寻找 API 提供商，可以看看 Codex Relay。\n\n")
@@ -257,14 +237,8 @@ public class BulletListAlignmentTest {
         t.append("你可以在花任何钱之前先用免费额度试用。\n\n")
                 .append("在此注册：").append(URL);
 
-        List<Object> out = ContentNodes.replaceText(reportedTree(), t.toString());
-
-        assertNotNull("逐项空行也不能拒绝回填", out);
-        BulletListContentNode bullets = (BulletListContentNode) out.get(6);
-        for (int i = 0; i < ZH_BULLETS.length; i++) {
-            assertEquals(ZH_BULLETS[i],
-                    ((TextContentNode) bullets.getItems().get(i).get(0)).getContent());
-        }
+        assertNull("原始列表项之间是单换行，模型插入空段落后不再逐项对应",
+                ContentNodes.replaceText(reportedTree(), t.toString()));
     }
 
     @Test

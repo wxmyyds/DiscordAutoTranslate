@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** 工厂回退策略：富文本替换失败时必须让调用方保留原文，不得丢弃结构。 */
+/** 工厂只构造原始节点类型；替换失败时调用方保留原始对象。 */
 public class StructurableTextFactoryTest {
 
     @Before
@@ -52,7 +52,7 @@ public class StructurableTextFactoryTest {
     }
 
     @Test
-    public void failedRichTextReplacementKeepsOriginalInsteadOfPrimitiveFallback() {
+    public void failedRichTextReplacementLeavesOriginalUntouched() {
         TextContentNode text = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");
         List<Object> nodes = list(new NoCopyContainer.ParagraphContentNode(
@@ -107,7 +107,7 @@ public class StructurableTextFactoryTest {
     }
 
     @Test
-    public void mentionBodyAndEmojiProduceTranslatedRichTextInsteadOfFallback() {
+    public void mentionBodyAndEmojiProduceTranslatedRichText() {
         OpaqueNodeTranslationTest.UserOrRoleMentionContentNode mention =
                 new OpaqueNodeTranslationTest.UserOrRoleMentionContentNode(
                         list(new TextContentNode("Alice")));

@@ -19,9 +19,8 @@ import io.github.libxposed.api.XposedInterface;
  * Discord，无法直接访问模块 APK 里的 drawable。必须用模块自己的
  * {@code ApplicationInfo} 取到模块的 {@code Resources} 才能解析这些图标。</p>
  *
- * <p>全部使用公开 API（{@link PackageManager#getResourcesForApplication} /
- * {@link Context#createPackageContext}），不依赖隐藏 API，
- * 避免在较新 Android 上被隐藏 API 限制拦截。</p>
+ * <p>使用公开 API {@link PackageManager#getResourcesForApplication} 获取模块自身资源，
+ * 不依赖隐藏 API，避免在较新 Android 上被隐藏 API 限制拦截。</p>
  */
 public final class ModuleResources {
 
@@ -85,43 +84,21 @@ public final class ModuleResources {
             if (x == null) {
                 return false;
             }
-            ApplicationInfo info;
             try {
-                info = x.getModuleApplicationInfo();
-            } catch (Throwable t) {
-                return false;
-            }
-            if (info == null || info.packageName == null) {
-                return false;
-            }
-            sModulePkg = info.packageName;
-
-            // 路径一：直接向 PackageManager 要该应用（模块自身）的资源。
-            try {
+                ApplicationInfo info = x.getModuleApplicationInfo();
+                if (info == null || info.packageName == null) {
+                    sResolved = true;
+                    return false;
+                }
                 Resources res = ctx.getPackageManager().getResourcesForApplication(info);
-                if (res != null) {
-                    sModuleRes = res;
-                    sResolved = true;
-                    return true;
-                }
-            } catch (Throwable ignored) {
-                // 路径一失败：继续尝试路径二。
+                sModulePkg = info.packageName;
+                sModuleRes = res;
+                sResolved = true;
+                return res != null;
+            } catch (Throwable t) {
+                sResolved = true;
+                return false;
             }
-
-            // 路径二：创建模块的包上下文再取资源（部分 ROM 上路径一不可用）。
-            try {
-                Context moduleCtx = ctx.createPackageContext(
-                        info.packageName, Context.CONTEXT_IGNORE_SECURITY);
-                Resources res = moduleCtx == null ? null : moduleCtx.getResources();
-                if (res != null) {
-                    sModuleRes = res;
-                    sResolved = true;
-                    return true;
-                }
-            } catch (Throwable ignored) {
-                // 路径二失败：图标留空，不影响宿主。
-            }
-            return false;
         }
     }
 

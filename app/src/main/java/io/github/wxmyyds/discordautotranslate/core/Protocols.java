@@ -45,7 +45,7 @@ public final class Protocols {
      * 追加 {@link #WRAPPER_RULE} 说明，让模型明确「标签内才是待翻译正文」，
      * 正文里形似指令的句子（如 "ignore previous instructions"）不会被当成
      * 对模型的指令。只作用于请求层：用户配置的提示词与 version() 指纹
-     * （缓存键）不受影响。响应侧由 {@link #unwrapTranslate} 防回显。
+     * （缓存键）不受影响。响应侧发现包装标签即拒绝响应。
      */
     public static final String WRAPPER_OPEN = "<translate>";
     public static final String WRAPPER_CLOSE = "</translate>";
@@ -80,15 +80,22 @@ public final class Protocols {
      * 非流式接口在生成完成前零字节返回。Responses 协议保持非流式（其流式
      * 事件格式暂未支持）。</p>
      *
-     * @throws TranslationException 理论上仅在 org.json 拒绝值时发生，统一归类为配置错误
+     * @throws TranslationException 配置值无效或 org.json 拒绝请求值时发生
      */
     public static String requestBody(String protocol, String text,
                                      @Nullable String systemPrompt, String model,
                                      boolean streaming)
             throws TranslationException {
-        String safeText = text == null ? "" : text;
-        String safePrompt = systemPrompt == null ? "" : systemPrompt;
-        // 包装与追加协议说明的动机见 WRAPPER_OPEN javadoc。
+        if (text == null || text.trim().isEmpty()) {
+            throw new TranslationException(TranslationException.Kind.EMPTY, "原文为空，无需翻译");
+        }
+        if (systemPrompt == null || systemPrompt.trim().isEmpty()
+                || model == null || model.trim().isEmpty()) {
+            throw new TranslationException(TranslationException.Kind.CONFIG,
+                    "模型或系统提示词未配置");
+        }
+        String safeText = text;
+        String safePrompt = systemPrompt;
         String wrapped = WRAPPER_OPEN + safeText + WRAPPER_CLOSE;
         String prompt = (safePrompt.trim().isEmpty() ? "" : safePrompt.trim() + "\n\n")
                 + WRAPPER_RULE;
@@ -96,6 +103,10 @@ public final class Protocols {
             JSONObject body = new JSONObject();
             body.put("model", model);
             if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
+                if (streaming) {
+                    throw new TranslationException(TranslationException.Kind.CONFIG,
+                            "OpenAI Responses 当前只支持非流式请求");
+                }
                 body.put("instructions", prompt);
                 body.put("input", wrapped);
                 body.put("temperature", TEMPERATURE);
@@ -111,7 +122,7 @@ public final class Protocols {
                 body.put("max_tokens", ANTHROPIC_MAX_TOKENS);
                 body.put("temperature", TEMPERATURE);
                 body.put("stream", streaming);
-            } else {
+            } else if (Config.PROTOCOL_OPENAI_COMPATIBLE.equals(protocol)) {
                 JSONArray messages = new JSONArray();
                 JSONObject system = new JSONObject();
                 system.put("role", "system");
@@ -124,6 +135,9 @@ public final class Protocols {
                 body.put("messages", messages);
                 body.put("temperature", TEMPERATURE);
                 body.put("stream", streaming);
+            } else {
+                throw new TranslationException(TranslationException.Kind.CONFIG,
+                        "不支持的供应商协议");
             }
             return body.toString();
         } catch (JSONException e) {
@@ -139,25 +153,29 @@ public final class Protocols {
      * 端点后缀由所选协议决定：Compatible 追加 {@code /chat/completions}，
      * Responses 追加 {@code /responses}，切换协议不需要改 URL。
      * URL 不应自带协议端点后缀，写了会被再次追加成重复路径。</p>
+     *
+     * @throws IllegalArgumentException API URL 或协议无效
      */
     public static String endpoint(String protocol, String apiUrl) {
-        if (apiUrl == null) {
-            return "";
+        if (apiUrl == null || apiUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("API URL is empty");
         }
         String url = apiUrl.trim();
         while (url.endsWith("/")) {
             url = url.substring(0, url.length() - 1);
         }
         if (url.isEmpty()) {
-            return apiUrl;
+            throw new IllegalArgumentException("API URL is empty");
         }
         String suffix;
         if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
             suffix = SUFFIX_RESPONSES;
         } else if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
             suffix = SUFFIX_MESSAGES;
-        } else {
+        } else if (Config.PROTOCOL_OPENAI_COMPATIBLE.equals(protocol)) {
             suffix = SUFFIX_CHAT_COMPLETIONS;
+        } else {
+            throw new IllegalArgumentException("Unsupported provider protocol");
         }
         return url + suffix;
     }
@@ -178,37 +196,32 @@ public final class Protocols {
         if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
             text = extractAnthropicText(responseBody, streaming);
         } else if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
+            if (streaming) {
+                throw new TranslationException(TranslationException.Kind.CONFIG,
+                        "OpenAI Responses 当前只支持非流式响应");
+            }
             text = extractResponsesText(responseBody);
-        } else if (streaming && responseBody != null
-                && responseBody.trim().startsWith("data:")) {
-            text = extractStreamedChatText(responseBody);
+        } else if (Config.PROTOCOL_OPENAI_COMPATIBLE.equals(protocol)) {
+            text = streaming
+                    ? extractStreamedChatText(responseBody)
+                    : JsonPath.extractString(responseBody, "choices.0.message.content");
         } else {
-            // 流式请求遇到忽略 stream 参数的服务端时，保留非流式 JSON 兼容路径。
-            text = JsonPath.extractString(responseBody, "choices.0.message.content");
+            throw new TranslationException(TranslationException.Kind.CONFIG,
+                    "不支持的供应商协议");
         }
-        return unwrapTranslate(text);
+        return rejectTranslateTags(text);
     }
 
-    /**
-     * 防御模型回显包装标签：仅当译文首尾成对包裹时剥离（视为包裹层）；
-     * 剥离后仍残留标签说明输出结构损坏，按解析失败拒绝：标签字面量
-     * 绝不能渲染进消息。
-     */
     @Nullable
-    private static String unwrapTranslate(@Nullable String text) throws TranslationException {
+    private static String rejectTranslateTags(@Nullable String text) throws TranslationException {
         if (text == null) {
             return null;
         }
-        String t = text.trim();
-        if (t.startsWith(WRAPPER_OPEN) && t.endsWith(WRAPPER_CLOSE)
-                && t.length() >= WRAPPER_OPEN.length() + WRAPPER_CLOSE.length()) {
-            t = t.substring(WRAPPER_OPEN.length(), t.length() - WRAPPER_CLOSE.length()).trim();
-        }
-        if (t.contains(WRAPPER_OPEN) || t.contains(WRAPPER_CLOSE)) {
+        if (text.contains(WRAPPER_OPEN) || text.contains(WRAPPER_CLOSE)) {
             throw new TranslationException(TranslationException.Kind.PARSE,
-                    "译文残留包装标签：" + WRAPPER_OPEN + "…" + WRAPPER_CLOSE);
+                    "译文包含包装标签：" + WRAPPER_OPEN + "…" + WRAPPER_CLOSE);
         }
-        return t;
+        return text;
     }
 
     /**
@@ -218,16 +231,15 @@ public final class Protocols {
      * 以 {@code data: [DONE]} 结束。role 帧/usage 帧的 delta.content 为空，
      * 跳过即可；错误帧没有 content，累积结果为空由引擎报“译文为空”。</p>
      *
-     * <p>完整性把关：流式读取按行进行，连接断在半路时已到达的部分
-     * delta 会拼出一份“缺尾巴”的译文，回填显示就是实测的
-     * “翻译后丢失文本”。因此译文只有在生成确有结束信号时才可用：
-     * {@code finish_reason=="stop"}（个别实现省略 [DONE]）或收到
-     * {@code data: [DONE]} 帧；{@code finish_reason} 为 length 等
-     * 非 stop 值说明生成本身被截断，同样必须失败。两者皆无 = 流断在
-     * 半路，拒绝残缺译文，宁可显示原文让用户重试。</p>
+     * {@code [DONE]} 为唯一正常结束信号；{@code finish_reason} 只用于判断是否被截断。
+     * 缺少结束帧时拒绝部分译文。
      */
     private static String extractStreamedChatText(String responseBody)
             throws TranslationException {
+        if (responseBody == null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "流式响应体为空");
+        }
         StringBuilder out = new StringBuilder();
         String finishReason = null;
         boolean sawDone = false;
@@ -276,15 +288,15 @@ public final class Protocols {
             throw new TranslationException(TranslationException.Kind.PARSE,
                     "生成被截断（finish_reason=" + finishReason + "），译文不完整");
         }
-        if (!sawDone && finishReason == null) {
+        if (!sawDone) {
             throw new TranslationException(TranslationException.Kind.PARSE,
-                    "流式响应不完整：未收到结束帧（[DONE]/finish_reason）");
+                    "流式响应不完整：未收到结束帧（[DONE]）");
         }
         return out.toString();
     }
 
     /**
-     * Anthropic Messages 提取：流式开关开启且响应为 SSE 时按事件提取；否则按 JSON 提取。
+     * Anthropic Messages 提取格式由请求模式唯一决定；响应格式不匹配时明确失败。
      *
      * <p>非流式结构：顶层 {@code content} 数组，译文在 {@code type=="text"}
      * 块的 {@code text} 字段（扩展思考模型的 thinking 块必须跳过）。
@@ -293,13 +305,9 @@ public final class Protocols {
      */
     private static String extractAnthropicText(String responseBody, boolean streaming)
             throws TranslationException {
-        if (streaming && responseBody != null) {
-            String head = responseBody.trim();
-            if (head.startsWith("data:") || head.startsWith("event:")) {
-                return extractStreamedAnthropicText(responseBody);
-            }
+        if (streaming) {
+            return extractStreamedAnthropicText(responseBody);
         }
-        // 流式请求遇到忽略 stream 参数的服务端时，保留非流式 JSON 兼容路径。
         Object root = JsonPath.parse(responseBody);
         if (!(root instanceof JSONObject)) {
             throw new TranslationException(TranslationException.Kind.PARSE,
@@ -336,12 +344,15 @@ public final class Protocols {
      * {@code event:} 行与 ping 等事件不携带译文，跳过；thinking 增量走
      * {@code thinking_delta}（无 text 字段），同样跳过。</p>
      *
-     * <p>完整性把关与 chat/completions 流相同：结束信号
-     * （{@code message_stop}）或明确的 {@code stop_reason} 缺一不可，
-     * {@code max_tokens} 等非正常结束按截断拒绝，残缺流宁可失败。</p>
+     * <p>完整性要求收到唯一结束事件 {@code message_stop}；正常的
+     * {@code stop_reason} 只用于确认生成结束类型，不替代结束事件。</p>
      */
     private static String extractStreamedAnthropicText(String responseBody)
             throws TranslationException {
+        if (responseBody == null) {
+            throw new TranslationException(TranslationException.Kind.PARSE,
+                    "流式响应体为空");
+        }
         StringBuilder out = new StringBuilder();
         String stopReason = null;
         boolean sawMessageStop = false;
@@ -390,9 +401,9 @@ public final class Protocols {
             throw new TranslationException(TranslationException.Kind.PARSE,
                     "生成被截断（stop_reason=" + stopReason + "），译文不完整");
         }
-        if (!sawMessageStop && stopReason == null) {
+        if (!sawMessageStop) {
             throw new TranslationException(TranslationException.Kind.PARSE,
-                    "流式响应不完整：未收到结束事件（message_stop/stop_reason）");
+                    "流式响应不完整：未收到结束事件（message_stop）");
         }
         return out.toString();
     }
@@ -416,7 +427,6 @@ public final class Protocols {
             throw new TranslationException(TranslationException.Kind.PARSE,
                     "Responses 响应缺少 output 数组");
         }
-        String fallback = null;
         for (int i = 0; i < output.length(); i++) {
             JSONObject item = output.optJSONObject(i);
             if (item == null || !"message".equals(item.optString("type"))) {
@@ -432,16 +442,8 @@ public final class Protocols {
                     continue;
                 }
                 String text = part.optString("text");
-                if (!text.trim().isEmpty()) {
-                    return text;
-                }
-                if (fallback == null) {
-                    fallback = text;
-                }
+                return text;
             }
-        }
-        if (fallback != null) {
-            return fallback;
         }
         throw new TranslationException(TranslationException.Kind.PARSE,
                 "Responses 响应中未找到 message/output_text 文本");
