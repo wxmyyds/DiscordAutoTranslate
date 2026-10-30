@@ -18,7 +18,8 @@
   也不会被模型翻译成第二个 `@提及`/`:emoji:`）；
   URL 文本块（作为定位标记，不翻译）。
 - 列表项前置 `"\n" + "• "`（请求正文里列表符号可见，模型常原样回显）。
-- URL 与 emoji 在请求正文占位（定位锚点），要求模型保持其出现次数与顺序。
+- URL 与 emoji 在请求正文占位（定位锚点）。URL 要求模型保持出现次数与顺序
+  （URL 字符必须由原节点保真）；emoji 数量不符时降级回填，见下节。
 
 ## 回填对齐（译文落位）
 
@@ -34,6 +35,24 @@
    强行对齐会孤立这些节点。
 
 全部对不上 → 返回 null，调用方保留原文，不让复读或错位内容进入节点树。
+
+### emoji 锚点降级（2026-10 修复）
+
+上报消息为「角色提及 + `#` 标题 + 两行自定义 emoji + 文本」，图标显示
+已翻译、正文仍是英文。原因：两个自定义 emoji 是定位锚点，模型回译不保留
+`<:name:id>` 时旧的 `anchorsMatch` 让整条拒绝回填，状态却仍是 TRANSLATED。
+
+修复（`alignTranslation`）：
+
+- URL 与 emoji 校验拆开：`urlsMatch` 失败仍整条拒绝；
+- `emojiAnchorsMatch` 数量不符（或数量相符但顺序对不上）时不再拒绝，改为
+  `alignTokensIgnoringEmoji`：先 `stripEmojiAnchors` 剥离模型回显的锚点文本
+  与行首残留空白，再忽略 emoji 切分（emoji 显示本就由原节点提供，不消费
+  译文片段），仅按 URL 切间隔后走块/行逐级对齐；
+- 降级路径**禁用段落级合并**（`alignSpanToParts` 的 `allowParagraphMerge=false`）：
+  被降级跳过的正是夹在片段之间的 emoji，若允许合并会把除首片段外的片段
+  全部置空，表现为 emoji 后的文字消失。因此降级只接受块/行逐一对得上的
+  译文，模型跨段合并内容时仍保留原文。
 
 列表项处理（`AlignmentPlan.listFlags`，与 `groupIds` 平行）：
 

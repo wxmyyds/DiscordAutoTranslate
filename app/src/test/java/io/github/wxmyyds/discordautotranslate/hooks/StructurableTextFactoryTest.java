@@ -136,7 +136,8 @@ public class StructurableTextFactoryTest {
         TextExtractor.Result extracted = TextExtractor.extract(original);
         assertNotNull(extracted);
         String request = Protocols.requestBody(Config.PROTOCOL_OPENAI_COMPATIBLE,
-                extracted.text, Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL);
+                extracted.text, Config.DEF_SYSTEM_PROMPT, Config.DEF_MODEL,
+                Config.DEF_STREAMING);
         assertEquals(Protocols.WRAPPER_OPEN + " " + body + Protocols.WRAPPER_CLOSE,
                 JsonPath.extractString(request, "messages.1.content"));
 

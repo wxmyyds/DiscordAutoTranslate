@@ -57,7 +57,8 @@ public final class JsonApiEngine implements Scheduler.Engine {
      */
     private String requestOnce(String text) throws Exception {
         // 1) 按协议构造请求体（单链路：无标记纯文本，直接使用用户配置的提示词）
-        String body = Protocols.requestBody(cfg.protocol, text, cfg.systemPrompt, cfg.model);
+        String body = Protocols.requestBody(cfg.protocol, text, cfg.systemPrompt, cfg.model,
+                cfg.streaming);
         Http.Headers headers = buildHeaders();
 
         // 2) 发送（任务被取消时通过线程中断尽早退出）
@@ -65,10 +66,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
             throw new TranslationException(TranslationException.Kind.CANCELLED, "任务已取消");
         }
         String url = Protocols.endpoint(cfg.protocol, cfg.apiUrl);
-        // Compatible 与 Anthropic Messages 请求体带 stream:true，按 SSE 读取
-        // （前者读到 [DONE] 为止，后者无 [DONE]、读到连接关闭）；
-        // Responses 协议保持非流式。
-        boolean sse = !Config.PROTOCOL_OPENAI_RESPONSES.equals(cfg.protocol);
+        boolean sse = Protocols.supportsStreaming(cfg.protocol) && cfg.streaming;
         Http.Response resp = http.postJson(url, body, headers, sse);
 
         // 3) 状态码归类
@@ -77,7 +75,7 @@ public final class JsonApiEngine implements Scheduler.Engine {
         }
 
         // 4) 按协议提取译文
-        String translated = Protocols.extractTranslation(cfg.protocol, resp.body);
+        String translated = Protocols.extractTranslation(cfg.protocol, resp.body, sse);
         if (translated == null || translated.trim().isEmpty()) {
             throw new TranslationException(TranslationException.Kind.EMPTY, "提取到的译文为空");
         }
