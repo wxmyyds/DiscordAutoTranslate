@@ -30,6 +30,26 @@ Actions）：
 - keystore 在工作流内解码到 `$RUNNER_TEMP/keystore/`，仅存活于本次运行，
   不落地仓库、不进日志。
 
+## 发布与模块仓库同步
+
+`.github/workflows/release.yml` 手动触发，构建、签名并发布 APK：
+
+- `stable`：固定从 `main` 构建，发布正式版；构建前要求配置
+  `LSPOSED_REPO_TOKEN`。
+- `prerelease`：从指定分支或 commit SHA 构建，只发布到源码仓库，
+  不推送到 LSPosed 模块仓库。
+
+正式版 Release 发布成功后，同一 tag 和同名 APK 会自动同步到
+`Xposed-Modules-Repo/io.github.wxmyyds.discordautotranslate`。需要在该源码仓库
+配置仓库级 Secret（Settings → Secrets and variables → Actions）：
+
+| Secret | 值 |
+|---|---|
+| `LSPOSED_REPO_TOKEN` | 对模块仓库具有 `Contents: Read and write` 权限的 GitHub token |
+
+Token 仅由发布工作流读取，用于创建或更新目标仓库 Release；不写入仓库，也不输出到日志。
+若目标仓库已有同 tag Release，会更新标题和说明，并以 `--clobber` 替换 APK。
+
 ## build.gradle 读取方式
 
 `app/build.gradle` 只从环境变量 `KEYSTORE_PROPERTIES` 指向的 properties

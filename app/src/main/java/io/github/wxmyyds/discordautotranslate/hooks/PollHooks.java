@@ -60,10 +60,7 @@ public final class PollHooks {
     private PollHooks() {
     }
 
-    /**
-     * 安装投票翻译 Hook。增强能力：目标版本缺少对应类时静默降级，
-     * 不影响既有功能（安装失败不抛出）。
-     */
+    /** 安装投票翻译 Hook；目标版本缺少必需类型时不安装此可选功能。 */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(1);
         Class<?> holder = Reflect.loadClass(cl, CLS_POLL_HOLDER);
@@ -473,26 +470,15 @@ public final class PollHooks {
         return null;
     }
 
-    /** 取第 n 个组件（componentN，兼容名字修饰后缀；避免 component1 前缀误配 component11）。 */
+    /** 取第 n 个组件（componentN）。 */
     @Nullable
     private static Object callComponent(Object node, int n) {
-        Method fallback = null;
-        for (Method m : node.getClass().getDeclaredMethods()) {
-            if (m.getParameterCount() != 0) {
-                continue;
+        String expectedName = "component" + n;
+        for (Method method : node.getClass().getDeclaredMethods()) {
+            if (method.getParameterCount() == 0 && method.getName().equals(expectedName)) {
+                method.setAccessible(true);
+                return Reflect.call(method, node);
             }
-            String name = m.getName();
-            if (name.equals("component" + n)) {
-                m.setAccessible(true);
-                return Reflect.call(m, node);
-            }
-            if (name.startsWith("component" + n + "-")) {
-                fallback = m;
-            }
-        }
-        if (fallback != null) {
-            fallback.setAccessible(true);
-            return Reflect.call(fallback, node);
         }
         return null;
     }

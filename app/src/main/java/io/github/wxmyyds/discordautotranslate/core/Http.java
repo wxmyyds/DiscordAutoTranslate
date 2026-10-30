@@ -29,13 +29,10 @@ public final class Http {
     public static final class Response {
         public final int status;
         public final String body;
-        /** Retry-After 头（秒），限流时可能提供。 */
-        public final int retryAfterSeconds;
 
-        Response(int status, String body, int retryAfterSeconds) {
+        Response(int status, String body) {
             this.status = status;
             this.body = body;
-            this.retryAfterSeconds = retryAfterSeconds;
         }
 
         public boolean isSuccess() {
@@ -55,14 +52,14 @@ public final class Http {
         }
 
         /**
-         * 解析“每行一条 Name: Value”的多行文本。
-         * 非法行（缺少冒号）会被忽略并记账，由调用方决定是否提示。
+         * 解析“每行一条 Name: Value”的多行文本。空行和注释行忽略；非法行作为配置错误拒绝。
          */
-        public static Headers parse(@Nullable String multiLine) {
-            Headers h = new Headers();
+        public static Headers parse(@Nullable String multiLine) throws TranslationException {
             if (multiLine == null) {
-                return h;
+                throw new TranslationException(TranslationException.Kind.CONFIG,
+                        "额外请求头为空");
             }
+            Headers h = new Headers();
             int lineNo = 0;
             for (String raw : multiLine.split("\r?\n")) {
                 lineNo++;
@@ -71,13 +68,28 @@ public final class Http {
                     continue;
                 }
                 int idx = line.indexOf(':');
-                if (idx <= 0) {
-                    // 只记录行号与原因：该行可能包含未正确分隔的 Authorization 值。
-                    continue;
+                String name = idx < 0 ? "" : line.substring(0, idx).trim();
+                if (name.isEmpty()) {
+                    throw new TranslationException(TranslationException.Kind.CONFIG,
+                            "额外请求头格式无效（第 " + lineNo + " 行）");
                 }
-                h.add(line.substring(0, idx).trim(), line.substring(idx + 1).trim());
+                if (!validHeaderName(name)) {
+                    throw new TranslationException(TranslationException.Kind.CONFIG,
+                            "额外请求头名称无效（第 " + lineNo + " 行）");
+                }
+                h.add(name, line.substring(idx + 1).trim());
             }
             return h;
+        }
+
+        private static boolean validHeaderName(String name) {
+            for (int i = 0; i < name.length(); i++) {
+                char c = name.charAt(i);
+                if (!(Character.isLetterOrDigit(c) || "!#$%&'*+-.^_`|~".indexOf(c) >= 0)) {
+                    return false;
+                }
+            }
+            return !name.isEmpty();
         }
 
         /** 查找已设置的请求头（大小写不敏感）。 */
@@ -140,9 +152,9 @@ public final class Http {
      * @param sse 请求体含 {@code stream:true} 时为 true：按行读取并在
      *            {@code data: [DONE]} 处停止（不依赖服务端关流）。响应体
      *            原样返回（SSE 帧文本），由协议层解析累积 delta。
-     *            <p>流式的意义：读超时按字节间隔计算，token 持续到达
-     *            就不会触发；非流式接口生成完成前零字节返回，长生成会被
-     *            总时长超时掐断（实测：慢速中转上长消息必超时）。</p>
+     * <p>流式响应必须符合 SSE 格式；读到 EOF 的内容仍由协议解析器严格校验。
+     * 读超时按字节间隔计算，token 持续到达就不会触发；非流式接口生成完成前零字节返回，
+     * 长生成会被总时长超时掐断。</p>
      * @throws TranslationException 网络或超时错误（已归类）
      */
     public Response postJson(String url, String jsonBody, Headers headers, boolean sse)
@@ -176,9 +188,7 @@ public final class Http {
             int status = conn.getResponseCode();
             InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
             String body = sse ? readUntilDone(in) : readAll(in);
-            int retryAfter = parseIntSafe(conn.getHeaderField("Retry-After"));
-
-            return new Response(status, body, retryAfter);
+            return new Response(status, body);
 
         } catch (SocketTimeoutException e) {
             // 区分连接阶段与读阶段：读超时=服务端在预算内未回完响应
@@ -228,9 +238,8 @@ public final class Http {
     /**
      * 按行读取 SSE 响应体，读到 {@code data: [DONE]} 帧即停止。
      *
-     * <p>不能读到流关闭为止：部分服务端发完 [DONE] 后保持连接不关，
-     * 等关闭会一直阻塞到读超时。非流式 JSON 响应（服务端忽略 stream 参数）
-     * 没有 [DONE]，读到 EOF 自然结束，行为与 {@link #readAll} 一致。</p>
+     * <p>流式请求要求服务端返回 SSE；如在 {@code [DONE]} 前关闭，
+     * 协议解析器会将缺少结束事件的响应判为不完整。</p>
      */
     @Nullable
     private static String readUntilDone(@Nullable InputStream in) throws IOException {
@@ -254,14 +263,4 @@ public final class Http {
         }
     }
 
-    private static int parseIntSafe(@Nullable String s) {
-        if (s == null) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(s.trim());
-        } catch (Throwable t) {
-            return 0;
-        }
-    }
 }

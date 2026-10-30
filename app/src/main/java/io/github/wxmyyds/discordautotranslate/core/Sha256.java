@@ -2,6 +2,7 @@ package io.github.wxmyyds.discordautotranslate.core;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 /**
  * SHA-256 摘要的十六进制编码。
@@ -19,7 +20,7 @@ final class Sha256 {
      *
      * <p>两段之间以空字节分隔，保证拼接无歧义（段内容不会跨界组合出相同摘要）。</p>
      *
-     * @return 十六进制摘要；算法不可用（理论不可达）时返回 null，由调用方自行降级
+     * @return 十六进制 SHA-256 摘要；算法不可用时明确失败。
      */
     static String digestHex(String part1, String part2) {
         try {
@@ -34,8 +35,8 @@ final class Sha256 {
                 sb.append(Character.forDigit(b & 0xF, 16));
             }
             return sb.toString();
-        } catch (Throwable t) {
-            return null;
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
         }
     }
 }

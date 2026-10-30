@@ -8,16 +8,10 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
- * 配置读取的回落规则。
+ * 配置读取与显式无效配置行为。
  *
- * <p>未配置的项一律回落默认值。
- * “未配置”包括：键不存在、值为 {@code null}、值为空白字符串、
- * 以及正整数项小于等于 0。</p>
- *
- * <p>为什么必须这样：设置页每个输入框在保存时都会写入，
- * 用户清空某一格再保存就会存下空字符串。若把空字符串当有效值，
- * 会出现“模型名为空 / 目标语言为空 / 响应路径为空”之类
- * 难查的静默失效。</p>
+ * <p>未保存的键使用默认值；已保存但类型/取值不合法的键使整个快照无效，
+ * 不再静默替换成默认值或其它协议。</p>
  */
 public class ConfigTest {
 
@@ -25,6 +19,7 @@ public class ConfigTest {
     @Test
     public void emptyPrefsUseAllDefaults() {
         Config.Snapshot s = Config.read(new MemoryPrefs());
+        assertTrue(s.configError == null);
         assertEquals(Config.DEF_ENABLED, s.enabled);
         assertEquals(Config.DEF_API_URL, s.apiUrl);
         assertEquals(Config.DEF_MODEL, s.model);
@@ -36,7 +31,17 @@ public class ConfigTest {
     }
 
     @Test
-    public void wrongTypedPreferenceFallsBackPerField() {
+    public void defaultPromptUsesConfiguredTargetLanguage() {
+        Config.Snapshot japanese = Config.read(new MemoryPrefs()
+                .put(Config.KEY_TARGET_LANG, "日本語"));
+        assertEquals(Config.DEF_SYSTEM_PROMPT, japanese.systemPrompt);
+        assertTrue(Config.defaultSystemPromptFor(japanese.targetLang).contains("into 日本語"));
+        assertFalse(Config.defaultSystemPromptFor(japanese.targetLang)
+                .contains("Simplified Chinese"));
+    }
+
+    @Test
+    public void wrongTypedPreferenceMarksSnapshotInvalid() {
         Config.Snapshot s = Config.read(new MemoryPrefs()
                 .put(Config.KEY_API_URL, 17)
                 .put(Config.KEY_ENABLED, "true")
@@ -44,11 +49,8 @@ public class ConfigTest {
                 .put(Config.KEY_MODEL, "kept-model")
                 .put(Config.KEY_MAX_CONCURRENCY, 6));
 
-        assertEquals(Config.DEF_API_URL, s.apiUrl);
-        assertEquals(Config.DEF_ENABLED, s.enabled);
-        assertEquals(Config.DEF_TIMEOUT_MS, s.timeoutMs);
-        assertEquals("kept-model", s.model);
-        assertEquals(6, s.maxConcurrency);
+        assertTrue(s.configError != null);
+        assertFalse(s.isUsable());
     }
 
     @Test
@@ -80,50 +82,43 @@ public class ConfigTest {
         assertFalse(keyChanged.contains("sk-test-key"));
     }
 
-    /** 密钥与额外请求头可为空；其他字段空白时回落默认。 */
+    /** 密钥与额外请求头可为空；必填字符串空白为配置错误。 */
     @Test
-    public void blankStringsFallBackToDefaults() {
-        MemoryPrefs p = new MemoryPrefs()
+    public void blankRequiredStringsMarkSnapshotInvalid() {
+        Config.Snapshot s = Config.read(new MemoryPrefs()
                 .put(Config.KEY_API_URL, "")
                 .put(Config.KEY_MODEL, "   ")
                 .put(Config.KEY_TARGET_LANG, "")
-                .put(Config.KEY_SYSTEM_PROMPT, "  \n ");
-
-        Config.Snapshot s = Config.read(p);
-        assertEquals(Config.DEF_API_URL, s.apiUrl);
-        assertEquals(Config.DEF_MODEL, s.model);
-        assertEquals(Config.DEF_TARGET_LANG, s.targetLang);
-        assertEquals(Config.DEF_SYSTEM_PROMPT, s.systemPrompt);
-        assertEquals(Config.DEF_PROTOCOL, s.protocol);
+                .put(Config.KEY_SYSTEM_PROMPT, "  \n "));
+        assertTrue(s.configError != null);
+        assertFalse(s.isUsable());
     }
 
-    /** null 值同样回落默认值。 */
+    /** 显式 null 值是配置错误，不被替换成默认值。 */
     @Test
-    public void nullValuesFallBackToDefaults() {
-        MemoryPrefs p = new MemoryPrefs()
+    public void explicitNullValuesMarkSnapshotInvalid() {
+        Config.Snapshot s = Config.read(new MemoryPrefs()
                 .put(Config.KEY_API_URL, null)
-                .put(Config.KEY_PROTOCOL, null);
-
-        Config.Snapshot s = Config.read(p);
-        assertEquals(Config.DEF_API_URL, s.apiUrl);
-        assertEquals(Config.DEF_PROTOCOL, s.protocol);
+                .put(Config.KEY_PROTOCOL, null));
+        assertTrue(s.configError != null);
+        assertFalse(s.isUsable());
     }
 
-    /** 协议只接受已知值；空白与未知字符串（含类型异常）一律回落默认协议。 */
+    /** 协议只接受已知值；显式未知值或类型异常都使快照无效。 */
     @Test
-    public void protocolOnlyAcceptsKnownValues() {
+    public void protocolRejectsUnknownAndWrongTypedValues() {
         assertEquals(Config.PROTOCOL_OPENAI_RESPONSES, Config.read(new MemoryPrefs()
                 .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_RESPONSES)).protocol);
         assertEquals(Config.PROTOCOL_OPENAI_COMPATIBLE, Config.read(new MemoryPrefs()
                 .put(Config.KEY_PROTOCOL, Config.PROTOCOL_OPENAI_COMPATIBLE)).protocol);
         assertEquals(Config.PROTOCOL_ANTHROPIC_MESSAGES, Config.read(new MemoryPrefs()
                 .put(Config.KEY_PROTOCOL, Config.PROTOCOL_ANTHROPIC_MESSAGES)).protocol);
-        assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
-                .put(Config.KEY_PROTOCOL, "gemini")).protocol);
-        assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
-                .put(Config.KEY_PROTOCOL, " ")).protocol);
-        assertEquals(Config.DEF_PROTOCOL, Config.read(new MemoryPrefs()
-                .put(Config.KEY_PROTOCOL, 17)).protocol);
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_PROTOCOL, "gemini"))
+                .configError != null);
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_PROTOCOL, " "))
+                .configError != null);
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_PROTOCOL, 17))
+                .configError != null);
     }
 
     /** 协议改变请求与解析方式，必须参与配置版本，切换后旧缓存/在途结果失效。 */
@@ -179,17 +174,17 @@ public class ConfigTest {
         assertNotEquals(snapshot.version(), defaults.version());
     }
 
-    /** 超时与并发为 0 或负数时回落默认值（否则请求会直接失败）。 */
+    /** 超时与并发为 0 或负数时使配置无效。 */
     @Test
-    public void nonPositiveIntsFallBackToDefaults() {
-        assertEquals(Config.DEF_TIMEOUT_MS,
-                Config.read(new MemoryPrefs().put(Config.KEY_TIMEOUT_MS, 0)).timeoutMs);
-        assertEquals(Config.DEF_TIMEOUT_MS,
-                Config.read(new MemoryPrefs().put(Config.KEY_TIMEOUT_MS, -1)).timeoutMs);
-        assertEquals(Config.DEF_MAX_CONCURRENCY,
-                Config.read(new MemoryPrefs().put(Config.KEY_MAX_CONCURRENCY, 0)).maxConcurrency);
-        assertEquals(Config.DEF_MAX_CONCURRENCY,
-                Config.read(new MemoryPrefs().put(Config.KEY_MAX_CONCURRENCY, -5)).maxConcurrency);
+    public void nonPositiveIntsMarkSnapshotInvalid() {
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_TIMEOUT_MS, 0))
+                .configError != null);
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_TIMEOUT_MS, -1))
+                .configError != null);
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_MAX_CONCURRENCY, 0))
+                .configError != null);
+        assertTrue(Config.read(new MemoryPrefs().put(Config.KEY_MAX_CONCURRENCY, -5))
+                .configError != null);
     }
 
     /** 正常的正整数配置必须保留。 */
@@ -204,8 +199,7 @@ public class ConfigTest {
 
     /**
      * API 密钥与额外请求头的默认值本身即为空串。
-     * 因此“空白回落默认值”对它们是等价的，不会破坏
-     * “无需认证 / 无额外请求头”的正常用法。
+     * 因此空值是无需认证、无需额外请求头的有效配置。
      */
     @Test
     public void emptyApiKeyAndHeadersStayEmpty() {

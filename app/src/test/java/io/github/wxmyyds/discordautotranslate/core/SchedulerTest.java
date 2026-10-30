@@ -192,22 +192,20 @@ public class SchedulerTest {
     }
 
     @Test
-    public void retryableErrorIsRetriedUpToMaxAttempts() throws Exception {
+    public void transientErrorIsAttemptedOnlyOnce() throws Exception {
         Scheduler s = new Scheduler();
         try {
             AtomicInteger calls = new AtomicInteger();
             Scheduler.Engine alwaysTimeout = text -> {
                 calls.incrementAndGet();
-                // TIMEOUT 属可重试错误
                 throw new TranslationException(TranslationException.Kind.TIMEOUT, "timeout");
             };
             Collector c = new Collector();
             s.submit("1", "h1", "hello", alwaysTimeout, ALWAYS, c);
             c.await();
-            // MAX_ATTEMPTS = 3
-            assertEquals(3, calls.get());
-            assertEquals(2, s.retriedCount());
+            assertEquals(1, calls.get());
             assertTrue(c.error instanceof TranslationException);
+            assertEquals(1, s.failedCount());
         } finally {
             s.shutdown();
         }
@@ -227,78 +225,38 @@ public class SchedulerTest {
             Collector c = new Collector();
             s.submit("1", "h1", "hello", authFail, ALWAYS, c);
             c.await();
-            assertEquals("4xx must not be retried", 1, calls.get());
-            assertEquals(0, s.retriedCount());
+            assertEquals(1, calls.get());
         } finally {
             s.shutdown();
         }
     }
 
     @Test
-    public void retrySucceedsOnSecondAttempt() throws Exception {
+    public void transientFailureDoesNotRetryToSuccess() throws Exception {
         Scheduler s = new Scheduler();
         try {
             AtomicInteger calls = new AtomicInteger();
             Scheduler.Engine flaky = text -> {
-                if (calls.incrementAndGet() == 1) {
-                    throw new TranslationException(TranslationException.Kind.TIMEOUT, "timeout");
-                }
-                return "ok";
+                calls.incrementAndGet();
+                throw new TranslationException(TranslationException.Kind.TIMEOUT, "timeout");
             };
             Collector c = new Collector();
             s.submit("1", "h1", "hello", flaky, ALWAYS, c);
             c.await();
-            assertEquals(2, calls.get());
-            assertEquals("ok", c.translated);
-            assertNull(c.error);
+            assertEquals(1, calls.get());
+            assertNull(c.translated);
+            assertTrue(c.error instanceof TranslationException);
         } finally {
             s.shutdown();
         }
     }
 
     @Test
-    public void serverError5xxIsRetryable() {
-        TranslationException e500 = new TranslationException(
-                TranslationException.Kind.HTTP, "server", 500, null);
-        TranslationException e503 = new TranslationException(
-                TranslationException.Kind.HTTP, "unavailable", 503, null);
-        TranslationException e400 = new TranslationException(
-                TranslationException.Kind.HTTP, "bad request", 400, null);
-        assertTrue(e500.isRetryable());
-        assertTrue(e503.isRetryable());
-        assertFalse(e400.isRetryable());
-    }
-
-    @Test
-    public void rateLimitIsRetryableAndHasReadableMessage() {
+    public void rateLimitErrorHasReadableMessage() {
         TranslationException e = new TranslationException(
                 TranslationException.Kind.RATE_LIMIT, "限流", 429, null);
-        assertTrue(e.isRetryable());
         assertTrue(e.userMessage().contains("限流"));
     }
-
-    @Test
-    public void rateLimitBackoffHonorsRetryAfterWithinBound() {
-        TranslationException advised = new TranslationException(
-                TranslationException.Kind.RATE_LIMIT, "limited", 429, 7, null);
-        TranslationException huge = new TranslationException(
-                TranslationException.Kind.RATE_LIMIT, "limited", 429, Integer.MAX_VALUE, null);
-        TranslationException missing = new TranslationException(
-                TranslationException.Kind.RATE_LIMIT, "limited", 429, null);
-
-        assertEquals(7000L, Scheduler.backoffMillis(1, advised));
-        assertEquals(60000L, Scheduler.backoffMillis(1, huge));
-        assertEquals(2000L, Scheduler.backoffMillis(1, missing));
-    }
-
-    @Test
-    public void configErrorIsNeverRetryable() {
-        TranslationException e = new TranslationException(
-                TranslationException.Kind.CONFIG, "missing url");
-        assertFalse(e.isRetryable());
-        assertTrue(e.userMessage().startsWith("配置错误"));
-    }
-
     @Test
     public void contentHashIsStableAndConfigSensitive() {
         String a = Scheduler.contentHash("hello", "cfg1");

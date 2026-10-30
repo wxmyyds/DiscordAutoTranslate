@@ -110,15 +110,12 @@ public final class MessageHooks {
     private static void installBindHook(XposedModule module, ClassLoader cl,
                                         List<XposedInterface.HookHandle> out) {
         Class<?> holder = Reflect.loadClass(cl, CLS_CONTENT_VIEW_HOLDER);
-        if (holder == null) {
+        Class<?> accessory = Reflect.loadClass(cl, CLS_CONTENT_ACCESSORY);
+        if (holder == null || accessory == null) {
             return;
         }
-        Class<?> accessory = Reflect.loadClass(cl, CLS_CONTENT_ACCESSORY);
 
         Method bind = Reflect.findMethod(holder, "bind", BIND_PARAM_COUNT, accessory);
-        if (bind == null) {
-            bind = Reflect.findMethod(holder, "bind", BIND_PARAM_COUNT);
-        }
         if (bind == null) {
             return;
         }
@@ -323,6 +320,9 @@ public final class MessageHooks {
                                         .forTranslation(source, translated);
                                 if (replacement != null) {
                                     renderArgs[0] = replacement;
+                                } else {
+                                    HookBridge.get().onTranslationRenderRejected(
+                                            messageId, translated);
                                 }
                             }
                         }

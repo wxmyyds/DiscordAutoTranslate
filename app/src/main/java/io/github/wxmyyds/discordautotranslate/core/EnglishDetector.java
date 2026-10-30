@@ -2,19 +2,9 @@ package io.github.wxmyyds.discordautotranslate.core;
 
 import androidx.annotation.Nullable;
 
-/**
- * 英文（自然语言）识别。
- *
- * <p>目标：判断一条消息是否“值得翻译”。要求宁可漏翻也不要明显误翻。</p>
- *
- * <p>规则（第一版，可在测试中调整）：
- * <ol>
- *   <li>空内容、纯数字、纯符号、纯链接 → 不翻译。</li>
- *   <li>代码块占主体 → 不翻译。</li>
- *   <li>正文中 ASCII 字母占比达到阈值，且拉丁字母数量足够 → 判定为英文。</li>
- *   <li>含 CJK 字符比例较高 → 不翻译（已是中文或其他东亚语言）。</li>
- * </ol>
- */
+import java.util.Locale;
+
+/** 判断消息是否包含足量的非目标语言自然语言文本。 */
 public final class EnglishDetector {
 
     /** 判定结果与依据，便于诊断。 */
@@ -28,18 +18,23 @@ public final class EnglishDetector {
         }
     }
 
-    /** 有效拉丁字母的最小数量，低于此值不翻译（避免 "ok"、"lol" 之类）。 */
     private static final int MIN_LETTERS = 4;
-    /** 拉丁字母占“非空白字符”的最低比例。 */
     private static final float MIN_LETTER_RATIO = 0.5f;
-    /** CJK 字符占比超过该值时认为不是英文消息。 */
-    private static final float MAX_CJK_RATIO = 0.2f;
+    private static final float MIN_TARGET_SCRIPT_RATIO = 0.2f;
 
     private EnglishDetector() {
     }
 
+    /** 与旧调用方兼容；默认目标语言为简体中文。 */
     public static Verdict evaluate(@Nullable String rawText, int textNodeCount,
                                    int opaqueNodeCount, boolean codeHeavy) {
+        return evaluate(rawText, textNodeCount, opaqueNodeCount, codeHeavy,
+                Config.DEF_TARGET_LANG);
+    }
+
+    public static Verdict evaluate(@Nullable String rawText, int textNodeCount,
+                                   int opaqueNodeCount, boolean codeHeavy,
+                                   @Nullable String targetLanguage) {
         if (rawText == null || rawText.trim().isEmpty()) {
             return new Verdict(false, "empty");
         }
@@ -47,37 +42,45 @@ public final class EnglishDetector {
             return new Verdict(false, "code-block");
         }
 
-        String text = rawText;
-
-        // 去掉 URL，避免链接里的英文导致误判。
-        text = text.replaceAll("https?://\\S+", " ");
-        // 去掉行内代码内容。
-        text = text.replaceAll("`[^`]*`", " ");
-        // 去掉原文中的自定义表情语法；结构节点不再生成可翻译的占位词。
-        text = text.replaceAll(":[A-Za-z0-9_]+:", " ");
+        String text = rawText.replaceAll("https?://\\S+", " ")
+                .replaceAll("`[^`]*`", " ")
+                .replaceAll(":([A-Za-z0-9_]+):", " ");
 
         int letters = 0;
-        int cjk = 0;
         int nonSpace = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (Character.isWhitespace(c)) {
+        int han = 0;
+        int kana = 0;
+        int hangul = 0;
+        int targetLetters = 0;
+        TargetScript targetScript = targetScript(targetLanguage);
+
+        for (int offset = 0; offset < text.length();) {
+            int cp = text.codePointAt(offset);
+            offset += Character.charCount(cp);
+            if (Character.isWhitespace(cp)) {
                 continue;
             }
             nonSpace++;
-            if (isLatinLetter(c)) {
-                letters++;
-            } else if (isCjk(c)) {
-                cjk++;
+            if (!Character.isLetter(cp)) {
+                continue;
+            }
+            letters++;
+            Character.UnicodeScript script = Character.UnicodeScript.of(cp);
+            if (script == Character.UnicodeScript.HAN) {
+                han++;
+            } else if (script == Character.UnicodeScript.HIRAGANA
+                    || script == Character.UnicodeScript.KATAKANA) {
+                kana++;
+            } else if (script == Character.UnicodeScript.HANGUL) {
+                hangul++;
+            }
+            if (matchesTargetScript(script, targetScript)) {
+                targetLetters++;
             }
         }
 
         if (nonSpace == 0) {
             return new Verdict(false, "no-visible-content");
-        }
-        float cjkRatio = (float) cjk / nonSpace;
-        if (cjkRatio > MAX_CJK_RATIO) {
-            return new Verdict(false, "cjk-dominant(" + round(cjkRatio) + ")");
         }
         if (letters < MIN_LETTERS) {
             return new Verdict(false, "too-few-letters(" + letters + ")");
@@ -92,21 +95,108 @@ public final class EnglishDetector {
         if (opaqueNodeCount > textNodeCount * 3) {
             return new Verdict(false, "mostly-structure");
         }
-        // 含 Markdown 的消息文本节点多、结构节点也多，不因结构节点多而跳过；
-        // 只要正文确有足够的拉丁字母就应翻译。
-        return new Verdict(true, "english(letters=" + letters + ",ratio=" + round(letterRatio) + ")");
+
+        // Han-only text is treated as Chinese for the default target. Japanese kana
+        // and Korean Hangul disambiguate their scripts from Chinese.
+        if (targetScript == TargetScript.HAN
+                && kana == 0 && hangul == 0
+                && (float) han / letters >= MIN_TARGET_SCRIPT_RATIO) {
+            return new Verdict(false, "target-language-script(chinese)");
+        }
+        if (targetScript == TargetScript.JAPANESE && kana > 0) {
+            return new Verdict(false, "target-language-script(japanese)");
+        }
+        if (targetScript != TargetScript.HAN && targetScript != TargetScript.JAPANESE
+                && targetScript != TargetScript.NONE
+                && (float) targetLetters / letters >= MIN_TARGET_SCRIPT_RATIO) {
+            return new Verdict(false, "target-language-script(" + targetLanguage + ")");
+        }
+        return new Verdict(true, "translatable(letters=" + letters
+                + ",ratio=" + round(letterRatio) + ")");
     }
 
-    private static boolean isLatinLetter(char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    private enum TargetScript {
+        NONE, HAN, JAPANESE, HANGUL, CYRILLIC, ARABIC, GREEK, HEBREW,
+        DEVANAGARI, BENGALI, THAI
     }
 
-    private static boolean isCjk(char c) {
-        // CJK 统一表意文字 + 扩展 A + 假名 + 韩文音节
-        return (c >= 0x4E00 && c <= 0x9FFF)
-                || (c >= 0x3400 && c <= 0x4DBF)
-                || (c >= 0x3040 && c <= 0x30FF)
-                || (c >= 0xAC00 && c <= 0xD7AF);
+    private static TargetScript targetScript(@Nullable String language) {
+        if (language == null) {
+            return TargetScript.HAN;
+        }
+        String value = language.trim().toLowerCase(Locale.ROOT);
+        if (value.isEmpty()) {
+            return TargetScript.HAN;
+        }
+        if (containsAny(value, "中文", "汉语", "漢語", "chinese", "zh")) {
+            return TargetScript.HAN;
+        }
+        if (containsAny(value, "日本", "japanese", "ja")) {
+            return TargetScript.JAPANESE;
+        }
+        if (containsAny(value, "한국", "조선", "korean", "ko")) {
+            return TargetScript.HANGUL;
+        }
+        if (containsAny(value, "рус", "russian", "ru", "укра", "ukrainian", "uk")) {
+            return TargetScript.CYRILLIC;
+        }
+        if (containsAny(value, "العربية", "arabic", "ar", "فارسی", "persian", "farsi", "fa")) {
+            return TargetScript.ARABIC;
+        }
+        if (containsAny(value, "ελλην", "greek", "el")) {
+            return TargetScript.GREEK;
+        }
+        if (containsAny(value, "עברית", "hebrew", "he")) {
+            return TargetScript.HEBREW;
+        }
+        if (containsAny(value, "हिन्दी", "hindi", "hi")) {
+            return TargetScript.DEVANAGARI;
+        }
+        if (containsAny(value, "বাংলা", "bengali", "bn")) {
+            return TargetScript.BENGALI;
+        }
+        if (containsAny(value, "ไทย", "thai", "th")) {
+            return TargetScript.THAI;
+        }
+        return TargetScript.NONE;
+    }
+
+    private static boolean matchesTargetScript(Character.UnicodeScript script,
+                                                TargetScript target) {
+        switch (target) {
+            case HAN:
+                return script == Character.UnicodeScript.HAN;
+            case JAPANESE:
+                return script == Character.UnicodeScript.HIRAGANA
+                        || script == Character.UnicodeScript.KATAKANA;
+            case HANGUL:
+                return script == Character.UnicodeScript.HANGUL;
+            case CYRILLIC:
+                return script == Character.UnicodeScript.CYRILLIC;
+            case ARABIC:
+                return script == Character.UnicodeScript.ARABIC;
+            case GREEK:
+                return script == Character.UnicodeScript.GREEK;
+            case HEBREW:
+                return script == Character.UnicodeScript.HEBREW;
+            case DEVANAGARI:
+                return script == Character.UnicodeScript.DEVANAGARI;
+            case BENGALI:
+                return script == Character.UnicodeScript.BENGALI;
+            case THAI:
+                return script == Character.UnicodeScript.THAI;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean containsAny(String value, String... needles) {
+        for (String needle : needles) {
+            if (value.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String round(float f) {

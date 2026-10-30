@@ -83,7 +83,7 @@ public final class RerenderRegistry {
             for (int i = 0; i < list.size(); i++) {
                 Target existing = list.get(i);
                 if (existing.contentView.get() == contentView) {
-                    // 同一视图再次渲染：替换为新实参，避免重渲染回退到旧内容。
+                    // 同一视图再次渲染：以最新实参替换已登记记录。
                     list.set(i, new Target(contentView, invocationTarget, method, args.clone()));
                     return;
                 }

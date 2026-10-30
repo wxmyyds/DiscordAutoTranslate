@@ -5,7 +5,9 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
@@ -22,11 +24,17 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import io.github.wxmyyds.discordautotranslate.R;
 import io.github.wxmyyds.discordautotranslate.core.Config;
 import io.github.wxmyyds.discordautotranslate.core.Protocols;
 import io.github.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import io.github.wxmyyds.discordautotranslate.translate.ApiTester;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -39,6 +47,33 @@ import io.github.libxposed.service.XposedService;
 /** 设置界面（需求 §5.7）。 */
 public class SettingsActivity extends Activity implements XposedServiceConnectionHolder.Listener {
 
+    private static final String LOCAL_PREFS_NAME = "settings_before_activation";
+    private static final String KEY_LOCAL_INITIALIZED = "settings_initialized";
+    private static final String[] CONFIG_KEYS = {
+            Config.KEY_ENABLED, Config.KEY_API_URL, Config.KEY_API_KEY, Config.KEY_MODEL,
+            Config.KEY_TARGET_LANG, Config.KEY_EXTRA_HEADERS, Config.KEY_SYSTEM_PROMPT,
+            Config.KEY_PROTOCOL, Config.KEY_STREAMING, Config.KEY_TIMEOUT_MS,
+            Config.KEY_MAX_CONCURRENCY
+    };
+
+    private static final String[] TARGET_LANGUAGE_VALUES = {
+            "简体中文", "繁體中文", "English", "日本語", "한국어", "Русский",
+            "Українська", "Español", "Français", "Deutsch", "Português", "Italiano",
+            "العربية", "فارسی", "हिन्दी", "বাংলা", "ไทย", "עברית", "Ελληνικά",
+            "Tiếng Việt", "Türkçe", "Bahasa Indonesia"
+    };
+    private static final String[] TARGET_LANGUAGE_LABELS_EN = {
+            "Simplified Chinese", "Traditional Chinese", "English", "Japanese", "Korean",
+            "Russian", "Ukrainian", "Spanish", "French", "German", "Portuguese", "Italian",
+            "Arabic", "Persian", "Hindi", "Bengali", "Thai", "Hebrew", "Greek",
+            "Vietnamese", "Turkish", "Indonesian"
+    };
+    private static final String[] TARGET_LANGUAGE_LABELS_ZH = {
+            "简体中文", "繁體中文", "英语", "日语", "韩语", "俄语", "乌克兰语", "西班牙语",
+            "法语", "德语", "葡萄牙语", "意大利语", "阿拉伯语", "波斯语", "印地语",
+            "孟加拉语", "泰语", "希伯来语", "希腊语", "越南语", "土耳其语", "印尼语"
+    };
+
     /** 下拉框显示顺序：0=OpenAI-Responses，1=OpenAI-Compatible，2=Anthropic-Messages。 */
     private static final String[] PROTOCOL_ENTRIES =
             {"OpenAI-Responses", "OpenAI-Compatible", "Anthropic-Messages"};
@@ -49,21 +84,32 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     @Nullable
     private XposedService service;
-    @Nullable
     private SharedPreferences prefs;
+    @Nullable
+    private SharedPreferences remotePrefs;
     @Nullable
     private Future<?> testFuture;
 
     private long testGeneration;
     private long serviceGeneration;
     private boolean saveInProgress;
+    private boolean syncInProgress;
     private boolean destroyed;
 
     private Spinner protocolSpinner;
+    private Spinner targetLanguageSpinner;
+    private ArrayAdapter<String> targetLanguageAdapter;
+    private final List<String> targetLanguageValues = new ArrayList<>();
+    private boolean chineseUi;
+    private boolean loadingUi;
+    private boolean hasUnsavedChanges;
+    @Nullable
+    private String baselineProtocol;
+    @Nullable
+    private String baselineTargetLanguage;
     private EditText urlInput;
     private EditText keyInput;
     private EditText modelInput;
-    private EditText targetLangInput;
     private EditText headersInput;
     private EditText systemPromptInput;
     private EditText timeoutInput;
@@ -81,9 +127,14 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTitle("Discord 自动翻译");
+        chineseUi = isChineseSystemLanguage();
+        setTitle(R.string.module_name);
         setContentView(buildContentView());
-        updateStatus("正在连接 LSPosed 服务…");
+        prefs = getSharedPreferences(LOCAL_PREFS_NAME, MODE_PRIVATE);
+        loadIntoUi();
+        installDirtyTracking();
+        updateSaveButtonState();
+        updateStatus(getString(R.string.status_local_ready));
         XposedServiceConnectionHolder.bind(this);
     }
 
@@ -101,22 +152,62 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     @Override
     public void onServiceConnected(@NonNull XposedService connectedService) {
-        if (destroyed) {
+        if (destroyed || prefs == null) {
             return;
         }
         service = connectedService;
         serviceGeneration++;
         saveInProgress = false;
+        syncInProgress = false;
+        final long generation = serviceGeneration;
         try {
-            prefs = connectedService.getRemotePreferences(Config.GROUP);
-            loadIntoUi();
-            updateSaveButtonState();
-            updateStatus("已连接 LSPosed " + connectedService.getFrameworkVersion()
-                    + "（API " + connectedService.getApiVersion() + "）");
+            remotePrefs = connectedService.getRemotePreferences(Config.GROUP);
         } catch (Throwable t) {
-            prefs = null;
+            remotePrefs = null;
+            updateStatus(getString(R.string.status_sync_pending));
             updateSaveButtonState();
-            updateStatus("读取配置失败：" + t.getClass().getSimpleName());
+            return;
+        }
+
+        syncInProgress = true;
+        updateSaveButtonState();
+        updateStatus(getString(R.string.status_syncing));
+        final SharedPreferences local = prefs;
+        final SharedPreferences remote = remotePrefs;
+        try {
+            saveExecutor.execute(() -> {
+                boolean synced = false;
+                try {
+                    if (local.getBoolean(KEY_LOCAL_INITIALIZED, false)) {
+                        synced = copyConfigPreferences(local, remote, false);
+                    } else {
+                        synced = copyConfigPreferences(remote, local, true);
+                    }
+                } catch (Throwable ignored) {
+                    synced = false;
+                }
+                final boolean syncResult = synced;
+                mainHandler.post(() -> {
+                    if (destroyed || generation != serviceGeneration
+                            || local != prefs || remote != remotePrefs) {
+                        return;
+                    }
+                    syncInProgress = false;
+                    if (!hasUnsavedChanges) {
+                        loadIntoUi();
+                    }
+                    updateSaveButtonState();
+                    updateStatus(syncResult
+                            ? getString(R.string.status_connected,
+                                    connectedService.getFrameworkVersion(),
+                                    connectedService.getApiVersion())
+                            : getString(R.string.status_sync_failed));
+                });
+            });
+        } catch (Throwable t) {
+            syncInProgress = false;
+            updateSaveButtonState();
+            updateStatus(getString(R.string.status_sync_failed));
         }
     }
 
@@ -126,11 +217,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             return;
         }
         service = null;
-        prefs = null;
+        remotePrefs = null;
         serviceGeneration++;
         saveInProgress = false;
+        syncInProgress = false;
         updateSaveButtonState();
-        updateStatus("LSPosed 服务已断开，配置无法保存。");
+        updateStatus(getString(R.string.status_local_ready));
     }
 
     // ------------------------------------------------------------ UI 构建
@@ -146,13 +238,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         root.addView(statusText, matchWrap());
 
         enabledInput = new CheckBox(this);
-        enabledInput.setText("启用自动翻译");
+        enabledInput.setText(R.string.label_enabled);
         root.addView(enabledInput, matchWrap());
 
         // 供应商协议：请求体与译文解析按所选协议内置实现，
         // 不再让用户手写 JSON 请求模板与译文提取路径。
         TextView protocolLabel = new TextView(this);
-        protocolLabel.setText("供应商协议");
+        protocolLabel.setText(R.string.label_protocol);
         protocolLabel.setPadding(0, dp(8), 0, 0);
         root.addView(protocolLabel, matchWrap());
         protocolSpinner = new Spinner(this);
@@ -166,55 +258,80 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 updateStreamingAvailability();
+                markSpinnerDirty();
             }
 
             @Override
             public void onNothingSelected(AdapterView<?> parent) {
                 updateStreamingAvailability();
+                markSpinnerDirty();
             }
         });
         TextView protocolHint = new TextView(this);
         protocolHint.setTextSize(12f);
-        protocolHint.setText("API URL 只填到 /v1 的基础地址，请求时按所选协议追加端点："
-                + "OpenAI-Compatible 追加 /chat/completions，OpenAI-Responses 追加 /responses，"
-                + "Anthropic-Messages 追加 /messages，切换协议无需修改 URL。"
-                + "旧配置里填写的完整端点需删掉后缀只留基础地址。");
+        protocolHint.setText(R.string.hint_protocol);
         root.addView(protocolHint, matchWrap());
 
         streamingInput = new CheckBox(this);
-        streamingInput.setText("使用流式请求（Responses 协议不支持）");
+        streamingInput.setText(R.string.label_streaming);
         root.addView(streamingInput, matchWrap());
 
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
-        urlInput = addField(root, "API URL", Config.DEF_API_URL,
+        urlInput = addField(root, getString(R.string.label_api_url),
+                getString(R.string.hint_api_url),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        keyInput = addField(root, "API 密钥（仅保存在本机）", "",
+        keyInput = addField(root, getString(R.string.label_api_key), "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
-        targetLangInput = addField(root, "目标语言", Config.DEF_TARGET_LANG, InputType.TYPE_CLASS_TEXT);
-        headersInput = addField(root, "额外请求头（每行 Name: Value）", "",
+        modelInput = addField(root, getString(R.string.label_model), Config.DEF_MODEL,
+                InputType.TYPE_CLASS_TEXT);
+        TextView targetLanguageLabel = new TextView(this);
+        targetLanguageLabel.setText(R.string.label_target_language);
+        targetLanguageLabel.setPadding(0, dp(8), 0, 0);
+        root.addView(targetLanguageLabel, matchWrap());
+        targetLanguageSpinner = new Spinner(this);
+        targetLanguageValues.clear();
+        targetLanguageValues.addAll(Arrays.asList(TARGET_LANGUAGE_VALUES));
+        String[] labels = chineseUi ? TARGET_LANGUAGE_LABELS_ZH : TARGET_LANGUAGE_LABELS_EN;
+        targetLanguageAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, new ArrayList<>(Arrays.asList(labels)));
+        targetLanguageAdapter.setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+        targetLanguageSpinner.setAdapter(targetLanguageAdapter);
+        targetLanguageSpinner.setSelection(targetLanguagePosition(Config.DEF_TARGET_LANG));
+        targetLanguageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                markSpinnerDirty();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                markSpinnerDirty();
+            }
+        });
+        root.addView(targetLanguageSpinner, matchWrap());
+        headersInput = addField(root, getString(R.string.label_headers), "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        systemPromptInput = addField(root, "系统提示词（多行）",
-                Config.DEF_SYSTEM_PROMPT,
+        systemPromptInput = addField(root, getString(R.string.label_system_prompt),
+                getString(R.string.hint_system_prompt),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        timeoutInput = addField(root, "超时（毫秒）", String.valueOf(Config.DEF_TIMEOUT_MS),
-                InputType.TYPE_CLASS_NUMBER);
-        concurrencyInput = addField(root, "最大并发", String.valueOf(Config.DEF_MAX_CONCURRENCY),
-                InputType.TYPE_CLASS_NUMBER);
+        timeoutInput = addField(root, getString(R.string.label_timeout),
+                String.valueOf(Config.DEF_TIMEOUT_MS), InputType.TYPE_CLASS_NUMBER);
+        concurrencyInput = addField(root, getString(R.string.label_concurrency),
+                String.valueOf(Config.DEF_MAX_CONCURRENCY), InputType.TYPE_CLASS_NUMBER);
 
 
-        testTextInput = addField(root, "测试文本（“测试翻译”使用）",
-                ApiTester.DEFAULT_TEST_TEXT,
+        testTextInput = addField(root, getString(R.string.label_test_text),
+                getString(R.string.hint_test_text),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
         TextView privacy = new TextView(this);
         privacy.setTextSize(12f);
-        privacy.setText("隐私提示：启用后，消息正文会发送到上面配置的第三方翻译服务。"
-                + "密钥仅保存在本机，不会写入日志。");
+        privacy.setText(R.string.privacy_notice);
         root.addView(privacy, matchWrap());
 
         saveButton = new Button(this);
-        saveButton.setText("保存");
+        saveButton.setText(R.string.button_save);
         saveButton.setEnabled(false);
         saveButton.setOnClickListener(v -> save());
         root.addView(saveButton, matchWrap());
@@ -223,19 +340,19 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         testRow.setOrientation(LinearLayout.HORIZONTAL);
 
         configCheckButton = new Button(this);
-        configCheckButton.setText("配置检查");
+        configCheckButton.setText(R.string.button_config_check);
         configCheckButton.setOnClickListener(v -> runSelfCheck());
         testRow.addView(configCheckButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         testConnectionButton = new Button(this);
-        testConnectionButton.setText("测试连接");
+        testConnectionButton.setText(R.string.button_test_connection);
         testConnectionButton.setOnClickListener(v -> runTestTranslation(true));
         testRow.addView(testConnectionButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         testTranslationButton = new Button(this);
-        testTranslationButton.setText("测试翻译");
+        testTranslationButton.setText(R.string.button_test_translation);
         testTranslationButton.setOnClickListener(v -> runTestTranslation(false));
         testRow.addView(testTranslationButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -271,33 +388,117 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
-    /** 下拉框位置 → 协议存储值。未知位置回落默认协议。 */
+    /** 下拉框位置 → 协议存储值；无效位置返回 null 供配置校验拒绝。 */
+    @Nullable
     private static String protocolAt(int position) {
         if (position == 0) {
             return Config.PROTOCOL_OPENAI_RESPONSES;
         }
+        if (position == 1) {
+            return Config.PROTOCOL_OPENAI_COMPATIBLE;
+        }
         if (position == 2) {
             return Config.PROTOCOL_ANTHROPIC_MESSAGES;
         }
-        return Config.PROTOCOL_OPENAI_COMPATIBLE;
+        return null;
     }
 
-    /** 协议存储值 → 下拉框位置；未知值按默认协议处理。 */
+    /** 协议存储值 → 下拉框位置；未知值返回无选中位置。 */
     private static int positionOf(String protocol) {
         if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
             return 0;
         }
+        if (Config.PROTOCOL_OPENAI_COMPATIBLE.equals(protocol)) {
+            return 1;
+        }
         if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
             return 2;
         }
-        return 1;
+        return AdapterView.INVALID_POSITION;
+    }
+
+    private void installDirtyTracking() {
+        TextWatcher watcher = new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                markDirty();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        };
+        urlInput.addTextChangedListener(watcher);
+        keyInput.addTextChangedListener(watcher);
+        modelInput.addTextChangedListener(watcher);
+        headersInput.addTextChangedListener(watcher);
+        systemPromptInput.addTextChangedListener(watcher);
+        timeoutInput.addTextChangedListener(watcher);
+        concurrencyInput.addTextChangedListener(watcher);
+        testTextInput.addTextChangedListener(watcher);
+        enabledInput.setOnCheckedChangeListener((button, checked) -> markDirty());
+        streamingInput.setOnCheckedChangeListener((button, checked) -> markDirty());
+    }
+
+    private void markDirty() {
+        if (!loadingUi) {
+            hasUnsavedChanges = true;
+        }
+    }
+
+    private void markSpinnerDirty() {
+        if (loadingUi) {
+            return;
+        }
+        String protocol = protocolAt(protocolSpinner.getSelectedItemPosition());
+        String targetLanguage = selectedTargetLanguage();
+        if (!sameValue(protocol, baselineProtocol)
+                || !sameValue(targetLanguage, baselineTargetLanguage)) {
+            hasUnsavedChanges = true;
+        }
+    }
+
+    private static boolean sameValue(@Nullable String left, @Nullable String right) {
+        return left == null ? right == null : left.equals(right);
     }
 
     private void updateStreamingAvailability() {
         if (streamingInput != null && protocolSpinner != null) {
-            streamingInput.setEnabled(Protocols.supportsStreaming(
-                    protocolAt(protocolSpinner.getSelectedItemPosition())));
+            int position = protocolSpinner.getSelectedItemPosition();
+            boolean hasSelection = position >= 0 && position < 3;
+            streamingInput.setEnabled(hasSelection && Protocols.supportsStreaming(
+                    protocolAt(position)));
         }
+    }
+
+    /** 显示旧配置中的列表外语言，避免升级后静默改写用户设置。 */
+    private void ensureTargetLanguageAvailable(String language) {
+        if (language == null || targetLanguageAdapter == null
+                || targetLanguageValues.contains(language)) {
+            return;
+        }
+        targetLanguageValues.add(language);
+        targetLanguageAdapter.add(getString(R.string.legacy_language));
+    }
+
+    private int targetLanguagePosition(String language) {
+        return targetLanguageValues.indexOf(language);
+    }
+
+    @Nullable
+    private String selectedTargetLanguage() {
+        int position = targetLanguageSpinner.getSelectedItemPosition();
+        return position >= 0 && position < targetLanguageValues.size()
+                ? targetLanguageValues.get(position) : null;
+    }
+
+    private boolean isChineseSystemLanguage() {
+        Locale locale = getResources().getConfiguration().getLocales().get(0);
+        return "zh".equalsIgnoreCase(locale.getLanguage());
     }
 
     private int dp(int v) {
@@ -311,120 +512,154 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         if (currentPrefs == null) {
             return;
         }
-        Config.Snapshot snapshot = Config.read(currentPrefs);
-        enabledInput.setChecked(snapshot.enabled);
-        protocolSpinner.setSelection(positionOf(snapshot.protocol));
-        streamingInput.setChecked(snapshot.streaming);
-        updateStreamingAvailability();
-        // 等于默认值的填空项留空，让灰色占位符（hint 即默认值）展示默认值，
-        // 不把默认值填成实际文本。
-        setTextOrPlaceholder(urlInput, snapshot.apiUrl, Config.DEF_API_URL);
-        setTextOrPlaceholder(keyInput, snapshot.apiKey, Config.DEF_API_KEY);
-        setTextOrPlaceholder(modelInput, snapshot.model, Config.DEF_MODEL);
-        setTextOrPlaceholder(targetLangInput, snapshot.targetLang, Config.DEF_TARGET_LANG);
-        setTextOrPlaceholder(headersInput, snapshot.extraHeaders, Config.DEF_EXTRA_HEADERS);
-        setTextOrPlaceholder(systemPromptInput, snapshot.systemPrompt, Config.DEF_SYSTEM_PROMPT);
-        setTextOrPlaceholder(timeoutInput, String.valueOf(snapshot.timeoutMs),
-                String.valueOf(Config.DEF_TIMEOUT_MS));
-        setTextOrPlaceholder(concurrencyInput, String.valueOf(snapshot.maxConcurrency),
-                String.valueOf(Config.DEF_MAX_CONCURRENCY));
+        loadingUi = true;
+        try {
+            Config.Snapshot snapshot = Config.read(currentPrefs);
+            if (snapshot.configError != null) {
+                updateStatus(getString(R.string.status_invalid_config));
+            }
+            enabledInput.setChecked(snapshot.enabled);
+            protocolSpinner.setSelection(positionOf(snapshot.protocol));
+            streamingInput.setChecked(snapshot.streaming);
+            updateStreamingAvailability();
+            setTextOrPlaceholder(urlInput, snapshot.apiUrl, Config.DEF_API_URL);
+            setTextOrPlaceholder(keyInput, snapshot.apiKey, Config.DEF_API_KEY);
+            setTextOrPlaceholder(modelInput, snapshot.model, Config.DEF_MODEL);
+            ensureTargetLanguageAvailable(snapshot.targetLang);
+            targetLanguageSpinner.setSelection(targetLanguagePosition(snapshot.targetLang));
+            setTextOrPlaceholder(headersInput, snapshot.extraHeaders, Config.DEF_EXTRA_HEADERS);
+            setTextOrPlaceholder(systemPromptInput, snapshot.systemPrompt, Config.DEF_SYSTEM_PROMPT);
+            setTextOrPlaceholder(timeoutInput, String.valueOf(snapshot.timeoutMs),
+                    String.valueOf(Config.DEF_TIMEOUT_MS));
+            setTextOrPlaceholder(concurrencyInput, String.valueOf(snapshot.maxConcurrency),
+                    String.valueOf(Config.DEF_MAX_CONCURRENCY));
+            baselineProtocol = snapshot.protocol;
+            baselineTargetLanguage = snapshot.targetLang;
+            hasUnsavedChanges = false;
+        } finally {
+            loadingUi = false;
+        }
     }
 
     private void save() {
-        if (destroyed || prefs == null || service == null) {
-            updateStatus("未连接 LSPosed 服务，无法保存。请确认模块已在 LSPosed 中启用并勾选作用域。");
+        if (destroyed || prefs == null) {
+            updateStatus(getString(R.string.status_save_persist_failed));
             return;
         }
-        commitSnapshot(snapshotFromUi());
+        Config.Snapshot snapshot = snapshotFromUi();
+        if (snapshot.configError != null) {
+            updateStatus(getString(R.string.status_invalid_config));
+            return;
+        }
+        commitSnapshot(snapshot);
     }
 
     private void commitSnapshot(Config.Snapshot snapshot) {
-        final SharedPreferences targetPrefs = prefs;
-        final XposedService targetService = service;
-        final long generation = serviceGeneration;
-        if (destroyed || targetPrefs == null || targetService == null) {
-            updateStatus("LSPosed 服务已断开，配置无法保存。");
+        final SharedPreferences local = prefs;
+        final SharedPreferences remote = remotePrefs;
+        if (destroyed || local == null) {
+            updateStatus(getString(R.string.status_save_persist_failed));
             return;
         }
 
         final SharedPreferences.Editor editor;
         try {
-            editor = targetPrefs.edit();
-            editor.putBoolean(Config.KEY_ENABLED, snapshot.enabled);
-            editor.putString(Config.KEY_PROTOCOL, snapshot.protocol);
-            editor.putBoolean(Config.KEY_STREAMING, snapshot.streaming);
-            // 等于默认值的填空项删除已存键而不是写入：默认值不固化为本机内容，
-            // 之后模块调整默认值时未自定义的配置自动跟随，清空输入框再保存
-            // 也能回到默认值。
-            putUnlessDefault(editor, Config.KEY_API_URL, snapshot.apiUrl, Config.DEF_API_URL);
-            putUnlessDefault(editor, Config.KEY_API_KEY, snapshot.apiKey, Config.DEF_API_KEY);
-            putUnlessDefault(editor, Config.KEY_MODEL, snapshot.model, Config.DEF_MODEL);
-            putUnlessDefault(editor, Config.KEY_TARGET_LANG, snapshot.targetLang,
-                    Config.DEF_TARGET_LANG);
-            putUnlessDefault(editor, Config.KEY_EXTRA_HEADERS, snapshot.extraHeaders,
-                    Config.DEF_EXTRA_HEADERS);
-            putUnlessDefault(editor, Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt,
-                    Config.DEF_SYSTEM_PROMPT);
-            putUnlessDefault(editor, Config.KEY_TIMEOUT_MS, snapshot.timeoutMs,
-                    Config.DEF_TIMEOUT_MS);
-            putUnlessDefault(editor, Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency,
-                    Config.DEF_MAX_CONCURRENCY);
+            editor = local.edit();
+            writeSnapshot(editor, snapshot);
+            editor.putBoolean(KEY_LOCAL_INITIALIZED, true);
         } catch (Throwable t) {
-            updateStatus("保存失败：" + t.getClass().getSimpleName());
+            updateStatus(getString(R.string.status_save_failed,
+                    t.getClass().getSimpleName()));
             return;
         }
 
         saveInProgress = true;
         updateSaveButtonState();
-        updateStatus("正在保存配置…");
+        updateStatus(getString(R.string.status_saving));
         try {
             saveExecutor.execute(() -> {
-                boolean committed = false;
+                boolean localCommitted = false;
+                boolean remoteCommitted = false;
                 Throwable failure = null;
                 try {
-                    committed = editor.commit();
+                    localCommitted = editor.commit();
+                    if (localCommitted && remote != null) {
+                        remoteCommitted = copyConfigPreferences(local, remote, false);
+                    }
                 } catch (Throwable t) {
                     failure = t;
                 }
-                final boolean commitResult = committed;
-                final Throwable commitFailure = failure;
+                final boolean localResult = localCommitted;
+                final boolean remoteResult = remoteCommitted;
+                final Throwable saveFailure = failure;
                 mainHandler.post(() -> {
-                    if (destroyed || generation != serviceGeneration
-                            || targetPrefs != prefs || targetService != service) {
+                    if (destroyed || local != prefs) {
                         return;
                     }
                     saveInProgress = false;
                     updateSaveButtonState();
-                    if (commitFailure != null) {
-                        updateStatus("保存失败：" + commitFailure.getClass().getSimpleName());
-                    } else if (!commitResult) {
-                        updateStatus("保存失败：配置未能持久化。");
+                    if (saveFailure != null && !localResult) {
+                        updateStatus(getString(R.string.status_save_failed,
+                                saveFailure.getClass().getSimpleName()));
+                    } else if (!localResult) {
+                        updateStatus(getString(R.string.status_save_persist_failed));
                     } else {
-                        toast("配置已保存。");
-                        // 目标进程不保证会收到跨进程变更通知；不声称已即时生效。
-                        updateStatus("配置已保存；若 Discord 正在运行，新配置可能需要重启 Discord 后才生效。");
+                        toast(getString(R.string.toast_saved));
+                        updateStatus(getString(remoteResult
+                                ? R.string.status_saved_restart : R.string.status_sync_pending));
                     }
                 });
             });
         } catch (Throwable t) {
             saveInProgress = false;
             updateSaveButtonState();
-            updateStatus("保存失败：" + t.getClass().getSimpleName());
+            updateStatus(getString(R.string.status_save_failed,
+                    t.getClass().getSimpleName()));
         }
+    }
+
+    private static void writeSnapshot(SharedPreferences.Editor editor,
+                                     Config.Snapshot snapshot) {
+        editor.putBoolean(Config.KEY_ENABLED, snapshot.enabled);
+        editor.putString(Config.KEY_PROTOCOL, snapshot.protocol);
+        editor.putBoolean(Config.KEY_STREAMING, snapshot.streaming);
+        putUnlessDefault(editor, Config.KEY_API_URL, snapshot.apiUrl, Config.DEF_API_URL);
+        putUnlessDefault(editor, Config.KEY_API_KEY, snapshot.apiKey, Config.DEF_API_KEY);
+        putUnlessDefault(editor, Config.KEY_MODEL, snapshot.model, Config.DEF_MODEL);
+        putUnlessDefault(editor, Config.KEY_TARGET_LANG, snapshot.targetLang,
+                Config.DEF_TARGET_LANG);
+        putUnlessDefault(editor, Config.KEY_EXTRA_HEADERS, snapshot.extraHeaders,
+                Config.DEF_EXTRA_HEADERS);
+        putUnlessDefault(editor, Config.KEY_SYSTEM_PROMPT, snapshot.systemPrompt,
+                Config.DEF_SYSTEM_PROMPT);
+        putUnlessDefault(editor, Config.KEY_TIMEOUT_MS, snapshot.timeoutMs,
+                Config.DEF_TIMEOUT_MS);
+        putUnlessDefault(editor, Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency,
+                Config.DEF_MAX_CONCURRENCY);
     }
 
     private void updateSaveButtonState() {
         if (saveButton != null) {
-            saveButton.setEnabled(!destroyed && service != null && prefs != null && !saveInProgress);
+            saveButton.setEnabled(!destroyed && prefs != null
+                    && !saveInProgress && !syncInProgress);
         }
     }
 
-    private static int parseInt(EditText editText, int defaultValue) {
-        try {
-            return Integer.parseInt(editText.getText().toString().trim());
-        } catch (Throwable t) {
+    private static Object parseIntInput(EditText editText, int defaultValue) {
+        String value = editText.getText().toString().trim();
+        if (value.isEmpty()) {
             return defaultValue;
         }
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException e) {
+            return value;
+        }
+    }
+
+    private static String textOrDefault(EditText editText, String defaultValue) {
+        String value = editText.getText().toString().trim();
+        return value.isEmpty() ? defaultValue : value;
     }
 
     /** 值等于默认值时清空输入框，灰色占位符（hint）展示默认值；自定义值才写入。 */
@@ -450,24 +685,63 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
     }
 
-    // ------------------------------------------------------------ 测试功能
+    private static boolean copyConfigPreferences(SharedPreferences source,
+                                                SharedPreferences target,
+                                                boolean markInitialized) {
+        Map<String, ?> values = source.getAll();
+        SharedPreferences.Editor editor = target.edit();
+        for (String key : CONFIG_KEYS) {
+            if (!values.containsKey(key)) {
+                editor.remove(key);
+                continue;
+            }
+            putPreferenceValue(editor, key, values.get(key));
+        }
+        if (markInitialized) {
+            editor.putBoolean(KEY_LOCAL_INITIALIZED, true);
+        }
+        return editor.commit();
+    }
 
-    /** 用界面当前值构造快照，配置检查、网络测试和保存共用同一套字段读取。 */
+    private static void putPreferenceValue(SharedPreferences.Editor editor,
+                                           String key, Object value) {
+        if (value instanceof String) {
+            editor.putString(key, (String) value);
+        } else if (value instanceof Boolean) {
+            editor.putBoolean(key, (Boolean) value);
+        } else if (value instanceof Integer) {
+            editor.putInt(key, (Integer) value);
+        } else if (value instanceof Long) {
+            editor.putLong(key, (Long) value);
+        } else if (value instanceof Float) {
+            editor.putFloat(key, (Float) value);
+        } else {
+            throw new IllegalArgumentException("Unsupported preference type");
+        }
+    }
+
+    private static String promptOrDefault(EditText editText, String defaultValue) {
+        String value = editText.getText().toString();
+        return value.trim().isEmpty() ? defaultValue : value;
+    }
+
+
     private Config.Snapshot snapshotFromUi() {
         MemoryPrefs memoryPrefs = new MemoryPrefs();
         memoryPrefs.put(Config.KEY_ENABLED, enabledInput.isChecked());
         memoryPrefs.put(Config.KEY_PROTOCOL,
                 protocolAt(protocolSpinner.getSelectedItemPosition()));
         memoryPrefs.put(Config.KEY_STREAMING, streamingInput.isChecked());
-        memoryPrefs.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_API_URL, textOrDefault(urlInput, Config.DEF_API_URL));
         memoryPrefs.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
-        memoryPrefs.put(Config.KEY_MODEL, modelInput.getText().toString().trim());
-        memoryPrefs.put(Config.KEY_TARGET_LANG, targetLangInput.getText().toString().trim());
+        memoryPrefs.put(Config.KEY_MODEL, textOrDefault(modelInput, Config.DEF_MODEL));
+        memoryPrefs.put(Config.KEY_TARGET_LANG, selectedTargetLanguage());
         memoryPrefs.put(Config.KEY_EXTRA_HEADERS, headersInput.getText().toString());
-        memoryPrefs.put(Config.KEY_SYSTEM_PROMPT, systemPromptInput.getText().toString());
-        memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseInt(timeoutInput, Config.DEF_TIMEOUT_MS));
+        memoryPrefs.put(Config.KEY_SYSTEM_PROMPT,
+                promptOrDefault(systemPromptInput, Config.DEF_SYSTEM_PROMPT));
+        memoryPrefs.put(Config.KEY_TIMEOUT_MS, parseIntInput(timeoutInput, Config.DEF_TIMEOUT_MS));
         memoryPrefs.put(Config.KEY_MAX_CONCURRENCY,
-                parseInt(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
+                parseIntInput(concurrencyInput, Config.DEF_MAX_CONCURRENCY));
         return Config.read(memoryPrefs);
     }
 
@@ -489,12 +763,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         final String text = connectionTest
                 ? ApiTester.DEFAULT_TEST_TEXT : testTextInput.getText().toString();
         if (!connectionTest && text.trim().isEmpty()) {
-            resultText.setText("请先输入测试文本。");
+            resultText.setText(R.string.status_enter_test_text);
             return;
         }
 
         final long generation = ++testGeneration;
-        resultText.setText("请求中…");
+        resultText.setText(R.string.status_requesting);
         setTestButtonsEnabled(false);
 
         FutureTask<ApiTester.Result> task = new FutureTask<ApiTester.Result>(() -> connectionTest
@@ -527,7 +801,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         } catch (Throwable t) {
             testFuture = null;
             setTestButtonsEnabled(true);
-            resultText.setText("测试未能启动：" + t.getClass().getSimpleName());
+            resultText.setText(getString(R.string.status_test_not_started,
+                    t.getClass().getSimpleName()));
         }
     }
 
@@ -541,9 +816,10 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         if (result != null) {
             showResult(result);
         } else {
-            resultText.setText("测试失败："
-                    + (failure == null ? "未知错误" : failure.getClass().getSimpleName()));
-            updateStatus("测试失败，详见下方结果。");
+            resultText.setText(getString(R.string.status_test_failed_detail,
+                    failure == null ? getString(R.string.unknown_error)
+                            : failure.getClass().getSimpleName()));
+            updateStatus(getString(R.string.status_test_failed));
         }
     }
 
@@ -572,12 +848,17 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     private void showResult(ApiTester.Result result) {
         StringBuilder message = new StringBuilder();
-        message.append(result.ok ? "✓ " : "✗ ").append(result.message);
+        if (result.ok) {
+            message.append(getString(R.string.result_success, result.elapsedMs));
+        } else {
+            message.append(getString(R.string.result_failure));
+        }
         if (result.translated != null) {
-            message.append("\n译文：").append(result.translated);
+            message.append(getString(R.string.result_translation, result.translated));
         }
         resultText.setText(message.toString());
-        updateStatus(result.ok ? "测试通过。" : "测试失败，详见下方结果。");
+        updateStatus(getString(result.ok
+                ? R.string.status_test_passed : R.string.status_test_failed));
     }
 
     private void updateStatus(String status) {

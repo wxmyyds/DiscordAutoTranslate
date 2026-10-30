@@ -76,6 +76,12 @@ public final class TranslationCache {
         lru.put(key, translated);
     }
 
+    public synchronized void remove(String key) {
+        if (key != null) {
+            lru.remove(key);
+        }
+    }
+
     public synchronized void clear() {
         lru.clear();
     }

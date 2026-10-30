@@ -7,10 +7,10 @@ import androidx.annotation.Nullable;
 /**
  * 模块配置的键名、默认值与快照。
  *
- * <p>存储方式：使用 libxposed 的 remote preferences（{@code getRemotePreferences}）。
- * 目标进程侧通过 {@code XposedInterface.getRemotePreferences(group)} 读取；
- * 独立设置 Activity 侧通过 {@code XposedService.getRemotePreferences(group)} 读写。
- * 两侧必须使用同一个 {@link #GROUP}。</p>
+ * <p>运行时配置通过 libxposed remote preferences 共享：目标进程由
+ * {@code XposedInterface.getRemotePreferences(group)} 读取，设置页通过
+ * {@code XposedService.getRemotePreferences(group)} 同步写入。模块尚未启用时，
+ * 设置页先保存到自身私有 SharedPreferences；服务可用后再同步到 remote preferences。</p>
  *
  * <p>需求 §5.6：API 密钥仅保存在本机、不写入日志、不硬编码。</p>
  */
@@ -105,7 +105,7 @@ public final class Config {
     public static final String KEY_TIMEOUT_MS = "timeout_ms";
     /**
      * 默认请求超时。LLM 接口翻译 1-2KB 正文常需 10-30s，慢速中转更久；
-     * 15s 实测会切断长消息（超时后调度器重试 3 次仍超时）。已保存过
+     * 15s 实测会切断长消息（长消息会在本次请求超时失败）。已保存过
      * 超时设置的旧配置不受默认值变化影响，需在设置页手动调大。
      */
     public static final int DEF_TIMEOUT_MS = 30000;
@@ -114,6 +114,13 @@ public final class Config {
     public static final int DEF_MAX_CONCURRENCY = 4;
 
     private Config() {
+    }
+
+    /** 默认系统提示词按请求目标语言生成；自定义提示词由调用方原样使用。 */
+    public static String defaultSystemPromptFor(String targetLanguage) {
+        String language = targetLanguage == null || targetLanguage.trim().isEmpty()
+                ? DEF_TARGET_LANG : targetLanguage.trim();
+        return DEF_SYSTEM_PROMPT.replace("Simplified Chinese", language);
     }
 
     /** 配置快照，读取一次后供本次使用，避免渲染路径反复访问 SharedPreferences。 */
@@ -130,6 +137,8 @@ public final class Config {
         public final String protocol;
         /** 是否对支持的协议使用 SSE 流式请求。 */
         public final boolean streaming;
+        /** 配置读取失败原因；非 null 时不得发起翻译请求。 */
+        public final String configError;
         public final int timeoutMs;
         public final int maxConcurrency;
 
@@ -145,68 +154,69 @@ public final class Config {
             streaming = readBoolean(p, KEY_STREAMING, DEF_STREAMING);
             timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
+            configError = null;
         }
 
-        /**
-         * 读取协议，只接受两个已知值；空白、缺失、类型异常或未知字符串
-         * 一律回落默认协议，避免把拼写错误的值带进请求构造。
-         */
+        private Snapshot(String error) {
+            enabled = DEF_ENABLED;
+            apiUrl = DEF_API_URL;
+            apiKey = DEF_API_KEY;
+            model = DEF_MODEL;
+            targetLang = DEF_TARGET_LANG;
+            extraHeaders = DEF_EXTRA_HEADERS;
+            systemPrompt = DEF_SYSTEM_PROMPT;
+            protocol = DEF_PROTOCOL;
+            streaming = DEF_STREAMING;
+            timeoutMs = DEF_TIMEOUT_MS;
+            maxConcurrency = DEF_MAX_CONCURRENCY;
+            configError = error;
+        }
+
+        /** 读取协议；未知值或类型错误视为配置错误，不替换为其它协议。 */
         private static String readProtocol(SharedPreferences p) {
-            String v;
-            try {
-                v = p.getString(KEY_PROTOCOL, DEF_PROTOCOL);
-            } catch (RuntimeException e) {
+            if (!p.contains(KEY_PROTOCOL)) {
                 return DEF_PROTOCOL;
             }
-            if (PROTOCOL_OPENAI_RESPONSES.equals(v)) {
-                return PROTOCOL_OPENAI_RESPONSES;
+            String value = p.getString(KEY_PROTOCOL, null);
+            if (PROTOCOL_OPENAI_COMPATIBLE.equals(value)
+                    || PROTOCOL_OPENAI_RESPONSES.equals(value)
+                    || PROTOCOL_ANTHROPIC_MESSAGES.equals(value)) {
+                return value;
             }
-            if (PROTOCOL_ANTHROPIC_MESSAGES.equals(v)) {
-                return PROTOCOL_ANTHROPIC_MESSAGES;
-            }
-            return PROTOCOL_OPENAI_COMPATIBLE;
+            throw new IllegalArgumentException("provider_protocol 无效");
         }
 
-        /**
-         * 读取字符串配置。未配置（不存在 / null / 空白）时一律回落默认值。
-         *
-         * <p>空白也按未配置处理：设置页每个输入框在保存时都会写入，
-         * 用户清空某格后保存就会存下空字符串。若把空字符串当有效值，
-         * 会出现“模型名/目标语言为空”之类难查的静默失效。</p>
-         *
-         * <p>注意：{@link #DEF_API_KEY} 与 {@link #DEF_EXTRA_HEADERS}
-         * 默认值本身即为空串，因此“空白回落默认值”对它们是等价的，
-         * 不会影响“无需认证 / 无额外请求头”的正常用法。</p>
-         */
+        /** 缺省字符串使用默认值；显式空白仅允许 API key 与额外请求头。 */
         private static String str(SharedPreferences p, String key, String def) {
-            String v;
-            try {
-                v = p.getString(key, def);
-            } catch (RuntimeException e) {
+            if (!p.contains(key)) {
                 return def;
             }
-            if (v == null || v.trim().isEmpty()) {
-                return def;
+            String value = p.getString(key, null);
+            if (value == null) {
+                throw new IllegalArgumentException(key + " 为空");
             }
-            return v;
+            if (value.trim().isEmpty()) {
+                if (KEY_API_KEY.equals(key) || KEY_EXTRA_HEADERS.equals(key)) {
+                    return "";
+                }
+                throw new IllegalArgumentException(key + " 为空");
+            }
+            return value;
         }
 
         private static boolean readBoolean(SharedPreferences p, String key, boolean def) {
-            try {
-                return p.getBoolean(key, def);
-            } catch (RuntimeException e) {
-                return def;
-            }
+            return p.contains(key) ? p.getBoolean(key, def) : def;
         }
 
         private static int positiveInt(SharedPreferences p, String key, int def) {
-            int value;
-            try {
-                value = p.getInt(key, def);
-            } catch (RuntimeException e) {
+            if (!p.contains(key)) {
                 return def;
             }
-            return value > 0 ? value : def;
+            int value = p.getInt(key, def);
+            if (value <= 0) {
+                throw new IllegalArgumentException(key + " 必须为正整数");
+            }
+            return value;
         }
 
         /**
@@ -219,15 +229,14 @@ public final class Config {
         public String version() {
             return encode(apiUrl) + encode(model) + encode(targetLang) + encode(protocol)
                     + encode(Boolean.toString(streaming)) + encode(systemPrompt)
+                    + encode(configError == null ? "" : "invalid")
                     + encode(credentialFingerprint());
         }
 
         /** 密钥与额外请求头的不可逆指纹，用于版本比较。 */
         private String credentialFingerprint() {
-            String hex = Sha256.digestHex(apiKey == null ? "" : apiKey,
+            return Sha256.digestHex(apiKey == null ? "" : apiKey,
                     extraHeaders == null ? "" : extraHeaders);
-            // 极端环境下退化为不参与版本比较，行为与旧实现一致。
-            return hex != null ? hex : "";
         }
 
         private static String encode(String value) {
@@ -237,8 +246,12 @@ public final class Config {
 
         /** 是否已具备发起请求的最小配置。 */
         public boolean isUsable() {
-            return !apiUrl.isEmpty();
+            return configError == null && !apiUrl.isEmpty();
         }
+    }
+
+    public static Snapshot invalidSnapshot() {
+        return new Snapshot("配置读取失败，请修复设置后重新加载。");
     }
 
     /**
@@ -251,9 +264,8 @@ public final class Config {
         }
         try {
             return new Snapshot(prefs);
-        } catch (Throwable ignored) {
-            // 读取失败回落默认值快照，绝不让配置异常拖垮宿主进程。
-            return new Snapshot(new MemoryPrefs());
+        } catch (RuntimeException e) {
+            return new Snapshot("配置内容无效，请检查设置后重新保存。");
         }
     }
 }

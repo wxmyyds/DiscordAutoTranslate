@@ -19,8 +19,7 @@ import java.util.List;
  *
  * <p>因此替换时必须产出上述两种类型之一。为保留 Markdown，优先产出
  * {@code AnnotatedStructurableText}（见 {@link ContentNodes}）；
- * 只在原文也是纯文本时产出 {@code PrimitiveStructurableText}。
- * 富文本重建失败时保持原文，避免降级丢失 emoji、提及和代码等结构。</p>
+ * 若构造器缺失或调用失败，替换明确失败，调用方继续渲染未修改的原对象。</p>
  */
 public final class StructurableTextFactory {
 

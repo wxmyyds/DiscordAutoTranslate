@@ -117,13 +117,9 @@ public class OpaqueNodeTranslationTest {
     public void mentionBetweenBodyPartsDoesNotConsumeMultilineTranslation() {
         UserOrRoleMentionContentNode mention = new UserOrRoleMentionContentNode(
                 list(new TextContentNode("Alice")));
-        List<Object> out = ContentNodes.replaceText(list(new TextContentNode("hello"),
-                mention, new TextContentNode("welcome")), "你好\n欢迎");
-
-        assertNotNull(out);
-        assertEquals("你好", ((TextContentNode) out.get(0)).getContent());
-        assertSame(mention, out.get(1));
-        assertEquals("欢迎", ((TextContentNode) out.get(2)).getContent());
+        assertNull("未提供 mention 边界标记时拒绝猜测两段译文位置",
+                ContentNodes.replaceText(list(new TextContentNode("hello"), mention,
+                        new TextContentNode("welcome")), "你好\n欢迎"));
     }
 
     @Test
@@ -134,14 +130,10 @@ public class OpaqueNodeTranslationTest {
         ParagraphContentNode original = new ParagraphContentNode(list(mention,
                 new StrongContentNode(list(new TextContentNode("hello"))), emoji));
 
-        List<Object> out = ContentNodes.replaceText(list(original), "你好");
-
-        assertNotNull(out);
-        ParagraphContentNode paragraph = (ParagraphContentNode) out.get(0);
-        assertSame(mention, paragraph.getContent().get(0));
-        StrongContentNode strong = (StrongContentNode) paragraph.getContent().get(1);
-        assertEquals("你好", ((TextContentNode) strong.getContent().get(0)).getContent());
-        assertSame(emoji, paragraph.getContent().get(2));
+        assertNull("缺少样式标记时拒绝回填，不改变原富文本节点",
+                ContentNodes.replaceText(list(original), "你好"));
+        assertSame(mention, original.getContent().get(0));
+        assertSame(emoji, original.getContent().get(2));
     }
 
     @Test
