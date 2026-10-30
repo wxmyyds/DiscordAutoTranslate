@@ -570,11 +570,10 @@ public class ContentNodesTest {
                 new TextContentNode("para one"),
                 new EmojiContentNode("9"),
                 new TextContentNode("para two"));
-        List<Object> out = ContentNodes.replaceText(nodes, "第一段\n第二段");
-        assertNotNull(out);
-        assertEquals("第一段", ((TextContentNode) out.get(0)).getContent());
-        assertEquals("第二段", ((TextContentNode) out.get(2)).getContent());
-        assertSame("表情节点仍原样保留", nodes.get(1), out.get(1));
+        assertNull("两个文本节点之间只有未知可见节点时不猜测译文位置",
+                ContentNodes.replaceText(nodes, "第一段\n第二段"));
+        assertEquals("para one", ((TextContentNode) nodes.get(0)).getContent());
+        assertEquals("para two", ((TextContentNode) nodes.get(2)).getContent());
     }
 
     @Test

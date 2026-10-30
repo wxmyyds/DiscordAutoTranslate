@@ -134,7 +134,7 @@ public class BulletListAlignmentTest {
     }
 
     @Test
-    public void modelDroppingListLeadBlankLineUsesKnownRowBoundaries() {
+    public void missingListLeadParagraphBoundaryIsRejected() {
         StringBuilder t = new StringBuilder();
         t.append("Codex Relay — 面向编程的 AI API\n\n")
                 .append("如果你正在为 AI 编程工具寻找 API 提供商，可以看看 Codex Relay。\n\n")
@@ -145,14 +145,8 @@ public class BulletListAlignmentTest {
         t.append("\n你可以在花任何钱之前先用免费额度试用。\n\n")
                 .append("在此注册：").append(URL);
 
-        List<Object> out = ContentNodes.replaceText(reportedTree(), t.toString());
-
-        assertNotNull("源树列表项边界仍可按原行逐项映射", out);
-        BulletListContentNode bullets = (BulletListContentNode) out.get(6);
-        for (int i = 0; i < ZH_BULLETS.length; i++) {
-            assertEquals(ZH_BULLETS[i],
-                    ((TextContentNode) bullets.getItems().get(i).get(0)).getContent());
-        }
+        assertNull("源树中的段落边界缺失时不得重新猜测分段",
+                ContentNodes.replaceText(reportedTree(), t.toString()));
     }
 
     @Test

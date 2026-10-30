@@ -473,8 +473,14 @@ public final class PollHooks {
     /** 取第 n 个组件（componentN）。 */
     @Nullable
     private static Object callComponent(Object node, int n) {
-        Method method = Reflect.findMethod(node.getClass(), "component" + n, 0);
-        return Reflect.call(method, node);
+        String expectedName = "component" + n;
+        for (Method method : node.getClass().getDeclaredMethods()) {
+            if (method.getParameterCount() == 0 && method.getName().equals(expectedName)) {
+                method.setAccessible(true);
+                return Reflect.call(method, node);
+            }
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------ 工具
