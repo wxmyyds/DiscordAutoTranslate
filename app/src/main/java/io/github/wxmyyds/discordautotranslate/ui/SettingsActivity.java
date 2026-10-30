@@ -22,11 +22,16 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import io.github.wxmyyds.discordautotranslate.R;
 import io.github.wxmyyds.discordautotranslate.core.Config;
 import io.github.wxmyyds.discordautotranslate.core.Protocols;
 import io.github.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import io.github.wxmyyds.discordautotranslate.translate.ApiTester;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -39,12 +44,22 @@ import io.github.libxposed.service.XposedService;
 /** 设置界面（需求 §5.7）。 */
 public class SettingsActivity extends Activity implements XposedServiceConnectionHolder.Listener {
 
-    /** 目标语言下拉选项；目标值直接作为请求语言名保存。 */
-    private static final String[] TARGET_LANGUAGE_ENTRIES = {
+    private static final String[] TARGET_LANGUAGE_VALUES = {
             "简体中文", "繁體中文", "English", "日本語", "한국어", "Русский",
             "Українська", "Español", "Français", "Deutsch", "Português", "Italiano",
             "العربية", "فارسی", "हिन्दी", "বাংলা", "ไทย", "עברית", "Ελληνικά",
             "Tiếng Việt", "Türkçe", "Bahasa Indonesia"
+    };
+    private static final String[] TARGET_LANGUAGE_LABELS_EN = {
+            "Simplified Chinese", "Traditional Chinese", "English", "Japanese", "Korean",
+            "Russian", "Ukrainian", "Spanish", "French", "German", "Portuguese", "Italian",
+            "Arabic", "Persian", "Hindi", "Bengali", "Thai", "Hebrew", "Greek",
+            "Vietnamese", "Turkish", "Indonesian"
+    };
+    private static final String[] TARGET_LANGUAGE_LABELS_ZH = {
+            "简体中文", "繁體中文", "英语", "日语", "韩语", "俄语", "乌克兰语", "西班牙语",
+            "法语", "德语", "葡萄牙语", "意大利语", "阿拉伯语", "波斯语", "印地语",
+            "孟加拉语", "泰语", "希伯来语", "希腊语", "越南语", "土耳其语", "印尼语"
     };
 
     /** 下拉框显示顺序：0=OpenAI-Responses，1=OpenAI-Compatible，2=Anthropic-Messages。 */
@@ -69,8 +84,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     private Spinner protocolSpinner;
     private Spinner targetLanguageSpinner;
-    @Nullable
     private ArrayAdapter<String> targetLanguageAdapter;
+    private final List<String> targetLanguageValues = new ArrayList<>();
+    private boolean chineseUi;
     private EditText urlInput;
     private EditText keyInput;
     private EditText modelInput;
@@ -91,9 +107,10 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTitle("Discord 自动翻译");
+        chineseUi = isChineseSystemLanguage();
+        setTitle(R.string.module_name);
         setContentView(buildContentView());
-        updateStatus("正在连接 LSPosed 服务…");
+        updateStatus(getString(R.string.status_connecting));
         XposedServiceConnectionHolder.bind(this);
     }
 
@@ -121,12 +138,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             prefs = connectedService.getRemotePreferences(Config.GROUP);
             loadIntoUi();
             updateSaveButtonState();
-            updateStatus("已连接 LSPosed " + connectedService.getFrameworkVersion()
-                    + "（API " + connectedService.getApiVersion() + "）");
+            updateStatus(getString(R.string.status_connected,
+                    connectedService.getFrameworkVersion(), connectedService.getApiVersion()));
         } catch (Throwable t) {
             prefs = null;
             updateSaveButtonState();
-            updateStatus("读取配置失败：" + t.getClass().getSimpleName());
+            updateStatus(getString(R.string.status_read_config_failed,
+                    t.getClass().getSimpleName()));
         }
     }
 
@@ -140,7 +158,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         serviceGeneration++;
         saveInProgress = false;
         updateSaveButtonState();
-        updateStatus("LSPosed 服务已断开，配置无法保存。");
+        updateStatus(getString(R.string.status_service_died));
     }
 
     // ------------------------------------------------------------ UI 构建
@@ -156,13 +174,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         root.addView(statusText, matchWrap());
 
         enabledInput = new CheckBox(this);
-        enabledInput.setText("启用自动翻译");
+        enabledInput.setText(R.string.label_enabled);
         root.addView(enabledInput, matchWrap());
 
         // 供应商协议：请求体与译文解析按所选协议内置实现，
         // 不再让用户手写 JSON 请求模板与译文提取路径。
         TextView protocolLabel = new TextView(this);
-        protocolLabel.setText("供应商协议");
+        protocolLabel.setText(R.string.label_protocol);
         protocolLabel.setPadding(0, dp(8), 0, 0);
         root.addView(protocolLabel, matchWrap());
         protocolSpinner = new Spinner(this);
@@ -185,57 +203,58 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         });
         TextView protocolHint = new TextView(this);
         protocolHint.setTextSize(12f);
-        protocolHint.setText("API URL 只填到 /v1 的基础地址，请求时按所选协议追加端点："
-                + "OpenAI-Compatible 追加 /chat/completions，OpenAI-Responses 追加 /responses，"
-                + "Anthropic-Messages 追加 /messages，切换协议无需修改 URL。"
-                + "旧配置里填写的完整端点需删掉后缀只留基础地址。");
+        protocolHint.setText(R.string.hint_protocol);
         root.addView(protocolHint, matchWrap());
 
         streamingInput = new CheckBox(this);
-        streamingInput.setText("使用流式请求（Responses 协议不支持）");
+        streamingInput.setText(R.string.label_streaming);
         root.addView(streamingInput, matchWrap());
 
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
-        urlInput = addField(root, "API URL", Config.DEF_API_URL,
+        urlInput = addField(root, getString(R.string.label_api_url),
+                getString(R.string.hint_api_url),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        keyInput = addField(root, "API 密钥（仅保存在本机）", "",
+        keyInput = addField(root, getString(R.string.label_api_key), "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        modelInput = addField(root, "模型名", Config.DEF_MODEL, InputType.TYPE_CLASS_TEXT);
+        modelInput = addField(root, getString(R.string.label_model), Config.DEF_MODEL,
+                InputType.TYPE_CLASS_TEXT);
         TextView targetLanguageLabel = new TextView(this);
-        targetLanguageLabel.setText("目标语言");
+        targetLanguageLabel.setText(R.string.label_target_language);
         targetLanguageLabel.setPadding(0, dp(8), 0, 0);
         root.addView(targetLanguageLabel, matchWrap());
         targetLanguageSpinner = new Spinner(this);
+        targetLanguageValues.clear();
+        targetLanguageValues.addAll(Arrays.asList(TARGET_LANGUAGE_VALUES));
+        String[] labels = chineseUi ? TARGET_LANGUAGE_LABELS_ZH : TARGET_LANGUAGE_LABELS_EN;
         targetLanguageAdapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item, TARGET_LANGUAGE_ENTRIES);
+                android.R.layout.simple_spinner_item, new ArrayList<>(Arrays.asList(labels)));
         targetLanguageAdapter.setDropDownViewResource(
                 android.R.layout.simple_spinner_dropdown_item);
         targetLanguageSpinner.setAdapter(targetLanguageAdapter);
         targetLanguageSpinner.setSelection(targetLanguagePosition(Config.DEF_TARGET_LANG));
         root.addView(targetLanguageSpinner, matchWrap());
-        headersInput = addField(root, "额外请求头（每行 Name: Value）", "",
+        headersInput = addField(root, getString(R.string.label_headers), "",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        systemPromptInput = addField(root, "系统提示词（多行）",
-                Config.DEF_SYSTEM_PROMPT,
+        systemPromptInput = addField(root, getString(R.string.label_system_prompt),
+                getString(R.string.hint_system_prompt),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        timeoutInput = addField(root, "超时（毫秒）", String.valueOf(Config.DEF_TIMEOUT_MS),
-                InputType.TYPE_CLASS_NUMBER);
-        concurrencyInput = addField(root, "最大并发", String.valueOf(Config.DEF_MAX_CONCURRENCY),
-                InputType.TYPE_CLASS_NUMBER);
+        timeoutInput = addField(root, getString(R.string.label_timeout),
+                String.valueOf(Config.DEF_TIMEOUT_MS), InputType.TYPE_CLASS_NUMBER);
+        concurrencyInput = addField(root, getString(R.string.label_concurrency),
+                String.valueOf(Config.DEF_MAX_CONCURRENCY), InputType.TYPE_CLASS_NUMBER);
 
 
-        testTextInput = addField(root, "测试文本（“测试翻译”使用）",
-                ApiTester.DEFAULT_TEST_TEXT,
+        testTextInput = addField(root, getString(R.string.label_test_text),
+                getString(R.string.hint_test_text),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
         TextView privacy = new TextView(this);
         privacy.setTextSize(12f);
-        privacy.setText("隐私提示：启用后，消息正文会发送到上面配置的第三方翻译服务。"
-                + "密钥仅保存在本机，不会写入日志。");
+        privacy.setText(R.string.privacy_notice);
         root.addView(privacy, matchWrap());
 
         saveButton = new Button(this);
-        saveButton.setText("保存");
+        saveButton.setText(R.string.button_save);
         saveButton.setEnabled(false);
         saveButton.setOnClickListener(v -> save());
         root.addView(saveButton, matchWrap());
@@ -244,19 +263,19 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         testRow.setOrientation(LinearLayout.HORIZONTAL);
 
         configCheckButton = new Button(this);
-        configCheckButton.setText("配置检查");
+        configCheckButton.setText(R.string.button_config_check);
         configCheckButton.setOnClickListener(v -> runSelfCheck());
         testRow.addView(configCheckButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         testConnectionButton = new Button(this);
-        testConnectionButton.setText("测试连接");
+        testConnectionButton.setText(R.string.button_test_connection);
         testConnectionButton.setOnClickListener(v -> runTestTranslation(true));
         testRow.addView(testConnectionButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         testTranslationButton = new Button(this);
-        testTranslationButton.setText("测试翻译");
+        testTranslationButton.setText(R.string.button_test_translation);
         testTranslationButton.setOnClickListener(v -> runTestTranslation(false));
         testRow.addView(testTranslationButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -332,33 +351,28 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     /** 显示旧配置中的列表外语言，避免升级后静默改写用户设置。 */
     private void ensureTargetLanguageAvailable(String language) {
-        if (language == null || targetLanguageAdapter == null) {
+        if (language == null || targetLanguageAdapter == null
+                || targetLanguageValues.contains(language)) {
             return;
         }
-        for (int i = 0; i < targetLanguageAdapter.getCount(); i++) {
-            if (language.equals(targetLanguageAdapter.getItem(i))) {
-                return;
-            }
-        }
-        targetLanguageAdapter.add(language);
+        targetLanguageValues.add(language);
+        targetLanguageAdapter.add(getString(R.string.legacy_language));
     }
 
     private int targetLanguagePosition(String language) {
-        if (targetLanguageAdapter == null) {
-            return AdapterView.INVALID_POSITION;
-        }
-        for (int i = 0; i < targetLanguageAdapter.getCount(); i++) {
-            if (language.equals(targetLanguageAdapter.getItem(i))) {
-                return i;
-            }
-        }
-        return AdapterView.INVALID_POSITION;
+        return targetLanguageValues.indexOf(language);
     }
 
     @Nullable
     private String selectedTargetLanguage() {
-        Object selected = targetLanguageSpinner.getSelectedItem();
-        return selected instanceof String ? (String) selected : null;
+        int position = targetLanguageSpinner.getSelectedItemPosition();
+        return position >= 0 && position < targetLanguageValues.size()
+                ? targetLanguageValues.get(position) : null;
+    }
+
+    private boolean isChineseSystemLanguage() {
+        Locale locale = getResources().getConfiguration().getLocales().get(0);
+        return "zh".equalsIgnoreCase(locale.getLanguage());
     }
 
     private int dp(int v) {
@@ -374,7 +388,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
         Config.Snapshot snapshot = Config.read(currentPrefs);
         if (snapshot.configError != null) {
-            updateStatus(snapshot.configError);
+            updateStatus(getString(R.string.status_invalid_config));
         }
         enabledInput.setChecked(snapshot.enabled);
         protocolSpinner.setSelection(positionOf(snapshot.protocol));
@@ -397,12 +411,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     private void save() {
         if (destroyed || prefs == null || service == null) {
-            updateStatus("未连接 LSPosed 服务，无法保存。请确认模块已在 LSPosed 中启用并勾选作用域。");
+            updateStatus(getString(R.string.status_no_service));
             return;
         }
         Config.Snapshot snapshot = snapshotFromUi();
         if (snapshot.configError != null) {
-            updateStatus(snapshot.configError);
+            updateStatus(getString(R.string.status_invalid_config));
             return;
         }
         commitSnapshot(snapshot);
@@ -413,7 +427,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         final XposedService targetService = service;
         final long generation = serviceGeneration;
         if (destroyed || targetPrefs == null || targetService == null) {
-            updateStatus("LSPosed 服务已断开，配置无法保存。");
+            updateStatus(getString(R.string.status_service_disconnected));
             return;
         }
 
@@ -440,13 +454,14 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             putUnlessDefault(editor, Config.KEY_MAX_CONCURRENCY, snapshot.maxConcurrency,
                     Config.DEF_MAX_CONCURRENCY);
         } catch (Throwable t) {
-            updateStatus("保存失败：" + t.getClass().getSimpleName());
+            updateStatus(getString(R.string.status_save_failed,
+                    t.getClass().getSimpleName()));
             return;
         }
 
         saveInProgress = true;
         updateSaveButtonState();
-        updateStatus("正在保存配置…");
+        updateStatus(getString(R.string.status_saving));
         try {
             saveExecutor.execute(() -> {
                 boolean committed = false;
@@ -466,20 +481,21 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                     saveInProgress = false;
                     updateSaveButtonState();
                     if (commitFailure != null) {
-                        updateStatus("保存失败：" + commitFailure.getClass().getSimpleName());
+                        updateStatus(getString(R.string.status_save_failed,
+                                commitFailure.getClass().getSimpleName()));
                     } else if (!commitResult) {
-                        updateStatus("保存失败：配置未能持久化。");
+                        updateStatus(getString(R.string.status_save_persist_failed));
                     } else {
-                        toast("配置已保存。");
-                        // 目标进程不保证会收到跨进程变更通知；不声称已即时生效。
-                        updateStatus("配置已保存；若 Discord 正在运行，新配置可能需要重启 Discord 后才生效。");
+                        toast(getString(R.string.toast_saved));
+                        updateStatus(getString(R.string.status_saved_restart));
                     }
                 });
             });
         } catch (Throwable t) {
             saveInProgress = false;
             updateSaveButtonState();
-            updateStatus("保存失败：" + t.getClass().getSimpleName());
+            updateStatus(getString(R.string.status_save_failed,
+                    t.getClass().getSimpleName()));
         }
     }
 
@@ -572,12 +588,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         final String text = connectionTest
                 ? ApiTester.DEFAULT_TEST_TEXT : testTextInput.getText().toString();
         if (!connectionTest && text.trim().isEmpty()) {
-            resultText.setText("请先输入测试文本。");
+            resultText.setText(R.string.status_enter_test_text);
             return;
         }
 
         final long generation = ++testGeneration;
-        resultText.setText("请求中…");
+        resultText.setText(R.string.status_requesting);
         setTestButtonsEnabled(false);
 
         FutureTask<ApiTester.Result> task = new FutureTask<ApiTester.Result>(() -> connectionTest
@@ -610,7 +626,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         } catch (Throwable t) {
             testFuture = null;
             setTestButtonsEnabled(true);
-            resultText.setText("测试未能启动：" + t.getClass().getSimpleName());
+            resultText.setText(getString(R.string.status_test_not_started,
+                    t.getClass().getSimpleName()));
         }
     }
 
@@ -624,9 +641,10 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         if (result != null) {
             showResult(result);
         } else {
-            resultText.setText("测试失败："
-                    + (failure == null ? "未知错误" : failure.getClass().getSimpleName()));
-            updateStatus("测试失败，详见下方结果。");
+            resultText.setText(getString(R.string.status_test_failed_detail,
+                    failure == null ? getString(R.string.unknown_error)
+                            : failure.getClass().getSimpleName()));
+            updateStatus(getString(R.string.status_test_failed));
         }
     }
 
@@ -655,12 +673,17 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
 
     private void showResult(ApiTester.Result result) {
         StringBuilder message = new StringBuilder();
-        message.append(result.ok ? "✓ " : "✗ ").append(result.message);
+        if (result.ok) {
+            message.append(getString(R.string.result_success, result.elapsedMs));
+        } else {
+            message.append(getString(R.string.result_failure));
+        }
         if (result.translated != null) {
-            message.append("\n译文：").append(result.translated);
+            message.append(getString(R.string.result_translation, result.translated));
         }
         resultText.setText(message.toString());
-        updateStatus(result.ok ? "测试通过。" : "测试失败，详见下方结果。");
+        updateStatus(getString(result.ok
+                ? R.string.status_test_passed : R.string.status_test_failed));
     }
 
     private void updateStatus(String status) {
