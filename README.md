@@ -7,24 +7,19 @@
 
 ## 当前状态
 
-**阶段 1–6 全部完成并合入 main**
+**模块功能已完整，可日常使用**
 
-已完成：
-
-- 模块骨架、API 102 入口与热重载生命周期、消息 Hook 点定位（6 个）
-- 通用 JSON 翻译引擎（阶段 2）：支持 OpenAI-Compatible / OpenAI-Responses /
-  Anthropic Messages 三种供应商协议、流式（SSE）响应、并发调度、重试与缓存
-- 保留 Markdown 的正文替换与行内图标交互（阶段 3）：标题/列表/提及/表情/代码
-  保留，含列表消息逐项回填、文字保留与尾部空行修剪
+- 模块骨架、API 102 入口与热重载生命周期
+- 通用 JSON 翻译引擎：支持 OpenAI-Compatible / OpenAI-Responses / Anthropic
+  Messages 三种供应商协议、流式（SSE）响应、并发调度、重试与缓存
+- 保留 Markdown 的正文替换与行内图标交互：标题/列表/提及/表情/代码保留，
+  含列表消息逐项回填、文字保留与尾部空行修剪
 - 独立设置 Activity（配置检查 / 测试连接 / 测试翻译、供应商协议与系统提示词）
 - Embed 翻译（富 Embed 标题/描述/字段与原生帖子预览标题）与投票卡片翻译
-- 稳定性加固与隐私加固（阶段 5，多轮全局审查迭代完成）：防串位身份映射、
-  热重载重建与在途请求取消、日志脱敏
-- 布局即时刷新修复：重渲染移出宿主布局遍历、行高立即更新
+- 稳定性与隐私加固：防串位身份映射、热重载重建与在途请求取消、日志脱敏
+- 布局即时刷新：重渲染移出宿主布局遍历、行高立即更新
 - 正式签名发布流程：keystore 经 GitHub Secrets 注入，Debug/Release 均签名
 - GitHub Actions 构建（APK + 单元测试 + 签名校验）
-
-阶段 6 热重载真机验收随后续问题修复完成，模块已可日常使用。
 
 详见 [docs/architecture.md](docs/architecture.md) 与 [docs/rendering.md](docs/rendering.md)。
 
