@@ -1,0 +1,314 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '发布模式：stable = 正式版（基于 main 最新代码）；prerelease = 预发布（基于指定分支 / SHA）'
+        required: true
+        type: choice
+        options:
+          - stable
+          - prerelease
+      version:
+        description: '版本号：正式版填 X.Y.Z（须高于最近正式版）；预发布填 X.Y.Z-rc.N（如 1.0.1-rc.1）'
+        required: false
+        type: string
+        default: ''
+      source_ref:
+        description: '预发布模式下要发布的来源分支名或完整 40 位 commit SHA（正式版忽略，固定用 main）'
+        required: false
+        type: string
+        default: 'main'
+
+env:
+  APP_NAME: DiscordAutoTranslate
+
+permissions:
+  contents: write
+
+# Stable and prerelease releases share this group. Both update tags and the versionCode high-water mark, so they must run one at a time.
+concurrency:
+  group: release-versioning
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, tag and publish (${{ inputs.mode }})
+    runs-on: ubuntu-24.04
+    steps:
+      # Stable releases use main; prereleases use the selected branch or SHA.
+      # Tags track release versions, so release/prerelease branches are no longer maintained.
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.mode == 'stable' && 'main' || inputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      # 与 build.yml 同样的 SDK 准备：API 37 起平台包名带次版本号（platforms;android-37.0）。
+      - name: Install required SDK packages
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          set -e
+          SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then
+            SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort | tail -n 1)
+          fi
+          echo "sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" "platforms;android-37.0" "build-tools;36.0.0"
+
+      # Resolve versions from tags. Each release stores versionName/versionCode in a
+      # commit referenced only by its tag; main stays unchanged, no release branches.
+      # LSPosed 模块仓库要求：Release Tag 格式为 {versionCode}-{versionName}（如 1-1.0.0）。
+      - name: Resolve version
+        id: resolve
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+          INPUT: ${{ inputs.version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+
+          read_version() {
+            git show "$1:app/build.gradle" 2>/dev/null \
+              | grep -oP 'versionName\s+"\K[0-9][0-9A-Za-z.\-]*' || true
+          }
+          read_code() {
+            git show "$1:app/build.gradle" 2>/dev/null \
+              | grep -oP 'versionCode\s+\K[0-9]+' || true
+          }
+
+          git fetch --tags --force origin >/dev/null 2>&1 || true
+
+          # Latest stable LSPosed tag, sorted by versionCode prefix, excluding rc tags.
+          # LSPosed tag 形如 {versionCode}-{versionName}，用 versionCode 前缀排序最可靠。
+          LATEST_STABLE_TAG=$(git tag --list --sort=-v:refname \
+            | grep -E '^[0-9]+-[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+
+          if [[ -n "$LATEST_STABLE_TAG" ]]; then
+            BASE_REF="$LATEST_STABLE_TAG"
+            echo "最近正式版：$LATEST_STABLE_TAG"
+          else
+            BASE_REF="origin/main"
+            echo "尚无正式版 tag，以 origin/main 作为版本基线"
+          fi
+
+          STABLE_VERSION=$(read_version "$BASE_REF")
+          CODE=$(read_code "$BASE_REF")
+          if [[ -z "$STABLE_VERSION" || -z "$CODE" ]]; then
+            echo "::error::无法从 $BASE_REF 解析版本号（versionName='$STABLE_VERSION' versionCode='$CODE'）"
+            exit 1
+          fi
+          echo "基线版本：$STABLE_VERSION（versionCode $CODE）"
+
+          # Scan recent prerelease tags and use the highest versionCode to keep it increasing globally.
+          HIGH_WATER="$CODE"
+          for T in $(git tag --list --sort=-v:refname '*rc*' | head -20); do
+            C="${T%%-*}"
+            if [[ "$C" =~ ^[0-9]+$ ]] && (( C > HIGH_WATER )); then HIGH_WATER="$C"; fi
+          done
+          if (( HIGH_WATER > CODE )); then
+            echo "预发布 tag 水位更高：versionCode $HIGH_WATER"
+          fi
+
+          # Stable release path
+          if [[ "$MODE" == "stable" ]]; then
+            [[ -n "$INPUT" ]] || {
+              echo "::error::正式版必须填写版本号（X.Y.Z）"
+              exit 1
+            }
+            [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "::error::正式版版本号格式错误：$INPUT（需 X.Y.Z，例如 1.0.1）"
+              exit 1
+            }
+            if [[ -n "$LATEST_STABLE_TAG" ]] && ! printf '%s\n%s\n' "$STABLE_VERSION" "$INPUT" \
+              | sort -V | tail -1 | grep -Fxq "$INPUT"; then
+              echo "::error::新版本 $INPUT 不高于最近正式版 $STABLE_VERSION，拒绝发布"
+              exit 1
+            fi
+            VERSION="$INPUT"
+            NEW_CODE=$((HIGH_WATER + 1))
+          # Prerelease path
+          else
+            if ! git check-ref-format --branch "$SOURCE_REF" >/dev/null 2>&1 &&
+              ! [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::source_ref 必须是有效分支名或完整 40 位 commit SHA（当前：'$SOURCE_REF'）"
+              exit 1
+            fi
+            [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$ ]] || {
+              echo "::error::预发布版本号必须为 X.Y.Z-rc.N（例如 1.0.1-rc.1），当前：'$INPUT'"
+              exit 1
+            }
+            BASE_VERSION="${INPUT%-rc.*}"
+            if ! printf '%s\n%s\n' "$STABLE_VERSION" "$BASE_VERSION" \
+              | sort -V | tail -1 | grep -Fxq "$BASE_VERSION"; then
+              echo "::error::预发布基础版本 $BASE_VERSION 不高于最近正式版 $STABLE_VERSION"
+              exit 1
+            fi
+            VERSION="$INPUT"
+            NEW_CODE=$((HIGH_WATER + 1))
+          fi
+
+          # LSPosed 模块仓库要求的 tag 格式：{versionCode}-{versionName}
+          TAG="${NEW_CODE}-${VERSION}"
+
+          # Reject an existing tag to prevent duplicate releases.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG 已存在，拒绝重复发布"
+            exit 1
+          fi
+
+          # Apply version changes in the worktree; the following tag-only commit records them.
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" app/build.gradle
+          sed -i "s/versionCode [0-9]*/versionCode $NEW_CODE/" app/build.gradle
+          echo "已写入 versionName=$VERSION, versionCode=$NEW_CODE"
+          git diff -- app/build.gradle
+
+          echo "sourceSha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sourceRef=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$NEW_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      # 所有发布版本都必须签名。密钥库保存在 Secrets 中；缺失时直接失败，避免发布无法安装的未签名 APK。
+      - name: Materialize release keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::仓库缺少 Secret KEYSTORE_BASE64，无法签名发布"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore/release.jks"
+          chmod 600 "$RUNNER_TEMP/keystore/release.jks"
+          echo "密钥库已就绪：$RUNNER_TEMP/keystore/release.jks"
+
+      # 生成 properties 供 build.gradle 的 KEYSTORE_PROPERTIES 读取（PKCS12 要求 store 与 key 口令一致）。
+      - name: Assemble release APK
+        shell: bash
+        env:
+          KEYSTORE_PROPERTIES: ${{ runner.temp }}/keystore/keystore.properties
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEYSTORE_PASSWORD" \
+            > "$KEYSTORE_PROPERTIES"
+          chmod 600 "$KEYSTORE_PROPERTIES"
+          gradle --no-daemon assembleRelease --stacktrace
+          # AGP names signed APKs app-release.apk; require the signed file.
+          test -f app/build/outputs/apk/release/app-release.apk \
+            || { echo "::error::未生成已签名 APK"; ls -l app/build/outputs/apk/release/; exit 1; }
+
+      # Verify that the APK has a certificate and that apksigner accepts it before publishing.
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER=$(ls -d "$SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)
+          echo "使用 $APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+
+      # Version changes go in a commit referenced only by the tag, leaving main unchanged.
+      # LSPosed 仓库会读取该 Release 的 APK 与 tag；tag 格式 {versionCode}-{versionName}。
+      - name: Tag and publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          VERSION_CODE: ${{ steps.resolve.outputs.versionCode }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          SOURCE_REF: ${{ steps.resolve.outputs.sourceRef }}
+          SOURCE_SHA: ${{ steps.resolve.outputs.sourceSha }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          cp app/build/outputs/apk/release/app-release.apk "$APP_NAME.apk"
+
+          git add app/build.gradle
+          git commit -m "chore(release): $TAG"
+          echo "版本号提交：$(git rev-parse --short HEAD)（仅被 tag $TAG 引用，main 不变）"
+
+          git tag -a "$TAG" -m "Release $TAG (versionCode $VERSION_CODE)"
+          git push origin "refs/tags/$TAG"
+          echo "已推送 tag $TAG"
+
+          if [[ "$MODE" == "stable" ]]; then
+            # Previous stable tag, used to build the changelog range.
+            PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+            RANGE="${PREV:+$PREV..}HEAD"
+            echo "变更范围：$RANGE（上一个正式版：${PREV:-无}）"
+            LOG=$(git log "$RANGE" --no-merges --pretty=format:'%s' 2>/dev/null \
+              | grep -vE '^(Merge (pull request|branch)|chore(release)?:)' || true)
+
+            {
+              echo "# $APP_NAME $VERSION"
+              echo
+              echo "## ✨ 新功能"
+              echo "$LOG" | grep -E '^(feat|feature)(\(|:)' | sed 's/^/ - /' || true
+              echo
+              echo "## 🐛 修复"
+              echo "$LOG" | grep -E '^fix(\(|:)' | sed 's/^/ - /' || true
+              echo
+              echo "## ⚙️ 改进与优化"
+              echo "$LOG" | grep -E '^(refactor|perf)(\(|:)' | sed 's/^/ - /' || true
+              echo
+              echo "## 📦 其他"
+              echo "$LOG" | grep -vE '^(feat|feature|fix|refactor|perf)(\(|:)' | sed 's/^/ - /' || true
+              echo
+              echo "基于 \`main\` 最新代码构建，versionCode $VERSION_CODE。"
+            } > /tmp/release-notes.md
+
+            echo "===== 发布说明预览 ====="
+            cat /tmp/release-notes.md
+
+            gh release create "$TAG" \
+              --title "$APP_NAME $VERSION" \
+              --notes-file /tmp/release-notes.md \
+              "$APP_NAME.apk"
+          else
+            {
+              echo "# $APP_NAME $VERSION（预发布）"
+              echo
+              echo "- 来源：\`$SOURCE_REF\`（SHA \`$SOURCE_SHA\`）"
+              echo "- versionCode：$VERSION_CODE"
+              echo "- 此版本用于验证分支上的新功能，实机验证状态请参看对应文档。"
+              echo "- 构建记录：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            } > /tmp/prerelease-notes.md
+
+            echo "===== 发布说明预览 ====="
+            cat /tmp/prerelease-notes.md
+
+            gh release create "$TAG" \
+              --title "$APP_NAME $VERSION（预发布）" \
+              --prerelease \
+              --notes-file /tmp/prerelease-notes.md \
+              "$APP_NAME.apk"
+          fi

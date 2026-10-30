@@ -14,4 +14,4 @@
 -keep class io.github.libxposed.service.** { *; }
 
 # 设置 Activity 与 libxposed 服务提供者由系统按名称实例化。
--keep public class com.wxmyyds.discordautotranslate.ui.SettingsActivity { public <init>(); }
+-keep public class io.github.wxmyyds.discordautotranslate.ui.SettingsActivity { public <init>(); }
