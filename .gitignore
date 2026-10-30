@@ -22,3 +22,9 @@ captures/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 签名密钥与密码（永不提交）
+*.jks
+*.keystore
+*-keystore.properties
+keystore.properties

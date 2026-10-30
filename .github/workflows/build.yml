@@ -97,6 +97,34 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
+      # 签名 keystore 由 GitHub Secrets 提供（base64），不进入仓库。
+      # 未配置 secrets 时跳过签名（Debug 构建依然可用 AGP 默认调试签名）。
+      - name: Inject signing keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -e
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No KEYSTORE_BASE64 secret; building unsigned."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "KEYSTORE_PASSWORD/KEY_ALIAS secrets missing" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/keystore"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore/release.jks"
+          chmod 600 "$RUNNER_TEMP/keystore/release.jks"
+          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEYSTORE_PASSWORD" \
+            > "$RUNNER_TEMP/keystore/keystore.properties"
+          chmod 600 "$RUNNER_TEMP/keystore/keystore.properties"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
       - name: Resolve requested build type
         id: cfg
         run: |
@@ -117,6 +145,8 @@ jobs:
           echo "entry class: $(cat app/src/main/resources/META-INF/xposed/java_init.list)"
 
       - name: Assemble
+        env:
+          KEYSTORE_PROPERTIES: ${{ runner.temp }}/keystore/keystore.properties
         run: gradle --no-daemon assemble${{ steps.cfg.outputs.task }}
 
       # 阶段 2 起单元测试是必要验证项（模板转义、路径提取、调度去重/过期丢弃/重试）。
@@ -154,6 +184,15 @@ jobs:
               || { echo "drawable/$name missing from APK resources"; exit 1; }
             echo "ok: drawable/$name"
           done
+
+      - name: Verify APK signature
+        if: steps.keystore.outputs.configured == 'true'
+        run: |
+          set -e
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -n 1)
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | head -n 1)
+          test -n "$APKSIGNER" || { echo "apksigner not found"; exit 1; }
+          "$APKSIGNER" verify --print-certs "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

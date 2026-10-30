@@ -6,11 +6,42 @@ plugins {
     id "com.android.application"
 }
 
+// 签名 keystore 通过环境变量 KEYSTORE_PROPERTIES 指向的 properties 文件注入
+// （该文件与 keystore 均不提交仓库，见 docs/keystore.md）。
+// 文件键：storeFile（相对该 properties 文件的路径）/ storePassword /
+// keyAlias / keyPassword。未注入或文件不存在时不签名；GitHub Actions 由
+// 工作流解码 secrets 提供该文件，本地由 .keystores 提供。
+def signingProps = null
+def signingStoreFile = null
+def keystorePropsPath = System.getenv("KEYSTORE_PROPERTIES")
+if (keystorePropsPath != null) {
+    def propsFile = new File(keystorePropsPath)
+    if (propsFile.exists()) {
+        signingProps = new Properties()
+        propsFile.withInputStream { signingProps.load(it) }
+        signingStoreFile = new File(propsFile.parentFile, signingProps.storeFile)
+        if (!signingStoreFile.exists()) {
+            signingStoreFile = null
+        }
+    }
+}
+
 android {
     namespace "io.github.wxmyyds.discordautotranslate"
     // compileSdk 37 为强制项：io.github.libxposed:api:102.0.0 与 :service:102.0.0
     // 的 AAR 元数据均声明 minCompileSdk=37，低于该值 Gradle 会直接报错。
     compileSdk 37
+
+    signingConfigs {
+        if (signingStoreFile != null) {
+            release {
+                storeFile signingStoreFile
+                storePassword signingProps.storePassword
+                keyAlias signingProps.keyAlias
+                keyPassword signingProps.keyPassword
+            }
+        }
+    }
 
     defaultConfig {
         applicationId "io.github.wxmyyds.discordautotranslate"
@@ -22,6 +53,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 有正式签名配置时 Debug 也用它签名（便于同一证书升级安装）；
+            // 未配置时保持 AGP 默认的 debug 签名。
+            if (signingStoreFile != null) {
+                signingConfig signingConfigs.release
+            }
+        }
         release {
             // 阶段 1 关闭混淆：Hook 依赖类名/方法名匹配，先排除混淆变量，
             // 集中验证 Hook 点本身。proguard 规则已备好，阶段 5 再启用。
@@ -29,6 +67,9 @@ android {
             shrinkResources false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"),
                     "proguard-rules.pro"
+            if (signingStoreFile != null) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
