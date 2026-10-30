@@ -39,7 +39,7 @@
 1. 在本仓库 [Releases](https://github.com/wxmyyds/DiscordAutoTranslate/releases) 下载 APK 并安装。
 2. 打开 LSPosed，启用 **Discord AutoTranslate**，作用域勾选 `com.discord`。
 3. 强制停止并重启 Discord。
-4. 打开模块的设置界面，填写 API URL、密钥、模型等配置即可开始翻译。
+4. 打开模块设置，填写 API URL、密钥和模型。配置也可在启用模块前保存，启用后自动同步。
 
 > 需要支持 API 102 的 LSPosed 版本。
 
@@ -56,8 +56,7 @@
 
 ## 隐私
 
-启用后消息正文会发送到你在设置中配置的第三方翻译服务。
-API 密钥仅保存在本机（LSPosed remote preferences），不会写入日志。
+启用后消息正文会发送到你配置的翻译服务。API 密钥保存在本机私有配置中，并同步到 LSPosed remote preferences；不会写入日志。
 消息正文与译文始终不会写入日志；详细日志开关只影响诊断信息的详细程度。
 
 ## 常见问题

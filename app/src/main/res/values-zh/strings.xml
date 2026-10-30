@@ -3,6 +3,10 @@
     <string name="module_name">Discord 自动翻译</string>
     <string name="module_description">自动翻译 Discord 消息，可切换原文与译文。</string>
     <string name="status_connecting">正在连接 LSPosed…</string>
+    <string name="status_local_ready">设置保存在本机；LSPosed 可用时自动同步。</string>
+    <string name="status_syncing">正在同步设置…</string>
+    <string name="status_sync_pending">已保存在本机；LSPosed 重连后重试同步。</string>
+    <string name="status_sync_failed">已保存在本机，但同步到 LSPosed 失败。</string>
     <string name="status_connected">已连接 LSPosed %1$s（API %2$d）</string>
     <string name="status_read_config_failed">读取设置失败（%1$s）。</string>
     <string name="status_service_died">LSPosed 已断开，无法保存设置。</string>

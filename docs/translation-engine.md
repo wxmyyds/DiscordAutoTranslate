@@ -55,7 +55,7 @@
 |---|---|---|
 | `auto_translate_enabled` | true | 总开关 |
 | `api_url` | `https://api.openai.com/v1` | API 基础 URL |
-| `api_key` | 空 | 仅存本机 remote preferences，不回显 |
+| `api_key` | 空 | 仅保存在本机私有配置与 LSPosed remote preferences，不回显 |
 | `api_model` | `gpt-4o-mini` | 模型名 |
 | `target_lang` | `简体中文` | 设置页下拉选择目标语言（含简/繁中、英、日、韩、俄、乌克兰语、西语、法语、德语、葡语、意语、阿拉伯语、波斯语、印地语、孟加拉语、泰语、希伯来语、希腊语、越南语、土耳其语、印尼语）；旧版列表外值继续显示并保留 |
 | `extra_headers` | 空 | 额外请求头（每行一个 `Key: Value`） |
@@ -66,9 +66,8 @@
 
 - `apiKey` 与 `extraHeaders` 默认值为空串；空密钥与空请求头是有效配置。
 - 缺省配置键使用默认值；已保存的类型或必填值无效会使配置整体不可用。
-- 保存用 `commit()` 后台执行，按返回值报告成功/失败；提示语不声称目标进程
-  已即时生效（目标进程侧未注册 remote preferences 变更监听，运行中的 Discord
-  可能需重启才生效）。
+- 设置页始终先保存到模块自身的私有 SharedPreferences，不依赖 LSPosed service 在线；模块启用并建立 service 后，本地已初始化的配置推送到 remote preferences，否则首次从 remote 导入旧配置。模块进程仍只读取 remote preferences。
+- 保存通过 `commit()` 在后台执行；成功后提示 Discord 可能需要重启，因目标进程不监听 remote preferences 变更。
 
 ## 隐私与日志
 

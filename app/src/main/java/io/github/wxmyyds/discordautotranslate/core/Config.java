@@ -7,10 +7,10 @@ import androidx.annotation.Nullable;
 /**
  * 模块配置的键名、默认值与快照。
  *
- * <p>存储方式：使用 libxposed 的 remote preferences（{@code getRemotePreferences}）。
- * 目标进程侧通过 {@code XposedInterface.getRemotePreferences(group)} 读取；
- * 独立设置 Activity 侧通过 {@code XposedService.getRemotePreferences(group)} 读写。
- * 两侧必须使用同一个 {@link #GROUP}。</p>
+ * <p>运行时配置通过 libxposed remote preferences 共享：目标进程由
+ * {@code XposedInterface.getRemotePreferences(group)} 读取，设置页通过
+ * {@code XposedService.getRemotePreferences(group)} 同步写入。模块尚未启用时，
+ * 设置页先保存到自身私有 SharedPreferences；服务可用后再同步到 remote preferences。</p>
  *
  * <p>需求 §5.6：API 密钥仅保存在本机、不写入日志、不硬编码。</p>
  */

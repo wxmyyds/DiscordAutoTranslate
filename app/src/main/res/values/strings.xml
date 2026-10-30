@@ -3,6 +3,10 @@
     <string name="module_name">Discord AutoTranslate</string>
     <string name="module_description">Translate Discord messages and switch between original and translated text.</string>
     <string name="status_connecting">Connecting to LSPosed…</string>
+    <string name="status_local_ready">Settings save on this device and sync when LSPosed is available.</string>
+    <string name="status_syncing">Syncing settings with LSPosed…</string>
+    <string name="status_sync_pending">Saved on this device. Sync will retry when LSPosed reconnects.</string>
+    <string name="status_sync_failed">Saved locally, but could not sync with LSPosed.</string>
     <string name="status_connected">Connected to LSPosed %1$s (API %2$d)</string>
     <string name="status_read_config_failed">Could not read settings (%1$s).</string>
     <string name="status_service_died">LSPosed disconnected. Settings cannot be saved.</string>
