@@ -7,7 +7,7 @@
         android:allowBackup="false"
         android:hasCode="true"
         android:label="@string/module_name"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:description="@string/module_description"
         android:supportsRtl="true">
 
