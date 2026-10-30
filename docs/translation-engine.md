@@ -10,7 +10,8 @@
 - JSON 用 `org.json`（Android 系统内置）；JVM 单测通过 `testImplementation`
   提供 `org.json:json`。
 - 支持非流式（一次性 JSON）与流式（SSE，`Http.postJson(..., sse=true)`）两种
-  响应：SSE 时按行读取并返回帧文本，由协议层累积 delta。
+  响应：由设置中的“使用流式请求”开关选择，Compatible 与 Anthropic Messages
+  支持切换，Responses 暂固定为非流式；SSE 时按行读取并由协议层累积 delta。
 
 ## 供应商协议
 
@@ -18,14 +19,13 @@
 
 | 协议 | 请求端点/体 | 译文提取 |
 |---|---|---|
-| `openai-compatible`（默认） | `POST …/v1/chat/completions`：`model` + `messages`(system+user) + `temperature:0` + `frequency_penalty:0.2` | `choices.0.message.content` |
+| `openai-compatible`（默认） | `POST …/v1/chat/completions`：`model` + `messages`(system+user) + `temperature:0` + `stream` 按设置开关 | 流式取 SSE delta；非流式取 `choices.0.message.content` |
 | `openai-responses` | `POST …/v1/responses`：`model` + `instructions`（系统提示词）+ `input` + `temperature:0` | 响应 `output` 数组按类型扫描 `message` → `output_text`（推理模型把 `reasoning` 排在 `message` 前，不能固定取 `output.0`） |
 | `anthropic-messages` | `POST …/v1/messages`，`max_tokens` 必填（8192） | `content` 数组中 text 块的拼接 |
 
-- OpenAI-Responses **不携带 `frequency_penalty`**（官方接口不接受）。
-- API URL 填完整端点；若 URL 以另一协议的端点结尾（`/chat/completions` 与
-  `/responses` 互指），请求时自动改写为当前协议端点，其余自定义网关原样使用。
-- 协议参与配置版本计算：切换协议后旧缓存不命中，按新协议重新请求。
+- Compatible 与 OpenAI-Responses 均不携带 `frequency_penalty`。
+- API URL 填基础地址（例如 `https://api.openai.com/v1`），请求时追加当前协议端点。
+- 协议与流式开关都参与配置版本计算：切换协议或流式模式后旧缓存不命中，按新配置重新请求。
 
 ## 调度与重试（core/Scheduler + TranslationException）
 
@@ -42,7 +42,7 @@
 ## 缓存
 
 `TranslationCache`，LRU 上限 512；键 = `SHA-256(正文 + 配置版本)`。
-配置版本纳入 `apiUrl / model / targetLang / bodyTemplate(协议) / systemPrompt /
+配置版本纳入 `apiUrl / model / targetLang / protocol / streaming / systemPrompt /
 凭据 SHA-256 指纹`：任何影响结果的配置变化都会使旧条目不再命中。
 
 ## 配置项（core/Config，未配置一律回落默认值）
@@ -56,6 +56,7 @@
 | `target_lang` | `简体中文` | 目标语言 |
 | `extra_headers` | 空 | 额外请求头（每行一个 `Key: Value`） |
 | `provider_protocol` | `openai-compatible` | 见上表 |
+| `streaming_enabled` | true | Compatible 与 Anthropic Messages 使用流式请求；Responses 固定非流式 |
 | `system_prompt` | 英文规则式提示词 | 只翻译、不接话、不拒译侮辱性内容、无对照示例 |
 | `timeout_ms` / `max_concurrency` | 正整数 | 超时与并发上限，≤0 视为未配置 |
 

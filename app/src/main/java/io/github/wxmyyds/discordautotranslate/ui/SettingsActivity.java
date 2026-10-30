@@ -8,6 +8,7 @@ import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -22,6 +23,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import io.github.wxmyyds.discordautotranslate.core.Config;
+import io.github.wxmyyds.discordautotranslate.core.Protocols;
 import io.github.wxmyyds.discordautotranslate.core.MemoryPrefs;
 import io.github.wxmyyds.discordautotranslate.translate.ApiTester;
 
@@ -67,6 +69,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
     private EditText timeoutInput;
     private EditText concurrencyInput;
     private CheckBox enabledInput;
+    private CheckBox streamingInput;
     private TextView statusText;
     private TextView resultText;
     private EditText testTextInput;
@@ -159,6 +162,17 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         protocolSpinner.setAdapter(protocolAdapter);
         protocolSpinner.setSelection(positionOf(Config.DEF_PROTOCOL));
         root.addView(protocolSpinner, matchWrap());
+        protocolSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                updateStreamingAvailability();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                updateStreamingAvailability();
+            }
+        });
         TextView protocolHint = new TextView(this);
         protocolHint.setTextSize(12f);
         protocolHint.setText("API URL 只填到 /v1 的基础地址，请求时按所选协议追加端点："
@@ -166,6 +180,10 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 + "Anthropic-Messages 追加 /messages，切换协议无需修改 URL。"
                 + "旧配置里填写的完整端点需删掉后缀只留基础地址。");
         root.addView(protocolHint, matchWrap());
+
+        streamingInput = new CheckBox(this);
+        streamingInput.setText("使用流式请求（Responses 协议不支持）");
+        root.addView(streamingInput, matchWrap());
 
         // 注意：TYPE_TEXT_VARIATION_* 必须与 TYPE_CLASS_TEXT 组合使用。
         urlInput = addField(root, "API URL", Config.DEF_API_URL,
@@ -275,6 +293,13 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         return 1;
     }
 
+    private void updateStreamingAvailability() {
+        if (streamingInput != null && protocolSpinner != null) {
+            streamingInput.setEnabled(Protocols.supportsStreaming(
+                    protocolAt(protocolSpinner.getSelectedItemPosition())));
+        }
+    }
+
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
@@ -289,6 +314,8 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         Config.Snapshot snapshot = Config.read(currentPrefs);
         enabledInput.setChecked(snapshot.enabled);
         protocolSpinner.setSelection(positionOf(snapshot.protocol));
+        streamingInput.setChecked(snapshot.streaming);
+        updateStreamingAvailability();
         // 等于默认值的填空项留空，让灰色占位符（hint 即默认值）展示默认值，
         // 不把默认值填成实际文本。
         setTextOrPlaceholder(urlInput, snapshot.apiUrl, Config.DEF_API_URL);
@@ -325,6 +352,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             editor = targetPrefs.edit();
             editor.putBoolean(Config.KEY_ENABLED, snapshot.enabled);
             editor.putString(Config.KEY_PROTOCOL, snapshot.protocol);
+            editor.putBoolean(Config.KEY_STREAMING, snapshot.streaming);
             // 等于默认值的填空项删除已存键而不是写入：默认值不固化为本机内容，
             // 之后模块调整默认值时未自定义的配置自动跟随，清空输入框再保存
             // 也能回到默认值。
@@ -430,6 +458,7 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         memoryPrefs.put(Config.KEY_ENABLED, enabledInput.isChecked());
         memoryPrefs.put(Config.KEY_PROTOCOL,
                 protocolAt(protocolSpinner.getSelectedItemPosition()));
+        memoryPrefs.put(Config.KEY_STREAMING, streamingInput.isChecked());
         memoryPrefs.put(Config.KEY_API_URL, urlInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_API_KEY, keyInput.getText().toString().trim());
         memoryPrefs.put(Config.KEY_MODEL, modelInput.getText().toString().trim());

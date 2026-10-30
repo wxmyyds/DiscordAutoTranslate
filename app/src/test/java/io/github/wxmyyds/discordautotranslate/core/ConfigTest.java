@@ -135,6 +135,17 @@ public class ConfigTest {
         assertNotEquals("protocol change must change version", base, switched);
     }
 
+    @Test
+    public void streamingDefaultsToEnabledAndChangesConfigVersion() {
+        Config.Snapshot defaults = Config.read(new MemoryPrefs());
+        Config.Snapshot nonStreaming = Config.read(new MemoryPrefs()
+                .put(Config.KEY_STREAMING, false));
+
+        assertTrue(defaults.streaming);
+        assertFalse(nonStreaming.streaming);
+        assertNotEquals(defaults.version(), nonStreaming.version());
+    }
+
     /** 用户填了有效值时必须用用户的值，不能被默认值覆盖。 */
     @Test
     public void explicitValuesAreKept() {

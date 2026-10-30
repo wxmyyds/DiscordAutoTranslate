@@ -16,9 +16,8 @@ import org.json.JSONObject;
  * <ul>
  *   <li>{@link Config#PROTOCOL_OPENAI_COMPATIBLE}：{@code POST /v1/chat/completions}，
  *       请求体为 {@code messages}（system + user）+ {@code temperature:0} +
- *       {@code stream:true}（流式是为避免慢速供应商上长消息被总时长超时掐断），
- *       译文从 SSE 帧累积 {@code choices.0.delta.content}，非流式 JSON 回退到
- *       {@code choices.0.message.content}。不携带 {@code frequency_penalty}：
+ *       {@code stream} 由设置开关决定；流式时译文从 SSE 帧累积，非流式时
+ *       从 {@code choices.0.message.content} 提取。不携带 {@code frequency_penalty}：
  *       频率惩罚抑制重复 token，而广告/刷屏类原文本身就是大段重复，惩罚会
  *       促使模型跳过或改写重复段落，与「逐块照译、保留重复」直接冲突。</li>
  *   <li>{@link Config#PROTOCOL_OPENAI_RESPONSES}：{@code POST /v1/responses}，
@@ -28,7 +27,7 @@ import org.json.JSONObject;
  *       message 项之前，不能固定取 {@code output.0}）。</li>
  *   <li>{@link Config#PROTOCOL_ANTHROPIC_MESSAGES}：{@code POST /v1/messages}，
  *       请求体为顶层 {@code system} + {@code messages}（仅 user）+
- *       {@code max_tokens}（必填）+ {@code stream:true}。译文取
+ *       {@code max_tokens}（必填）+ {@code stream} 由设置开关决定。译文取
  *       {@code content} 数组中 {@code type=="text"} 块的拼接（thinking 块跳过），
  *       流式按 {@code content_block_delta} 增量累积。</li>
  * </ul>
@@ -76,17 +75,16 @@ public final class Protocols {
     /**
      * 构造请求体 JSON。
      *
-     * <p>Compatible 协议携带 {@code stream:true}：非流式接口在生成完成前
-     * 零字节返回，慢速供应商上长消息会被总时长超时掐断（实测 15s 读超时，
-     * 同供应商聊天客户端流式发送很快）；流式下 token 持续到达，读超时按
-     * 字节间隔计算，总生成时长不再受限。Anthropic Messages 同理走流式
-     * （事件格式不同，由提取层按 {@code data:} 帧的 type 字段区分）。
-     * Responses 协议保持非流式（其流式事件格式不同，暂未支持）。</p>
+     * <p>Compatible 协议与 Anthropic Messages 根据 {@code streaming} 携带
+     * {@code stream:true/false}。流式时 token 持续到达，读超时按字节间隔计算；
+     * 非流式接口在生成完成前零字节返回。Responses 协议保持非流式（其流式
+     * 事件格式暂未支持）。</p>
      *
      * @throws TranslationException 理论上仅在 org.json 拒绝值时发生，统一归类为配置错误
      */
     public static String requestBody(String protocol, String text,
-                                     @Nullable String systemPrompt, String model)
+                                     @Nullable String systemPrompt, String model,
+                                     boolean streaming)
             throws TranslationException {
         String safeText = text == null ? "" : text;
         String safePrompt = systemPrompt == null ? "" : systemPrompt;
@@ -112,7 +110,7 @@ public final class Protocols {
                 body.put("messages", messages);
                 body.put("max_tokens", ANTHROPIC_MAX_TOKENS);
                 body.put("temperature", TEMPERATURE);
-                body.put("stream", true);
+                body.put("stream", streaming);
             } else {
                 JSONArray messages = new JSONArray();
                 JSONObject system = new JSONObject();
@@ -125,7 +123,7 @@ public final class Protocols {
                 messages.put(user);
                 body.put("messages", messages);
                 body.put("temperature", TEMPERATURE);
-                body.put("stream", true);
+                body.put("stream", streaming);
             }
             return body.toString();
         } catch (JSONException e) {
@@ -164,23 +162,28 @@ public final class Protocols {
         return url + suffix;
     }
 
+    /** 是否该协议支持本模块当前实现的流式响应格式。 */
+    public static boolean supportsStreaming(String protocol) {
+        return Config.PROTOCOL_OPENAI_COMPATIBLE.equals(protocol)
+                || Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol);
+    }
+
     /**
-     * 从响应体提取译文。
-     *
-     * <p>SSE 流式响应（{@code data:} 帧开头）按帧累积
-     * {@code choices.0.delta.content}；非流式 JSON（服务端忽略 stream 参数）
-     * 走原有路径。</p>
+     * 从响应体提取译文，解析模式必须与请求模式一致。
      */
-    public static String extractTranslation(String protocol, String responseBody)
+    public static String extractTranslation(String protocol, String responseBody,
+                                            boolean streaming)
             throws TranslationException {
         String text;
         if (Config.PROTOCOL_ANTHROPIC_MESSAGES.equals(protocol)) {
-            text = extractAnthropicText(responseBody);
+            text = extractAnthropicText(responseBody, streaming);
         } else if (Config.PROTOCOL_OPENAI_RESPONSES.equals(protocol)) {
             text = extractResponsesText(responseBody);
-        } else if (responseBody != null && responseBody.trim().startsWith("data:")) {
+        } else if (streaming && responseBody != null
+                && responseBody.trim().startsWith("data:")) {
             text = extractStreamedChatText(responseBody);
         } else {
+            // 流式请求遇到忽略 stream 参数的服务端时，保留非流式 JSON 兼容路径。
             text = JsonPath.extractString(responseBody, "choices.0.message.content");
         }
         return unwrapTranslate(text);
@@ -281,23 +284,22 @@ public final class Protocols {
     }
 
     /**
-     * Anthropic Messages 提取：按 {@code data:}/{@code event:} 前缀区分流式与非流式。
+     * Anthropic Messages 提取：流式开关开启且响应为 SSE 时按事件提取；否则按 JSON 提取。
      *
      * <p>非流式结构：顶层 {@code content} 数组，译文在 {@code type=="text"}
      * 块的 {@code text} 字段（扩展思考模型的 thinking 块必须跳过）。
      * {@code stop_reason=="max_tokens"} 说明输出被 max_tokens 掐断，
      * 与流式同规则拒绝。</p>
      */
-    private static String extractAnthropicText(String responseBody)
+    private static String extractAnthropicText(String responseBody, boolean streaming)
             throws TranslationException {
-        // Anthropic 流以 event: 行开头（官方事件流带 event: 注记），
-        // 两种前缀都算流式，不能只认 data:。
-        if (responseBody != null) {
+        if (streaming && responseBody != null) {
             String head = responseBody.trim();
             if (head.startsWith("data:") || head.startsWith("event:")) {
                 return extractStreamedAnthropicText(responseBody);
             }
         }
+        // 流式请求遇到忽略 stream 参数的服务端时，保留非流式 JSON 兼容路径。
         Object root = JsonPath.parse(responseBody);
         if (!(root instanceof JSONObject)) {
             throw new TranslationException(TranslationException.Kind.PARSE,

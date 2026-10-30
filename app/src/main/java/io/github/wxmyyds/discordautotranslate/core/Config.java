@@ -52,6 +52,10 @@ public final class Config {
      */
     public static final String KEY_PROTOCOL = "provider_protocol";
 
+    /** 是否对支持的协议使用 SSE 流式请求。 */
+    public static final String KEY_STREAMING = "streaming_enabled";
+    public static final boolean DEF_STREAMING = true;
+
     /** OpenAI 兼容协议：{@code POST /v1/chat/completions}，译文取 {@code choices.0.message.content}。 */
     public static final String PROTOCOL_OPENAI_COMPATIBLE = "openai-compatible";
 
@@ -124,6 +128,8 @@ public final class Config {
         /** 供应商协议，取值为 {@link #PROTOCOL_OPENAI_COMPATIBLE}、
          * {@link #PROTOCOL_OPENAI_RESPONSES} 或 {@link #PROTOCOL_ANTHROPIC_MESSAGES}。 */
         public final String protocol;
+        /** 是否对支持的协议使用 SSE 流式请求。 */
+        public final boolean streaming;
         public final int timeoutMs;
         public final int maxConcurrency;
 
@@ -136,6 +142,7 @@ public final class Config {
             extraHeaders = str(p, KEY_EXTRA_HEADERS, DEF_EXTRA_HEADERS);
             systemPrompt = str(p, KEY_SYSTEM_PROMPT, DEF_SYSTEM_PROMPT);
             protocol = readProtocol(p);
+            streaming = readBoolean(p, KEY_STREAMING, DEF_STREAMING);
             timeoutMs = positiveInt(p, KEY_TIMEOUT_MS, DEF_TIMEOUT_MS);
             maxConcurrency = positiveInt(p, KEY_MAX_CONCURRENCY, DEF_MAX_CONCURRENCY);
         }
@@ -211,7 +218,7 @@ public final class Config {
          */
         public String version() {
             return encode(apiUrl) + encode(model) + encode(targetLang) + encode(protocol)
-                    + encode(systemPrompt)
+                    + encode(Boolean.toString(streaming)) + encode(systemPrompt)
                     + encode(credentialFingerprint());
         }
 
