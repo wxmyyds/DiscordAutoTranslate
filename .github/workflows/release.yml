@@ -23,6 +23,7 @@ on:
 
 env:
   APP_NAME: DiscordAutoTranslate
+  LSPOSED_REPO: Xposed-Modules-Repo/io.github.wxmyyds.discordautotranslate
 
 permissions:
   contents: write
@@ -185,6 +186,18 @@ jobs:
           echo "versionCode=$NEW_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Verify release synchronization configuration
+        if: inputs.mode == 'stable'
+        env:
+          LSPOSED_REPO_TOKEN: ${{ secrets.LSPOSED_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${LSPOSED_REPO_TOKEN:-}" ]]; then
+            echo "::error::缺少 Secret LSPOSED_REPO_TOKEN，无法同步到 $LSPOSED_REPO"
+            echo "请配置对 $LSPOSED_REPO 具有 Contents: Read and write 权限的 GitHub token"
+            exit 1
+          fi
+
       - name: Run unit tests
         run: gradle --no-daemon testDebugUnitTest
 
@@ -244,6 +257,7 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
           SOURCE_REF: ${{ steps.resolve.outputs.sourceRef }}
           SOURCE_SHA: ${{ steps.resolve.outputs.sourceSha }}
+          LSPOSED_REPO_TOKEN: ${{ secrets.LSPOSED_REPO_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -293,6 +307,28 @@ jobs:
               --title "$APP_NAME $VERSION" \
               --notes-file /tmp/release-notes.md \
               "$APP_NAME.apk"
+
+            # Keep the LSPosed Modules Repo release in sync with the source release.
+            # The target repository is intentionally updated only for stable releases.
+            echo "同步正式版到 $LSPOSED_REPO：$TAG"
+            if GH_TOKEN="$LSPOSED_REPO_TOKEN" gh release view "$TAG" --repo "$LSPOSED_REPO" >/dev/null 2>&1; then
+              GH_TOKEN="$LSPOSED_REPO_TOKEN" gh release edit "$TAG" \
+                --repo "$LSPOSED_REPO" \
+                --title "$APP_NAME $VERSION" \
+                --notes-file /tmp/release-notes.md
+              GH_TOKEN="$LSPOSED_REPO_TOKEN" gh release upload "$TAG" \
+                --repo "$LSPOSED_REPO" \
+                "$APP_NAME.apk" \
+                --clobber
+            else
+              GH_TOKEN="$LSPOSED_REPO_TOKEN" gh release create "$TAG" \
+                --repo "$LSPOSED_REPO" \
+                --target main \
+                --title "$APP_NAME $VERSION" \
+                --notes-file /tmp/release-notes.md \
+                "$APP_NAME.apk"
+            fi
+            echo "已同步 $LSPOSED_REPO 发布：$TAG"
           else
             {
               echo "# $APP_NAME $VERSION（预发布）"
