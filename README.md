@@ -4,8 +4,7 @@
 
 **Discord 消息自动翻译（多语言 → 可配置目标语言）的 LSPosed 模块**
 
-基于 [LibXposed API 102](https://github.com/libxposed/api)（现代 Xposed API），
-**不使用**旧的 `de.robv.android.xposed` API。
+基于 [LibXposed API 102](https://github.com/libxposed/api)（现代 Xposed API）
 
 [![GitHub release](https://img.shields.io/github/v/release/wxmyyds/DiscordAutoTranslate)](https://github.com/wxmyyds/DiscordAutoTranslate/releases)
 [![GitHub Actions](https://img.shields.io/github/actions/workflow/status/wxmyyds/DiscordAutoTranslate/build.yml?label=build)](https://github.com/wxmyyds/DiscordAutoTranslate/actions)
