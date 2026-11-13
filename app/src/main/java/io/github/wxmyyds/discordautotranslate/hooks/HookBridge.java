@@ -361,8 +361,9 @@ public final class HookBridge {
                 return;
             }
             HookDiagnostics.info("rerender dispatched viewAttached="
-                    + (view != null && view.isAttachedToWindow())
-                    + " viewClass=" + (view == null ? "null" : view.getClass().getName()));
+                    + (contentView != null && contentView.isAttachedToWindow())
+                    + " viewClass=" + (contentView == null
+                    ? "null" : contentView.getClass().getName()));
             invokeRerender(invocationTarget, contentView, messageId, method, args);
         };
         new Handler(Looper.getMainLooper()).post(task);
