@@ -74,11 +74,7 @@ final class RowRefresher {
     private static final java.util.Set<String> PENDING_ROW_REFRESH =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
-    /**
-     * holder 的内容承载视图字段名（smali 已核对，Discord 340.13）：
-     * 正文 {@code messageContentView}、富 Embed {@code embedView}、
-     * 帖子预览 {@code postPreviewEmbedView}、投票 {@code pollView}。
-     */
+    /** Optional direct content-view fields on holders; 340.13 is validated by itemView ancestry. */
     private static final String[] CONTENT_VIEW_FIELDS = {
             "messageContentView", "embedView", "postPreviewEmbedView", "pollView"};
 
@@ -89,7 +85,32 @@ final class RowRefresher {
                 return true;
             }
         }
+        // Discord 340.13 keeps the content child under the ViewHolder's itemView rather
+        // than exposing it as a holder field. findContainingViewHolder already identifies
+        // the owning holder; verify containment through the actual view hierarchy instead.
+        Object itemView = Reflect.getField(holder, "itemView");
+        if (itemView instanceof View && isDescendantOrSelf(view, (View) itemView)) {
+            HookDiagnostics.infoOnce("rowRefresh.ownerViaItemView",
+                    "content holder matched through itemView descendant hierarchy");
+            return true;
+        }
         return false;
+    }
+
+    private static boolean isDescendantOrSelf(View candidate, View root) {
+        for (View current = candidate; current != null; ) {
+            if (current == root) {
+                return true;
+            }
+            android.view.ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return false;
+    }
+
+    private static void reportRowRefreshFailure(String stage) {
+        HookDiagnostics.infoOnce("rowRefresh.failure." + stage,
+                "row adapter refresh lookup failed at " + stage);
     }
 
     /**
@@ -104,23 +125,31 @@ final class RowRefresher {
         }
         String bound = lookup.boundIdOf(view);
         if (messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
+            reportRowRefreshFailure("boundMessageMismatch");
             return false;
         }
         try {
             android.view.ViewParent contentRecycler = findRecyclerView(view);
             if (contentRecycler == null) {
+                reportRowRefreshFailure("contentRecycler");
                 return false;
             }
             Object contentHolder = Reflect.call(
                     findInheritedMethod(contentRecycler.getClass(), "findContainingViewHolder",
                             1, View.class), contentRecycler, view);
-            if (contentHolder == null || !ownsContentView(contentHolder, view)) {
+            if (contentHolder == null) {
+                reportRowRefreshFailure("contentHolder");
+                return false;
+            }
+            if (!ownsContentView(contentHolder, view)) {
+                reportRowRefreshFailure("contentOwnership");
                 return false;
             }
             Object contentAdapter = Reflect.call(
                     findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
             android.view.ViewParent rowRecycler = findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS);
             if (contentAdapter == null || rowRecycler == null) {
+                reportRowRefreshFailure(contentAdapter == null ? "contentAdapter" : "chatListAncestor");
                 return false;
             }
             Object rowAdapter = Reflect.call(
@@ -129,10 +158,12 @@ final class RowRefresher {
                     findInheritedMethod(rowRecycler.getClass(), "findContainingViewHolder",
                             1, View.class), rowRecycler, view);
             if (rowAdapter == null || rowHolder == null) {
+                reportRowRefreshFailure(rowAdapter == null ? "rowAdapter" : "rowHolder");
                 return false;
             }
             Object itemView = Reflect.getField(rowHolder, "itemView");
             if (!Reflect.isInstanceOfName(itemView, MESSAGE_VIEW_CLASS)) {
+                reportRowRefreshFailure("messageViewItem");
                 return false;
             }
             Object bindingPositionValue = Reflect.call(
@@ -151,9 +182,12 @@ final class RowRefresher {
             int notifyPosition = absolutePosition >= 0 ? absolutePosition
                     : (bindingAdapter == rowAdapter ? bindingPosition : -1);
             if (notifyPosition < 0) {
+                reportRowRefreshFailure("invalidRowPosition");
                 return false;
             }
             invalidateMessageContentBindCache(contentHolder);
+            Method notifyItemChanged = findInheritedMethod(
+                    rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
             // The content view is an item in the nested MessageAccessoriesView RecyclerView.
             // Notify it as well as the outer chat row so both layout levels recalculate.
             int contentPosition = -1;
@@ -174,17 +208,21 @@ final class RowRefresher {
                     }
                 }
             }
-            Method notifyItemChanged = findInheritedMethod(
-                    rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
             if (notifyItemChanged == null) {
+                reportRowRefreshFailure("notifyItemChangedMethod");
                 return false;
             }
             try {
                 notifyItemChanged.invoke(rowAdapter, notifyPosition);
+                HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
+                        "outer chat adapter notified; bindingPosition=" + bindingPosition
+                                + " absolutePosition=" + absolutePosition
+                                + " notifyPosition=" + notifyPosition);
                 // 不做同步重绑，避免直接重跑宿主绑定管线。
                 scheduleRelayoutAfterLayout(view);
                 return true;
             } catch (Throwable t) {
+                reportRowRefreshFailure("notifyItemChangedInvocation");
                 return false;
             }
         } catch (Throwable t) {
