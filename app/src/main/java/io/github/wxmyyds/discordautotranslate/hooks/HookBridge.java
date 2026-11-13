@@ -418,6 +418,9 @@ public final class HookBridge {
         if (messageId == null || structurableText == null) {
             return;
         }
+        String nodeTypes = TextExtractor.typeSummary(structurableText);
+        HookDiagnostics.infoOnce("translation.nodeTypes." + nodeTypes,
+                "translation content node types=" + nodeTypes);
         TextExtractor.Result ex = TextExtractor.extract(structurableText);
         if (ex == null || ex.text.trim().isEmpty()) {
             HookDiagnostics.warnOnce("translation.noText", "translation skipped: extracted text is empty"

@@ -175,6 +175,58 @@ public final class TextExtractor {
         }
     }
 
+    /** Return bounded runtime/semantic node class names only; never includes node values. */
+    public static String typeSummary(@Nullable Object structurableText) {
+        List<String> types = new java.util.ArrayList<>();
+        if ("AnnotatedStructurableText".equals(
+                HookConfiguration.semanticTypeName(structurableText == null
+                        ? Object.class : structurableText.getClass()))) {
+            Object nodes = Reflect.callMember(structurableText, "getContent");
+            if (nodes instanceof List<?>) {
+                collectTypes((List<?>) nodes, types, 0);
+            }
+        } else if (structurableText != null) {
+            appendType(structurableText, types);
+        }
+        if (types.isEmpty()) {
+            return "empty";
+        }
+        StringBuilder summary = new StringBuilder();
+        for (String type : types) {
+            if (summary.length() > 0) summary.append(',');
+            summary.append(type);
+        }
+        return summary.toString();
+    }
+
+    private static void collectTypes(List<?> nodes, List<String> types, int depth) {
+        if (depth > 8 || types.size() >= 24) return;
+        for (Object node : nodes) {
+            if (node == null || types.size() >= 24) continue;
+            if (node instanceof List<?>) {
+                collectTypes((List<?>) node, types, depth + 1);
+                continue;
+            }
+            appendType(node, types);
+            String semantic = HookConfiguration.semanticTypeName(node.getClass());
+            String member = "BulletListContentNode".equals(semantic) ? "getItems"
+                    : isTextContainer(semantic) ? "getContent" : null;
+            if (member != null) {
+                Object children = Reflect.callMember(node, member);
+                if (children instanceof List<?>) {
+                    collectTypes((List<?>) children, types, depth + 1);
+                }
+            }
+        }
+    }
+
+    private static void appendType(Object node, List<String> types) {
+        String semantic = HookConfiguration.semanticTypeName(node.getClass());
+        String type = node.getClass().getName() + "="
+                + (semantic == null ? "UNMAPPED" : semantic);
+        if (!types.contains(type)) types.add(type);
+    }
+
     @Nullable
     public static Result extract(@Nullable Object structurableText) {
         if (structurableText == null) {
