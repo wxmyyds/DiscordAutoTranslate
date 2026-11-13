@@ -84,28 +84,6 @@
       "contentArgument": 0,
       "contextArgument": 1
     },
-    "message.reply": {
-      "enabled": true,
-      "target": {
-        "class": "com.discord.chat.presentation.message.MessageView",
-        "name": "f",
-        "static": false,
-        "parameterCount": 7,
-        "parameterTypes": {
-          "0": "com.discord.chat.bridge.Message"
-        }
-      },
-      "referencedMessageSource": "messageModel",
-      "messageArgument": 0,
-      "referencedMessageAccessor": "getReferencedMessage",
-      "referencedMessageClass": "c8.c",
-      "referencedMessageField": "a",
-      "messageIdGetter": "getId-3Eiw7ao",
-      "contentGetter": "getContent",
-      "replyPreviewAccessor": "getReplyPreview",
-      "bindingField": "P",
-      "textViewField": "H"
-    },
     "embed.bind": {
       "enabled": false,
       "reason": "352017 embed binding target has not been verified."

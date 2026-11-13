@@ -18,21 +18,21 @@
 ## 已确认的架构教训（改代码前先读）
 
 1. **文本转换目标按 profile 变化**：`340013` 使用 `TextUtilsKt.toSpannable`，
-   `352017` 使用已核对的 `kl.b.B0` 静态方法。绑定和转换目标由 profile 指定，
-   回复引用、Embed、帖子预览与 Poll 只有在对应 profile 核实后才能启用。
-2. **替换对象类型**：必须是 `AnnotatedStructurableText` 或
+   `352017` 使用已核对的 `kl.b.B0` 静态方法。绑定和转换目标由 profile 指定。
+2. **扩展 Hook 按版本配置**：回复、Embed、帖子预览与 Poll 必须先核实目标。`352017` 的回复预览正文由已有 `MessageContentView.c` 渲染入口承载，必须复用引用消息 ID 的状态，不另加并行回复渲染链；Embed、帖子预览与 Poll 仍须分别核实。
+3. **替换对象类型**：必须是 `AnnotatedStructurableText` 或
    `PrimitiveStructurableText` 之一，否则渲染器抛 `RuntimeException`；
    Discord 自带的 simpleast Markdown 解析器在 APK 内无调用方，不能复用。
-3. **节点重建按 profile 选择**：`340013` 使用 Kotlin data class 的
+4. **节点重建按 profile 选择**：`340013` 使用 Kotlin data class 的
    `componentN()/copy(...)`；`352017` 混淆节点仅按 `constructorFallbackTypes`
    白名单及已核实字段、构造器顺序重建。未知类型不通过猜字段或方法回退。
-4. **正文存储绝不能依赖 View**：RecyclerView 复用视图，译文/状态一律以
+5. **正文存储绝不能依赖 View**：RecyclerView 复用视图，译文/状态一律以
    messageId 为键存 `StateStore`；同正文不同对象需身份映射（`IdentityMessageMap`）。
-5. **旧默认值会静默失效**：配置读取是「已存值优先于默认值」。曾出现用户在
+6. **旧默认值会静默失效**：配置读取是「已存值优先于默认值」。曾出现用户在
    设置页填了新提示词、但手机里存的是旧版默认模板（硬编码提示词、不含
    `{{system}}`），新配置项根本没被发送。教训：新增配置项时应考虑已安装用户
    的旧值，保存时可检查关键占位符并提示。
-6. **热重载后不重放包生命周期**：`onHotReloaded` 必须自行重建状态、重装 Hook、
+7. **热重载后不重放包生命周期**：`onHotReloaded` 必须自行重建状态、重装 Hook、
    重新 attach 模块资源、清理缓存；目标方法从旧 Hook 句柄反推。
 
 ## 排查与验证要点

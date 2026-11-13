@@ -215,8 +215,8 @@ public final class MessageHooks {
     // ----------------------------------------------- Hook 3: 文本转换
 
     /**
-     * Hook 配置选出的文本转换入口：消息、回复引用和 Embed 文本在此登记与替换，
-     * 行内图标注入也在宿主生成 Spannable 后完成。
+     * 配置选定的文本转换入口只负责按内容身份读取已有翻译状态并替换译文；
+     * 翻译任务由显式绑定/渲染入口登记，转换阶段不补发翻译请求。
      */
     private static void installTextConversionHook(XposedModule module, ClassLoader cl,
                                                HookConfiguration config,
@@ -252,15 +252,10 @@ public final class MessageHooks {
                     try {
                         String messageId = HookBridge.get().resolveMessageId(source);
                         if (messageId != null) {
-                            // 回复引用/Embed 路径不经过正文渲染入口，
-                            // 在此登记内容并触发翻译。
+                            // 内容身份映射由显式绑定/渲染入口建立；此处只读取并应用已有状态。
                             HookBridge.get().rememberContent(messageId, source);
 
                             StateStore.Entry e = StateStore.get().peek(messageId);
-                            if (e == null) {
-                                HookBridge.get().onMessageBound(null, messageId, source);
-                                e = StateStore.get().peek(messageId);
-                            }
                             String translated = (e != null
                                     && e.status == StateStore.Status.TRANSLATED
                                     && !e.showingOriginal) ? e.translatedText : null;
@@ -339,20 +334,51 @@ public final class MessageHooks {
         installedHookIds.add("message.reply");
     }
 
-    /** 前置：从配置指定的引用消息参数或消息模型中登记消息 ID 与正文身份映射。 */
+    /** 后置：登记回复引用的重渲染目标，使译文完成后引用内也能更新。 */
+    private static void replyPost(XposedInterface.Chain chain, Method replyBind,
+                                  JSONObject spec) {
+        Object preview = chain.getThisObject();
+        if (preview == null) {
+            return;
+        }
+        View replyText = replyTextViewOf(preview, spec);
+        if (replyText == null) {
+            return;
+        }
+        String messageId = HookBridge.get().messageIdOf(replyText);
+        if (messageId == null) {
+            return;
+        }
+        RerenderRegistry.register(messageId, replyText, preview,
+                replyBind, chain.getArgs().toArray());
+    }
+
+    /** 前置：从配置指定的引用消息参数登记消息 ID 与正文身份映射并触发统一翻译流程。 */
     private static void replyPre(XposedInterface.Chain chain, JSONObject spec) {
-        Object message = referencedMessage(chain, spec);
+        int argument = spec.optInt("referencedMessageArgument", -1);
+        Object referenced = safeArg(chain, argument);
+        String referencedClass = spec.optString("referencedMessageClass", null);
+        String referencedGetter = spec.optString("referencedMessageGetter", null);
+        String messageIdGetter = spec.optString("messageIdGetter", null);
+        String contentGetter = spec.optString("contentGetter", null);
+        if (referenced == null || referencedClass == null || referencedGetter == null
+                || messageIdGetter == null || contentGetter == null
+                || !Reflect.isInstanceOfName(referenced, referencedClass)) {
+            return;
+        }
+        Object message = Reflect.call(Reflect.findMethodExact(referenced.getClass(),
+                referencedGetter, 0), referenced);
         if (message == null) {
             return;
         }
-        String messageId = Reflect.callString(message,
-                spec.optString("messageIdGetter", null));
+        String messageId = Reflect.callString(message, messageIdGetter);
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
         Object content = Reflect.call(Reflect.findMethodExact(message.getClass(),
-                spec.optString("contentGetter", null), 0), message);
+                contentGetter, 0), message);
         HookBridge.get().rememberContent(messageId, content);
+        HookBridge.get().onMessageBound(null, messageId, content);
 
         View replyText = replyTextViewOf(chain.getThisObject(), spec);
         if (replyText != null) {
@@ -360,70 +386,10 @@ public final class MessageHooks {
         }
     }
 
-    /** Resolve the loaded referenced message from the profile-selected source path. */
-    @Nullable
-    private static Object referencedMessage(XposedInterface.Chain chain, JSONObject spec) {
-        String source = spec.optString("referencedMessageSource", "argument");
-        Object referenced;
-        Object message;
-        if ("messageModel".equals(source)) {
-            Object model = safeArg(chain, spec.optInt("messageArgument", -1));
-            if (model == null) {
-                return null;
-            }
-            referenced = Reflect.call(Reflect.findMethodExact(model.getClass(),
-                    spec.optString("referencedMessageAccessor", null), 0), model);
-            String referencedField = spec.optString("referencedMessageField", null);
-            message = referencedField == null ? null : Reflect.getField(referenced, referencedField);
-        } else if ("argument".equals(source)) {
-            referenced = safeArg(chain, spec.optInt("referencedMessageArgument", -1));
-            String referencedGetter = spec.optString("referencedMessageGetter", null);
-            if (referenced == null || referencedGetter == null) {
-                return null;
-            }
-            message = Reflect.call(Reflect.findMethodExact(referenced.getClass(),
-                    referencedGetter, 0), referenced);
-        } else {
-            return null;
-        }
-        String referencedClass = spec.optString("referencedMessageClass", null);
-        return message != null && referencedClass != null
-                && Reflect.isInstanceOfName(referenced, referencedClass) ? message : null;
-    }
-
-    /** 后置：绑定回复正文视图并登记父行重渲染目标。 */
-    private static void replyPost(XposedInterface.Chain chain, Method replyBind,
-                                  JSONObject spec) {
-        Object message = referencedMessage(chain, spec);
-        if (message == null) {
-            return;
-        }
-        String messageId = Reflect.callString(message,
-                spec.optString("messageIdGetter", null));
-        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
-            return;
-        }
-        Object content = Reflect.call(Reflect.findMethodExact(message.getClass(),
-                spec.optString("contentGetter", null), 0), message);
-        HookBridge.get().rememberContent(messageId, content);
-
-        View replyText = replyTextViewOf(chain.getThisObject(), spec);
-        if (replyText == null) {
-            return;
-        }
-        HookBridge.get().bindView(replyText, messageId);
-        RerenderRegistry.register(messageId, replyText, chain.getThisObject(),
-                replyBind, chain.getArgs().toArray());
-    }
-
     /** 从回复引用实例取出其内部正文视图。 */
     @Nullable
-    private static View replyTextViewOf(@Nullable Object target, JSONObject spec) {
-        String previewAccessor = spec.optString("replyPreviewAccessor", null);
-        Object preview = previewAccessor == null ? target
-                : Reflect.call(Reflect.findMethodExact(target == null
-                        ? null : target.getClass(), previewAccessor, 0), target);
-        Object binding = Reflect.getField(preview,
+    private static View replyTextViewOf(@Nullable Object replyPreview, JSONObject spec) {
+        Object binding = Reflect.getField(replyPreview,
                 spec.optString("bindingField", null));
         Object replyText = Reflect.getField(binding,
                 spec.optString("textViewField", null));

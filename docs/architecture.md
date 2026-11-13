@@ -45,7 +45,7 @@ io.github.wxmyyds.discordautotranslate
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
 | `340013` | 消息绑定、正文渲染、文本转换、回复引用 | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | 消息绑定、正文渲染、文本转换 | 回复、Embed、帖子预览、Poll 未核实并禁用 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法 |
+| `352017` | 消息绑定、正文渲染、文本转换 | 回复预览内容通过 `MessageContentView.c` 与引用消息 ID 进入同一渲染/状态链路；Embed、帖子预览、Poll 仍待核实 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法 |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 
@@ -77,5 +77,5 @@ io.github.wxmyyds.discordautotranslate
 ## 能力范围（按 profile）
 
 - `340013`：正文（含 Markdown/提及/表情/代码/链接/标题/列表）、回复引用、富 Embed、帖子预览标题与投票卡片。
-- `352017`：正文翻译与重渲染；回复引用、Embed、帖子预览和 Poll 仍禁用，待目标方法核实后再单独启用。
+- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经同一个 `message.render` / `message.textConversion` 链路读取其翻译状态，不安装独立回复 Hook。回复设备行为仍待实测；Embed、帖子预览和 Poll 待各自目标核实。
 - 两个 profile 都保留失败时的原始节点树；用户可通过图标重试或切换原文/译文。
