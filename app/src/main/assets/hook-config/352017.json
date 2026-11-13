@@ -10,9 +10,9 @@
     "message.bind": {
       "target": {
         "class": "com.discord.chat.presentation.message.MessageView",
-        "name": "b",
+        "name": "f",
         "static": false,
-        "parameterCount": 4,
+        "parameterCount": 7,
         "parameterTypes": {
           "0": "com.discord.chat.bridge.Message"
         }
