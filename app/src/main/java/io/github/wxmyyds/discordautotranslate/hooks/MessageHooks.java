@@ -93,6 +93,7 @@ public final class MessageHooks {
         if (model == null) {
             return;
         }
+        rememberReferencedContent(model, spec.optJSONObject("referencedMessage"));
         String idGetter = spec.optString("messageIdGetter", null);
         String contentGetter = spec.optString("contentGetter", null);
         if (idGetter == null || contentGetter == null) {
@@ -123,6 +124,46 @@ public final class MessageHooks {
         if (contentView != null) {
             HookBridge.get().bindView(contentView, messageId);
         }
+    }
+
+    /** Map a loaded reply's body to its original message ID before its content is converted. */
+    private static void rememberReferencedContent(Object model, @Nullable JSONObject spec) {
+        if (spec == null) {
+            return;
+        }
+        String referencedAccessor = spec.optString("accessor", null);
+        String referencedClass = spec.optString("loadedClass", null);
+        String messageField = spec.optString("messageField", null);
+        String idGetter = spec.optString("messageIdGetter", null);
+        String contentGetter = spec.optString("contentGetter", null);
+        if (referencedAccessor == null || referencedClass == null || messageField == null
+                || idGetter == null || contentGetter == null) {
+            return;
+        }
+        Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(),
+                referencedAccessor, 0), model);
+        if (!Reflect.isInstanceOfName(referenced, referencedClass)) {
+            HookDiagnostics.infoOnce("message.bind.replyMapping.missing",
+                    "message.bind referenced content mapping unavailable");
+            return;
+        }
+        Object message = Reflect.getField(referenced, messageField);
+        if (message == null) {
+            HookDiagnostics.infoOnce("message.bind.replyMapping.missing",
+                    "message.bind referenced content mapping unavailable");
+            return;
+        }
+        String messageId = Reflect.callString(message, idGetter);
+        Object content = Reflect.call(Reflect.findMethodExact(message.getClass(),
+                contentGetter, 0), message);
+        boolean mapped = messageId != null && HookBridge.looksLikeSnowflake(messageId)
+                && content != null;
+        if (mapped) {
+            HookBridge.get().rememberContent(messageId, content);
+        }
+        HookDiagnostics.infoOnce("message.bind.replyMapping." + mapped,
+                "message.bind referenced content mapped=" + mapped
+                        + " contentClass=" + (content == null ? "null" : content.getClass().getName()));
     }
 
     // -------------------------------------------------- Hook 2: 正文渲染入口
@@ -241,16 +282,16 @@ public final class MessageHooks {
                 .intercept(chain -> {
                     Object source = safeArg(chain, contentArgument);
                     Object[] renderArgs = chain.getArgs().toArray();
-                    HookDiagnostics.infoOnce("message.textConversion", "message.textConversion invoked"
-                            + " idResolved="
-                            + (HookBridge.get().resolveMessageId(source) != null)
-                            + " sourceClass="
-                            + (source == null ? "null" : source.getClass().getName()));
+                    String resolvedMessageId = HookBridge.get().resolveMessageId(source);
+                    HookDiagnostics.infoOnce("message.textConversion.idResolved." + (resolvedMessageId != null),
+                            "message.textConversion identity resolved=" + (resolvedMessageId != null)
+                                    + " sourceClass="
+                                    + (source == null ? "null" : source.getClass().getName()));
                     HookDiagnostics.infoOnce("message.textConversion.callers",
                             "message.textConversion Discord callers="
                                     + HookDiagnostics.discordCallers());
                     try {
-                        String messageId = HookBridge.get().resolveMessageId(source);
+                        String messageId = resolvedMessageId;
                         if (messageId != null) {
                             // 内容身份映射由显式绑定/渲染入口建立；此处只读取并应用已有状态。
                             HookBridge.get().rememberContent(messageId, source);

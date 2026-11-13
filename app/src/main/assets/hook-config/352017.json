@@ -51,7 +51,14 @@
       },
       "modelArgument": 0,
       "messageIdGetter": "getId",
-      "contentGetter": "getContent"
+      "contentGetter": "getContent",
+      "referencedMessage": {
+        "accessor": "getReferencedMessage",
+        "loadedClass": "c8.c",
+        "messageField": "a",
+        "messageIdGetter": "getId-3Eiw7ao",
+        "contentGetter": "getContent"
+      }
     },
     "message.render": {
       "target": {
