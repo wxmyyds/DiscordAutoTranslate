@@ -31,7 +31,7 @@ public class StructurableTextFactoryTest {
 
     @Before
     public void installFakeHostConstructors() throws Exception {
-        ContentNodeTestProfile.activate(ContentNodesTest.class);
+        ContentNodeTestProfile.activate(ContentNodesTest.class, OpaqueNodeTranslationTest.class);
         StructurableTextFactory.reset();
         setConstructor("sAnnotatedCtor", AnnotatedStructurableText.class.getConstructor(List.class));
         setConstructor("sPrimitiveCtor", PrimitiveStructurableText.class.getConstructor(String.class));
