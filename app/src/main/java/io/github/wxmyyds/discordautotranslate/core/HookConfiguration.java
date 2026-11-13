@@ -180,8 +180,7 @@ public final class HookConfiguration {
 
     @Nullable
     public JSONObject iconClickConfiguration() {
-        JSONObject object = root.optJSONObject("iconClick");
-        return object == null ? null : new JSONObject(object.toString());
+        return root.optJSONObject("iconClick");
     }
 
     @Nullable
