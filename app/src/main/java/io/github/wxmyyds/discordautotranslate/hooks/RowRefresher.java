@@ -83,65 +83,20 @@ final class RowRefresher {
     }
 
     @Nullable
-    private static Method findRecyclerApiMethod(Class<?> type, String name, Class<?>... parameterTypes) {
+    private static Method findRecyclerApiMethod(Class<?> type, String name,
+                                               Class<?>... parameterTypes) {
         try {
-            // AndroidX RecyclerView/ViewGroup expose these as public inherited API methods.
-            // Class.getDeclaredMethods() may omit framework methods on Android; getMethod()
-            // searches public methods through superclasses and interfaces.
             return type.getMethod(name, parameterTypes);
         } catch (Throwable ignored) {
-            return findInheritedMethod(type, name, parameterTypes.length, parameterTypes);
+            return null;
         }
     }
 
-    /** Resolve a RecyclerView holder, including when its framework containment lookup misses. */
+    /** Resolve the content holder exclusively through the profile-selected RecyclerView API. */
     @Nullable
     private static Object findContainingViewHolder(android.view.ViewParent recycler, View view) {
-        HookConfiguration config = HookConfiguration.activeConfiguration();
-        String findContainingName = config == null ? null
-                : config.accessorName("RecyclerView", "findContainingViewHolder");
-        Method findContaining = findContainingName == null ? null : findRecyclerApiMethod(
-                recycler.getClass(), findContainingName, View.class);
-        Object holder = Reflect.call(findContaining, recycler, view);
-        if (holder != null) {
-            return holder;
-        }
-        if (findContaining == null) {
-            HookDiagnostics.infoOnce("rowRefresh.containmentScanFallback",
-                    "RecyclerView containment API unavailable; scanning attached item views");
-        }
-
-        Method childCountMethod = recyclerAccessor(recycler, "getChildCount");
-        Method childAtMethod = recyclerAccessor(recycler, "getChildAt", int.class);
-        Object countValue = Reflect.call(childCountMethod, recycler);
-        if (!(countValue instanceof Integer) || childAtMethod == null) {
-            reportRowRefreshFailure("attachedChildScanMethods");
-            return null;
-        }
-        int count = (Integer) countValue;
-        for (int i = 0; i < count; i++) {
-            Object childObject = Reflect.call(childAtMethod, recycler, i);
-            if (!(childObject instanceof View)) {
-                continue;
-            }
-            View itemView = (View) childObject;
-            if (!isDescendantOrSelf(view, itemView)) {
-                continue;
-            }
-            Object layoutParams = itemView.getLayoutParams();
-            String holderField = configuredField("RecyclerViewLayoutParams", "viewHolder");
-            String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
-            Object childHolder = holderField == null ? null
-                    : Reflect.getField(layoutParams, holderField);
-            if (childHolder != null && itemViewField != null
-                    && Reflect.getField(childHolder, itemViewField) == itemView) {
-                HookDiagnostics.infoOnce("rowRefresh.layoutParamsHolderMatched",
-                        "RecyclerView item holder resolved from item layout params");
-                return childHolder;
-            }
-        }
-        reportRowRefreshFailure("attachedChildScanNoMatch");
-        return null;
+        Method findContaining = recyclerAccessor(recycler, "findContainingViewHolder", View.class);
+        return Reflect.call(findContaining, recycler, view);
     }
 
     private static boolean isDescendantOrSelf(View candidate, View root) {
