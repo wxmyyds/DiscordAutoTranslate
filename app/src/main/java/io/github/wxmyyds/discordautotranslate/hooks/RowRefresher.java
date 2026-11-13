@@ -310,6 +310,8 @@ final class RowRefresher {
                         requestLayoutChain(view);
                         forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
                         relayoutContentSelf(view);
+                        relayoutNamedAncestor(view, MESSAGE_ACCESSORIES_VIEW_CLASS);
+                        relayoutNamedAncestor(view, MESSAGE_VIEW_CLASS);
                         view.invalidate();
                         dispatchRecyclerLayout(findRecyclerView(view));
                         dispatchRecyclerLayout(findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
@@ -469,6 +471,51 @@ final class RowRefresher {
         }
     }
 
+    /** Re-measure a known message container after its content child has shrunk. */
+    private static void relayoutNamedAncestor(@Nullable View view, String className) {
+        View target = findAncestorView(view, className);
+        if (target == null || !target.isAttachedToWindow()) {
+            return;
+        }
+        try {
+            int width = target.getWidth();
+            if (width <= 0) {
+                width = target.getMeasuredWidth();
+            }
+            if (width <= 0) {
+                return;
+            }
+            int oldHeight = target.getHeight();
+            target.forceLayout();
+            target.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            int newHeight = target.getMeasuredHeight();
+            if (newHeight > 0 && newHeight != oldHeight) {
+                target.layout(target.getLeft(), target.getTop(),
+                        target.getLeft() + width, target.getTop() + newHeight);
+            }
+            HookDiagnostics.infoOnce("rowRefresh.containerRelayout." + className,
+                    "message container remeasured class=" + className
+                            + " oldHeight=" + oldHeight + " newHeight=" + newHeight);
+        } catch (Throwable t) {
+            HookDiagnostics.infoOnce("rowRefresh.containerRelayoutFailed." + className,
+                    "message container remeasure failed class=" + className
+                            + " error=" + t.getClass().getSimpleName());
+        }
+    }
+
+    @Nullable
+    private static View findAncestorView(@Nullable View view, String className) {
+        View current = view;
+        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && current != null; depth++) {
+            if (Reflect.isInstanceOfName(current, className)) {
+                return current;
+            }
+            android.view.ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return null;
+    }
     private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
         if (recycler == null) {
             return;
@@ -476,16 +523,18 @@ final class RowRefresher {
         try {
             Object suppressed = Reflect.getField(recycler, "mLayoutSuppressed");
             Object interceptDepth = Reflect.getField(recycler, "mInterceptRequestLayoutDepth");
-            Object computing = Reflect.call(findInheritedMethod(
-                    recycler.getClass(), "isComputingLayout", 0), recycler);
+            Object computing = Reflect.call(findRecyclerApiMethod(
+                    recycler.getClass(), "isComputingLayout"), recycler);
+
             if (!Boolean.FALSE.equals(suppressed)
                     || !(interceptDepth instanceof Integer)
                     || ((Integer) interceptDepth) != 0
                     || Boolean.TRUE.equals(computing)) {
                 return;
             }
-            Method dispatchLayout = findInheritedMethod(
-                    recycler.getClass(), "dispatchLayout", 0);
+            Method dispatchLayout = findRecyclerApiMethod(
+                    recycler.getClass(), "dispatchLayout");
+
             if (dispatchLayout != null) {
                 dispatchLayout.invoke(recycler);
             }
@@ -514,6 +563,8 @@ final class RowRefresher {
         }
     }
 
+    private static final String MESSAGE_ACCESSORIES_VIEW_CLASS =
+            "com.discord.chat.presentation.message.MessageAccessoriesView";
     private static final String CHAT_LIST_VIEW_CLASS =
             "com.discord.chat.presentation.list.ChatListView";
     private static final String MESSAGE_VIEW_CLASS =
