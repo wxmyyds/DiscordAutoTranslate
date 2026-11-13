@@ -195,22 +195,23 @@ final class RowRefresher {
             Object contentAdapter = Reflect.call(
                     findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
             View messageRow = findAncestorView(view, MESSAGE_VIEW_CLASS);
-            android.view.ViewParent rowRecycler = messageRow == null
-                    ? null : findRecyclerView(messageRow);
-            if (contentAdapter == null || rowRecycler == null || messageRow == null) {
+            Object rowHolder = messageRow == null ? null : holderFromItemView(messageRow);
+            Object rowRecyclerObject = Reflect.getField(rowHolder, "recyclerView");
+            if (contentAdapter == null || rowHolder == null
+                    || !(rowRecyclerObject instanceof android.view.ViewParent)) {
                 reportRowRefreshFailure(contentAdapter == null ? "contentAdapter"
-                        : messageRow == null ? "messageRow" : "outerRecycler");
+                        : rowHolder == null ? "messageRowHolder" : "rowRecycler");
                 return false;
             }
+            android.view.ViewParent rowRecycler = (android.view.ViewParent) rowRecyclerObject;
             Object rowAdapter = Reflect.call(
                     findInheritedMethod(rowRecycler.getClass(), "getAdapter", 0), rowRecycler);
-            Object rowHolder = findContainingViewHolder(rowRecycler, messageRow);
-            if (rowAdapter == null || rowHolder == null) {
-                reportRowRefreshFailure(rowAdapter == null ? "rowAdapter" : "rowHolder");
+            Object itemView = Reflect.getField(rowHolder, "itemView");
+            if (rowAdapter == null) {
+                reportRowRefreshFailure("rowAdapter");
                 return false;
             }
-            Object itemView = Reflect.getField(rowHolder, "itemView");
-            if (!Reflect.isInstanceOfName(itemView, MESSAGE_VIEW_CLASS)) {
+            if (itemView != messageRow) {
                 reportRowRefreshFailure("messageViewItem");
                 return false;
             }
@@ -232,10 +233,9 @@ final class RowRefresher {
                 return false;
             }
             invalidateMessageContentBindCache(contentHolder);
-            Method notifyItemChanged = findInheritedMethod(
-                    rowAdapter.getClass(), "notifyItemChanged", 1, int.class);
-            // The content view is an item in the nested MessageAccessoriesView RecyclerView.
-            // Notify it as well as the outer chat row so both layout levels recalculate.
+            // Notify both the nested content adapter and the outer row adapter. In the
+            // minified host, adapter notifications are exposed through the adapter's
+            // observable rather than a reflectable notifyItemChanged method.
             int contentPosition = -1;
             Object contentPosValue = Reflect.call(
                     findInheritedMethod(contentHolder.getClass(), "getBindingAdapterPosition", 0),
@@ -243,35 +243,22 @@ final class RowRefresher {
             if (contentPosValue instanceof Integer) {
                 contentPosition = (Integer) contentPosValue;
             }
-            if (contentPosition >= 0) {
-                Method notifyContent = findInheritedMethod(
-                        contentAdapter.getClass(), "notifyItemChanged", 1, int.class);
-                if (notifyContent != null) {
-                    try {
-                        notifyContent.invoke(contentAdapter, contentPosition);
-                    } catch (Throwable ignored) {
-                        // 通知失败则等待下一次 layout。
-                    }
-                }
+            if (contentPosition >= 0
+                    && !notifyAdapterItemChanged(contentAdapter, contentPosition)) {
+                reportRowRefreshFailure("notifyContentItemChanged");
             }
-            if (notifyItemChanged == null) {
-                reportRowRefreshFailure("notifyItemChangedMethod");
+            if (!notifyAdapterItemChanged(rowAdapter, notifyPosition)) {
+                reportRowRefreshFailure("notifyRowItemChanged");
                 return false;
             }
-            try {
-                notifyItemChanged.invoke(rowAdapter, notifyPosition);
-                HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
-                        "outer chat adapter notified; recyclerClass="
-                                + rowRecycler.getClass().getName()
-                                + " bindingPosition=" + bindingPosition
-                                + " absolutePosition=" + absolutePosition
-                                + " notifyPosition=" + notifyPosition);
-                requestLayoutChain(messageRow);
-                return true;
-            } catch (Throwable t) {
-                reportRowRefreshFailure("notifyItemChangedInvocation");
-                return false;
-            }
+            HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
+                    "outer chat adapter notified; recyclerClass="
+                            + rowRecycler.getClass().getName()
+                            + " bindingPosition=" + bindingPosition
+                            + " absolutePosition=" + absolutePosition
+                            + " notifyPosition=" + notifyPosition);
+            requestLayoutChain(messageRow);
+            return true;
         } catch (Throwable t) {
             return false;
         }
@@ -317,6 +304,35 @@ final class RowRefresher {
         } catch (Throwable ignored) {
             // 投递重渲染失败不影响宿主。
         }
+    }
+
+    private static boolean notifyAdapterItemChanged(Object adapter, int position) {
+        Object observable = Reflect.getField(adapter, "observable");
+        if (observable == null) {
+            return false;
+        }
+        Method notifyRangeChanged = findInheritedMethod(
+                observable.getClass(), "notifyItemChanged", 3,
+                int.class, int.class, Object.class);
+        if (notifyRangeChanged == null) {
+            return false;
+        }
+        try {
+            notifyRangeChanged.invoke(observable, position, 1, null);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    @Nullable
+    private static Object holderFromItemView(@Nullable View itemView) {
+        if (itemView == null) {
+            return null;
+        }
+        Object holder = Reflect.getField(itemView.getLayoutParams(), "viewHolder");
+        return holder != null && Reflect.getField(holder, "itemView") == itemView
+                ? holder : null;
     }
 
     private static boolean invalidateMessageContentBindCache(Object holder) {

@@ -37,7 +37,7 @@
   执行前用 `RerenderRegistry.stillBound(expected, actual)` 再校验一次视图绑定，
   仅确认绑定到其他消息才拒绝执行。
 - 重渲染后从真实视图层级定位内层正文 item 与 `MessageView` 外层 row，通知对应 adapter 刷新；不以对子视图执行 `UNSPECIFIED` 测量和手动 `layout()` 代替 RecyclerView 行测量。
-- 352017 的 RecyclerView holder 查询方法在运行时未公开可反射调用；LSPosed 实测 `findContainingViewHolder` 与 attached-child holder API 查找失败，导致旧刷新路径停在 `contentHolder`。该版本 profile 已核实 holder 实际保存在 item 的 `k3.u0.d`，holder 为 `k3.k1`（`itemView=a`、绑定 adapter=`s`、绑定位置=`f()`、绝对位置=`e()`）；通过 item 的 LayoutParams 解析 holder 后走同一刷新路径。
+- 352017 的 RecyclerView holder 查询方法在运行时不可反射调用；本机 LSPosed 日志实测从 LayoutParams 成功解析正文 holder 后，旧代码又在 `notifyItemChangedMethod` 处失败。该版本 adapter 不暴露此方法：`k3.m0.a` 持有 `k3.n0`，其 `d(position, 1, null)` 是已核实的单项变更通知；消息行的所属 RecyclerView 则从 holder 的 `r` 字段取得，避免依赖可能不完整的 ViewParent 链。
 - AndroidX RecyclerView/ViewGroup 的公共继承 API 用 `Class.getMethod` 查找；Android
   运行时的 `getDeclaredMethods()` 可能不列出父类 Framework 方法，不能拿它们做这类 API 查找。
 - 行刷新通知延迟到主线程布局遍历结束后执行，并按消息 ID 同一帧去重，避免重入布局抛异常。

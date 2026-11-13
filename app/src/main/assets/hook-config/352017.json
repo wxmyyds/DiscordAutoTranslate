@@ -95,7 +95,9 @@
     "BlockQuoteContentNode": "j7.f",
     "UnderlineContentNode": "j7.k5",
     "RecyclerViewViewHolder": "k3.k1",
-    "RecyclerViewLayoutParams": "k3.u0"
+    "RecyclerViewLayoutParams": "k3.u0",
+    "RecyclerViewAdapter": "k3.m0",
+    "RecyclerViewAdapterObservable": "k3.n0"
   },
   "constructorFallbackTypes": [
     "StrongContentNode",
@@ -118,15 +120,22 @@
     "RecyclerViewViewHolder": {
       "getBindingAdapterPosition": "f",
       "getAbsoluteAdapterPosition": "e"
+    },
+    "RecyclerViewAdapterObservable": {
+      "notifyItemChanged": "d"
     }
   },
   "fields": {
     "RecyclerViewViewHolder": {
       "itemView": "a",
-      "bindingAdapter": "s"
+      "bindingAdapter": "s",
+      "recyclerView": "r"
     },
     "RecyclerViewLayoutParams": {
       "viewHolder": "d"
+    },
+    "RecyclerViewAdapter": {
+      "observable": "a"
     },
     "PrimitiveStructurableText": {
       "getContent": "a"
