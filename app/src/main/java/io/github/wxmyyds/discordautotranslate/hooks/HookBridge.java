@@ -120,8 +120,23 @@ public final class HookBridge {
     }
 
     @Nullable
-    public String messageIdOf(@Nullable View contentView) {
+    public String directMessageIdOf(@Nullable View contentView) {
         return contentView == null ? null : viewToMessageId.get(contentView);
+    }
+
+    /** Resolve a content child through its enclosing message row when no direct mapping exists. */
+    @Nullable
+    public String messageIdOf(@Nullable View contentView) {
+        View current = contentView;
+        while (current != null) {
+            String messageId = viewToMessageId.get(current);
+            if (messageId != null) {
+                return messageId;
+            }
+            android.view.ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return null;
     }
 
     /** 清空全部映射。热重载与配置重置时调用。 */

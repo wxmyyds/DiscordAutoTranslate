@@ -104,6 +104,14 @@ public final class MessageHooks {
         }
         HookBridge.get().rememberContent(messageId, content);
 
+        // The body TextView is a descendant of MessageView, not necessarily the same
+        // object as Message.getContent(). Bind the row so rendering can resolve through
+        // the ViewParent chain even when Discord supplies a wrapped content instance.
+        View rowView = asView(chain.getThisObject());
+        if (rowView != null) {
+            HookBridge.get().bindView(rowView, messageId);
+        }
+
         String viewField = spec.optString("contentViewField", null);
         View contentView = viewField == null ? null
                 : asView(Reflect.getField(chain.getThisObject(), viewField));
@@ -148,19 +156,29 @@ public final class MessageHooks {
                             Object[] renderArgs = chain.getArgs().toArray();
                             HookBridge.get().interceptRender(view, renderArgs, content);
 
-                            String messageId = HookBridge.get().messageIdOf(view);
+                            String directMessageId = HookBridge.get().directMessageIdOf(view);
+                            String contentMessageId = HookBridge.get().resolveMessageId(content);
+                            String messageId = directMessageId != null ? directMessageId
+                                    : HookBridge.get().messageIdOf(view);
                             if (messageId == null) {
-                                messageId = HookBridge.get().resolveMessageId(content);
+                                messageId = contentMessageId;
                             }
                             HookDiagnostics.infoOnce("message.render", "message.render invoked host="
                                     + (view != null) + " idResolved=" + (messageId != null)
+                                    + " idSource=" + (directMessageId != null ? "view"
+                                    : contentMessageId != null ? "content" : "ancestor")
                                     + " contentClass="
                                     + (content == null ? "null" : content.getClass().getName()));
                             if (messageId != null) {
-                                HookBridge.get().bindView(view, messageId);
+                                // Do not pin a child to an inherited ID; recycled rows update
+                                // their own mapping and may render different child contents.
+                                if (directMessageId != null || contentMessageId != null) {
+                                    HookBridge.get().bindView(view, messageId);
+                                }
                                 RerenderRegistry.register(messageId, view,
                                         isStatic ? null : chain.getThisObject(), render, renderArgs);
                                 if (content != null) {
+                                    HookBridge.get().rememberContent(messageId, content);
                                     HookBridge.get().onMessageBound(view, messageId, content);
                                 }
                             }
