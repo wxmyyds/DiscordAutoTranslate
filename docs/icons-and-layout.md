@@ -40,6 +40,8 @@
   视图沿父链传播布局请求；适配器通知成功时再强制重测正文及外层行。
 - 若无法解析版本对应的 RecyclerView/holder/adapter 链，执行直接内容视图重测作为
   fallback，避免只更新文本却保留旧高度；诊断日志只记录是否进入该 fallback。
+- AndroidX RecyclerView/ViewGroup 的公共继承 API 用 `Class.getMethod` 查找；Android
+  运行时的 `getDeclaredMethods()` 可能不列出父类 Framework 方法，不能拿它们做这类 API 查找。
 - 对承载该消息的 `RecyclerView` 调用 `notifyItemChanged(bindingAdapterPosition)`
   （宿主自身刷新单行的方式）；因渲染漏斗运行在宿主布局过程内，投递到下一轮
   消息队列，并按消息 ID 同一帧去重，避免重入布局抛异常。

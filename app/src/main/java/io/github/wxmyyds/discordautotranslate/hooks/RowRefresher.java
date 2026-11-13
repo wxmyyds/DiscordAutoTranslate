@@ -97,11 +97,23 @@ final class RowRefresher {
         return false;
     }
 
+    @Nullable
+    private static Method findRecyclerApiMethod(Class<?> type, String name, Class<?>... parameterTypes) {
+        try {
+            // AndroidX RecyclerView/ViewGroup expose these as public inherited API methods.
+            // Class.getDeclaredMethods() may omit framework methods on Android; getMethod()
+            // searches public methods through superclasses and interfaces.
+            return type.getMethod(name, parameterTypes);
+        } catch (Throwable ignored) {
+            return findInheritedMethod(type, name, parameterTypes.length, parameterTypes);
+        }
+    }
+
     /** Resolve a RecyclerView holder, including when its framework containment lookup misses. */
     @Nullable
     private static Object findContainingViewHolder(android.view.ViewParent recycler, View view) {
-        Method findContaining = findInheritedMethod(
-                recycler.getClass(), "findContainingViewHolder", 1, View.class);
+        Method findContaining = findRecyclerApiMethod(
+                recycler.getClass(), "findContainingViewHolder", View.class);
         Object holder = Reflect.call(findContaining, recycler, view);
         if (holder != null) {
             return holder;
@@ -113,9 +125,10 @@ final class RowRefresher {
                     "RecyclerView containment lookup returned no holder; scanning attached item views");
         }
 
-        Method childCountMethod = findInheritedMethod(recycler.getClass(), "getChildCount", 0);
-        Method childAtMethod = findInheritedMethod(recycler.getClass(), "getChildAt", 1, int.class);
-        Method childHolderMethod = findInheritedMethod(recycler.getClass(), "getChildViewHolder", 1, View.class);
+        Method childCountMethod = findRecyclerApiMethod(recycler.getClass(), "getChildCount");
+        Method childAtMethod = findRecyclerApiMethod(recycler.getClass(), "getChildAt", int.class);
+        Method childHolderMethod = findRecyclerApiMethod(
+                recycler.getClass(), "getChildViewHolder", View.class);
         Object countValue = Reflect.call(childCountMethod, recycler);
         if (!(countValue instanceof Integer) || childAtMethod == null || childHolderMethod == null) {
             reportRowRefreshFailure("attachedChildScanMethods");
