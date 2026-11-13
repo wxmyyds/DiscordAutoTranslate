@@ -64,6 +64,7 @@ public class ModuleEntry extends XposedModule {
 
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
+        android.util.Log.i("DiscordAutoTranslate", "onModuleLoaded lifecycle callback received");
         ModuleResources.attach(this);
         // 目标进程才需要初始化；其他进程立即停止接收回调，减少无谓开销。
         if (param.isSystemServer()) {
@@ -76,6 +77,7 @@ public class ModuleEntry extends XposedModule {
         if (!TARGET_PACKAGE.equals(param.getPackageName())) {
             return;
         }
+        android.util.Log.i("DiscordAutoTranslate", "onPackageReady received for Discord");
         if (installed || bootstrapInstalled) {
             // 防止重复注册启动钩子。
             return;
@@ -192,6 +194,8 @@ public class ModuleEntry extends XposedModule {
                             if (contextObject instanceof Context) {
                                 Context context = (Context) contextObject;
                                 if (TARGET_PACKAGE.equals(context.getPackageName())) {
+                                    android.util.Log.i("DiscordAutoTranslate",
+                                            "Application.attach reached for Discord");
                                     installForApplication(context, context.getClassLoader());
                                 }
                             }
@@ -203,6 +207,7 @@ public class ModuleEntry extends XposedModule {
                     });
             hooks.add(handle);
             bootstrapInstalled = true;
+            android.util.Log.i("DiscordAutoTranslate", "Application.attach bootstrap hook installed");
         } catch (Throwable t) {
             android.util.Log.e("DiscordAutoTranslate", "failed to install app bootstrap hook", t);
             installed = false;
@@ -217,6 +222,8 @@ public class ModuleEntry extends XposedModule {
             PackageInfo packageInfo = context.getPackageManager().getPackageInfo(
                     TARGET_PACKAGE, 0);
             int versionCode = packageInfo.versionCode;
+            android.util.Log.i("DiscordAutoTranslate", "selecting hook profile for versionCode="
+                    + versionCode);
             HookConfiguration config = HookConfigurationLoader.load(context, versionCode);
             if (config == null) {
                 android.util.Log.w("DiscordAutoTranslate",
