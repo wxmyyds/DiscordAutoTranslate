@@ -264,6 +264,13 @@ final class RowRefresher {
             HookDiagnostics.info("row refresh adapters notified content=" + contentNotified
                     + " contentPosition=" + contentPosition
                     + " rowPosition=" + notifyPosition);
+            boolean contentUpdatesConsumed = contentNotified
+                    && consumeRecyclerPendingUpdates(contentRecycler);
+            boolean rowUpdatesConsumed = consumeRecyclerPendingUpdates(rowRecycler);
+            HookDiagnostics.info("row refresh RecyclerView updates consumed content="
+                    + contentUpdatesConsumed + " outer=" + rowUpdatesConsumed
+                    + " content=" + recyclerState(contentRecycler)
+                    + " outerState=" + recyclerState(rowRecycler));
             postRecyclerState(contentRecycler, "content", view, messageRow);
             postRecyclerState(rowRecycler, "outer", view, messageRow);
             messageRow.post(() -> HookDiagnostics.info("row refresh after layout"
@@ -308,51 +315,10 @@ final class RowRefresher {
                                 + recyclerState(recycler)
                                 + " content=" + sizeOf(contentView)
                                 + " row=" + sizeOf(messageRow));
-                        // The 352017 RecyclerView observer can set the layout-request flag
-                        // while its current traversal is already pending. If the outer list
-                        // still reports a request at pre-draw, queue one fresh request after
-                        // this traversal so the ChatList LayoutManager consumes the changed
-                        // row measurement without requiring a touch/scroll event.
-                        if ("outer".equals(label) && recyclerView.isLayoutRequested()) {
-                            messageRow.postOnAnimation(() -> {
-                                if (!messageRow.isAttachedToWindow()
-                                        || !recyclerView.isAttachedToWindow()) {
-                                    return;
-                                }
-                                requestLayoutChain(messageRow);
-                                HookDiagnostics.info("row refresh post-draw layout retry requested"
-                                        + " outer=" + recyclerState(recycler)
-                                        + " row=" + sizeOf(messageRow));
-                                logNextPreDraw(recyclerView, recycler, label,
-                                        contentView, messageRow);
-                            });
-                        }
                         return true;
                     }
                 };
         observer.addOnPreDrawListener(listener);
-    }
-
-    private static void logNextPreDraw(View recyclerView,
-                                       android.view.ViewParent recycler, String label,
-                                       View contentView, View messageRow) {
-        android.view.ViewTreeObserver observer = recyclerView.getViewTreeObserver();
-        if (!observer.isAlive()) {
-            return;
-        }
-        observer.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
-            @Override
-            public boolean onPreDraw() {
-                if (observer.isAlive()) {
-                    observer.removeOnPreDrawListener(this);
-                }
-                HookDiagnostics.info("row refresh recycler state retry pre-draw " + label + "="
-                        + recyclerState(recycler)
-                        + " content=" + sizeOf(contentView)
-                        + " row=" + sizeOf(messageRow));
-                return true;
-            }
-        });
     }
 
     private static String recyclerState(android.view.ViewParent recycler) {
@@ -618,13 +584,51 @@ final class RowRefresher {
         }
         return null;
     }
+    private static boolean consumeRecyclerPendingUpdates(
+            @Nullable android.view.ViewParent recycler) {
+        if (recycler == null || !recycler.getClass().getName().equals(
+                "androidx.recyclerview.widget.RecyclerView")
+                && !Reflect.isInstanceOfName(recycler,
+                "androidx.recyclerview.widget.RecyclerView")) {
+            return false;
+        }
+        try {
+            Object suppressed = Reflect.getField(recycler, "layoutSuppressed");
+            Object interceptDepth = Reflect.getField(recycler, "interceptRequestLayoutDepth");
+            Object computing = Reflect.call(findRecyclerApiMethod(
+                    recycler.getClass(), "isComputingLayout"), recycler);
+            if (!Boolean.FALSE.equals(suppressed)
+                    || !(interceptDepth instanceof Integer)
+                    || ((Integer) interceptDepth) != 0
+                    || !Boolean.FALSE.equals(computing)) {
+                HookDiagnostics.info("RecyclerView pending updates deferred"
+                        + " suppressed=" + suppressed
+                        + " interceptDepth=" + interceptDepth
+                        + " computing=" + computing);
+                return false;
+            }
+            Method consumeUpdates = findRecyclerApiMethod(
+                    recycler.getClass(), "consumePendingUpdates");
+            if (consumeUpdates == null) {
+                HookDiagnostics.info("RecyclerView consume pending updates target missing");
+                return false;
+            }
+            consumeUpdates.invoke(recycler);
+            return true;
+        } catch (Throwable t) {
+            HookDiagnostics.info("RecyclerView consume pending updates failed error="
+                    + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
         if (recycler == null) {
             return;
         }
         try {
-            Object suppressed = Reflect.getField(recycler, "mLayoutSuppressed");
-            Object interceptDepth = Reflect.getField(recycler, "mInterceptRequestLayoutDepth");
+            Object suppressed = Reflect.getField(recycler, "layoutSuppressed");
+            Object interceptDepth = Reflect.getField(recycler, "interceptRequestLayoutDepth");
             Object computing = Reflect.call(findRecyclerApiMethod(
                     recycler.getClass(), "isComputingLayout"), recycler);
 
