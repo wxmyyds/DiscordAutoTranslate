@@ -66,6 +66,8 @@ public final class MessageHooks {
         if (bind == null || spec == null) {
             return;
         }
+        HookDiagnostics.infoOnce("message.bind.target", "message.bind target="
+                + bind.toGenericString());
         out.add(module.hook(bind)
                 .setId("dat.bind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
@@ -138,6 +140,8 @@ public final class MessageHooks {
         if (render == null || spec == null) {
             return;
         }
+        HookDiagnostics.infoOnce("message.render.target", "message.render target="
+                + render.toGenericString());
         boolean isStatic = java.lang.reflect.Modifier.isStatic(render.getModifiers());
         int viewArgument = spec.optInt("viewArgument", -1);
         int contentArgument = spec.optInt("contentArgument", -1);
@@ -214,6 +218,8 @@ public final class MessageHooks {
         if (conversionMethod == null || spec == null) {
             return;
         }
+        HookDiagnostics.infoOnce("message.textConversion.target", "message.textConversion target="
+                + conversionMethod.toGenericString());
         int contentArgument = spec.optInt("contentArgument", 0);
         int contextArgument = spec.optInt("contextArgument", 1);
 
@@ -228,6 +234,9 @@ public final class MessageHooks {
                             + (HookBridge.get().resolveMessageId(source) != null)
                             + " sourceClass="
                             + (source == null ? "null" : source.getClass().getName()));
+                    HookDiagnostics.infoOnce("message.textConversion.callers",
+                            "message.textConversion Discord callers="
+                                    + HookDiagnostics.discordCallers());
                     try {
                         String messageId = HookBridge.get().resolveMessageId(source);
                         if (messageId != null) {
