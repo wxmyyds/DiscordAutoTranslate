@@ -24,17 +24,16 @@
     "message.render": {
       "target": {
         "class": "com.discord.chat.presentation.message.view.MessageContentView",
-        "name": "c",
-        "static": true,
-        "parameterCount": 38,
+        "name": "a",
+        "static": false,
+        "parameterCount": 6,
+        "returnType": "void",
         "parameterTypes": {
-          "0": "com.discord.chat.presentation.message.view.MessageContentView",
-          "1": "m9.f0",
-          "2": "l8.h"
+          "0": "m9.f0",
+          "1": "l8.h"
         }
       },
-      "viewArgument": 0,
-      "contentArgument": 2
+      "contentArgument": 1
     },
     "message.textConversion": {
       "target": {
