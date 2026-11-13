@@ -97,6 +97,51 @@ final class RowRefresher {
         return false;
     }
 
+    /** Resolve a RecyclerView holder, including when its framework containment lookup misses. */
+    @Nullable
+    private static Object findContainingViewHolder(android.view.ViewParent recycler, View view) {
+        Method findContaining = findInheritedMethod(
+                recycler.getClass(), "findContainingViewHolder", 1, View.class);
+        Object holder = Reflect.call(findContaining, recycler, view);
+        if (holder != null) {
+            return holder;
+        }
+        if (findContaining == null) {
+            reportRowRefreshFailure("findContainingViewHolderMethod");
+        } else {
+            HookDiagnostics.infoOnce("rowRefresh.containmentScanFallback",
+                    "RecyclerView containment lookup returned no holder; scanning attached item views");
+        }
+
+        Method childCountMethod = findInheritedMethod(recycler.getClass(), "getChildCount", 0);
+        Method childAtMethod = findInheritedMethod(recycler.getClass(), "getChildAt", 1, int.class);
+        Method childHolderMethod = findInheritedMethod(recycler.getClass(), "getChildViewHolder", 1, View.class);
+        Object countValue = Reflect.call(childCountMethod, recycler);
+        if (!(countValue instanceof Integer) || childAtMethod == null || childHolderMethod == null) {
+            reportRowRefreshFailure("attachedChildScanMethods");
+            return null;
+        }
+        int count = (Integer) countValue;
+        for (int i = 0; i < count; i++) {
+            Object childObject = Reflect.call(childAtMethod, recycler, i);
+            if (!(childObject instanceof View)) {
+                continue;
+            }
+            View itemView = (View) childObject;
+            if (!isDescendantOrSelf(view, itemView)) {
+                continue;
+            }
+            Object childHolder = Reflect.call(childHolderMethod, recycler, itemView);
+            if (childHolder != null) {
+                HookDiagnostics.infoOnce("rowRefresh.containmentScanMatched",
+                        "RecyclerView attached item view scan found the owning holder");
+                return childHolder;
+            }
+        }
+        reportRowRefreshFailure("attachedChildScanNoMatch");
+        return null;
+    }
+
     private static boolean isDescendantOrSelf(View candidate, View root) {
         for (View current = candidate; current != null; ) {
             if (current == root) {
@@ -134,9 +179,7 @@ final class RowRefresher {
                 reportRowRefreshFailure("contentRecycler");
                 return false;
             }
-            Object contentHolder = Reflect.call(
-                    findInheritedMethod(contentRecycler.getClass(), "findContainingViewHolder",
-                            1, View.class), contentRecycler, view);
+            Object contentHolder = findContainingViewHolder(contentRecycler, view);
             if (contentHolder == null) {
                 reportRowRefreshFailure("contentHolder");
                 return false;
@@ -154,9 +197,7 @@ final class RowRefresher {
             }
             Object rowAdapter = Reflect.call(
                     findInheritedMethod(rowRecycler.getClass(), "getAdapter", 0), rowRecycler);
-            Object rowHolder = Reflect.call(
-                    findInheritedMethod(rowRecycler.getClass(), "findContainingViewHolder",
-                            1, View.class), rowRecycler, view);
+            Object rowHolder = findContainingViewHolder(rowRecycler, view);
             if (rowAdapter == null || rowHolder == null) {
                 reportRowRefreshFailure(rowAdapter == null ? "rowAdapter" : "rowHolder");
                 return false;
