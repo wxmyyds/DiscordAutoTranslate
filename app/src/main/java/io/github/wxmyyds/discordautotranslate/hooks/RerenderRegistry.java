@@ -23,10 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 若只记录一个视图，另一处就不会随译文更新。</p>
  *
  * <h3>为何记录调用目标、方法与实参</h3>
- * <p>消息正文的重渲染入口是 {@code MessageContentView.setMessageContent}，
- * 而回复引用的重渲染入口是父容器
- * {@code MessageViewReplyPreview.configureReply}（回复引用的正文由它内部渲染）。
- * 两者方法、接收者、实参都不同，因此每个目标都显式保存这三项。</p>
+ * <p>正文重渲染方法由版本配置选择，可能是静态渲染入口；回复引用则重跑其绑定方法。</p>
  *
  * <h3>复用防护</h3>
  * <p>列表会复用视图。渲染前逐个校验“视图当前绑定的消息 ID 是否仍是目标消息”，

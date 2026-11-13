@@ -62,9 +62,8 @@ public final class HookBridge {
     /**
      * 仅用于图标注入的内容身份映射（键 ← 内容实例）。
      *
-     * <p>帖子预览的标题是普通 String、不经 toSpannable；图标改挂在卡片内唯一走
-     * toSpannable 的 footer 上。footer 不能进入替换身份映射（否则译文会错误地
-     * 写进 footer），因此单独一张表，只被图标注入器读取。</p>
+     * <p>帖子预览标题是普通 String，不经过正文文本转换；图标挂在其支持文本转换的 footer 上。
+     * footer 不能进入替换身份映射，否则译文会错误地写进 footer，因此单独记录图标身份。
      */
     private final IdentityMessageMap iconOnlyContentToKey = new IdentityMessageMap();
 
@@ -148,7 +147,7 @@ public final class HookBridge {
 
     /**
      * 记录“内容对象 → 消息 ID”。只能在能拿到权威消息 ID 的地方调用
-     * （目前是 {@code MessageContentViewHolder.bind} 与 {@code configureReply}）。
+     * （由版本配置选择的消息绑定与回复绑定 Hook）。
      */
     public void rememberContent(String messageId, @Nullable Object structurableText) {
         if (messageId == null || structurableText == null) {
@@ -246,7 +245,7 @@ public final class HookBridge {
 
     /**
      * 登记「仅用于图标」的内容身份：该内容实例反查出的键只驱动图标注入，
-     * 不参与 toSpannable 的译文替换（替换仍走 {@link #resolveMessageId}）。
+     * 不参与正文文本转换的译文替换（仍通过 {@link #resolveMessageId} 关联原始内容）。
      */
     public void rememberIconOnlyContent(String key, @Nullable Object content) {
         if (key == null || content == null) {
@@ -289,8 +288,8 @@ public final class HookBridge {
     /**
      * 记录“内容对象 → 消息 ID”身份映射。
      *
-     * <p>阶段 3 修正：正文替换统一在渲染漏斗 {@code TextUtilsKt.toSpannable} 完成。
-     * 重渲染使用 {@link #requestRerender} 的实参，不再在此保存。
+     * <p>正文替换统一在版本配置选择的文本转换入口完成；重渲染使用
+     * {@link #requestRerender} 的实参，不再在此保存。
      *
      * @return 始终返回传入的同一数组
      */
@@ -314,7 +313,7 @@ public final class HookBridge {
      * 下一次遍历再测量，结果立即生效。</p>
      *
      * <p>视图是否已被复用的判定见 {@link RerenderRegistry}；投递执行时由
-     * {@code toSpannable} 按当前状态重新决定替换与否，因此不会把译文写错消息。</p>
+     * 文本转换 Hook 按当前状态重新决定替换与否，因此不会把译文写错消息。</p>
      *
      * <p>排队期间视图可能已被 RecyclerView 复用到其他消息，因此执行前必须
      * 再校验一次：绑定已变成其他消息则跳过，不能把旧译文渲染到新消息上。

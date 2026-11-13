@@ -18,35 +18,8 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 /**
- * Embed 翻译 Hook（富 Embed 与原生帖子预览）。
- *
- * <p>已核对 smali（Discord 340.13）的渲染链：
- * <pre>
- * 富 Embed   MessageAccessoriesAdapter → EmbedViewHolder.bind(ChatEventHandler, EmbedMessageAccessory, …9 参)
- *              → EmbedView.setEmbed-fDtLluY(…, Embed, …)
- *              → embed.getTitle()/getDescription()（同一实例）→ TextUtilsKt.toSpannable
- * 字段        EmbedView.setFields-7YO0LfA(List&lt;EmbedField&gt;, …)
- *              → field.getName()/getValue()（StructurableText）→ toSpannable
- * 帖子预览   MessageAccessoriesAdapter → PostPreviewEmbedViewHolder.bind(PostPreviewEmbed, …3 参)
- *              → PostPreviewEmbedView.setPostPreviewEmbed-4itWklQ(messageId, title, subtitle, …16 参)
- *              （title/subtitle 是普通 String，不走 toSpannable；footer 走但属品牌信息）
- * </pre>
- *
- * <p>消息 ID 来源与正文一致：{@code MessageAccessory.getMessageId-3Eiw7ao()}
- * （声明在基类上，前缀匹配可取）。每段 Embed 文本用
- * {@link HookBridge#embedStateKey} 生成独立状态键，与正文共用整套翻译管线
- * （去重/缓存/调度/替换），但互不覆盖。</p>
- *
- * <p>翻译范围：富 Embed 的标题/描述/字段（用户内容）；
- * 帖子预览的标题。作者名、页脚、提供者（站点/品牌名）、URL、图标等
- * 在翻译范围之外，不登记；语言检测器（{@code EnglishDetector}）
- * 也会拦下 URL、过短与非拉丁内容。</p>
- *
- * <p>行内图标：富 Embed 每张卡片只挂一个图标，主段优先取描述
- * （正文主体），回落标题、再回落首个字段；帖子预览挂在 footer 上
- * （标题是 String 不经 toSpannable，footer 经 {@code rememberIconOnlyContent}
- * 的「仅图标」身份解析，文本本身不被替换）。图标点击走
- * {@code onIconClicked(状态键)}：成功切换原文/译文，失败重试，与正文一致。</p>
+ * 配置启用时安装富 Embed 与原生帖子预览的翻译逻辑。
+ * 目标方法、参数位置和成员名来自版本 profile；文本内容复用统一的翻译与转换管线。
  */
 public final class EmbedHooks {
 
@@ -65,7 +38,7 @@ public final class EmbedHooks {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
         installRichEmbedBindHook(module, cl, config, handles);
         installPostPreviewBindHook(module, cl, config, handles);
-        installPostPreviewSetHook(module, cl, config, handles);
+        installPostPreviewRenderHook(module, cl, config, handles);
         return handles;
     }
 
@@ -86,8 +59,7 @@ public final class EmbedHooks {
                 .setId("dat.embedBind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
-                    // 宿主必须在调用链内传递给 toSpannable（同一线程同步）：
-                    // 行内图标靠它驱动旋转重绘；重渲染时同样需要，故无条件设置。
+                    // 宿主必须在同步文本转换调用链内传递给图标注入器；重渲染也需要，故无条件设置。
                     InlineIconInjector.enterHost(
                             asView(Reflect.getField(chain.getThisObject(),
                                     HookConfiguration.member("embedHolderViewField", "itemView"))));
@@ -108,7 +80,7 @@ public final class EmbedHooks {
 
     /**
      * 富 Embed 绑定前置：登记各文本段（描述/标题/字段）的状态键与身份映射，
-     * 注册重渲染目标，并触发翻译。替换由 toSpannable 漏斗按各段自己的键完成。
+     * 注册重渲染目标，并触发翻译。替换由统一文本转换 Hook 按每段状态键完成。
      */
     private static void richEmbedPre(XposedInterface.Chain chain, Method bind,
                                      JSONObject spec) {
@@ -249,13 +221,13 @@ public final class EmbedHooks {
     }
 
     /**
-     * 帖子预览绑定前置。标题是普通 String、不经 toSpannable，因此：
+     * 帖子预览绑定前置。标题是普通 String，不走正文文本转换，因此：
      * <ol>
      *   <li>用 {@link StructurableTextFactory#primitive} 把标题包成
      *       PrimitiveStructurableText，才能进入现有翻译管线；</li>
      *   <li>译文替换由 {@code setPostPreviewEmbed} 的参数替换 Hook 完成
      *       （不走身份映射）；</li>
-     *   <li>图标挂在 footer（卡片内唯一走 toSpannable 的字段）上：
+     *   <li>图标挂在 footer（卡片内支持 StructurableText 转换的字段）上：
      *       仅图标身份映射，footer 文本本身不被替换。</li>
      * </ol>
      */
@@ -294,7 +266,7 @@ public final class EmbedHooks {
         HookBridge.get().rememberIconOnlyContent(key, footer);
     }
 
-    private static void installPostPreviewSetHook(XposedModule module, ClassLoader cl,
+    private static void installPostPreviewRenderHook(XposedModule module, ClassLoader cl,
                                                   HookConfiguration config,
                                                   List<XposedInterface.HookHandle> out) {
         if (!config.isEnabled("embed.postPreviewRender")) {
@@ -306,7 +278,7 @@ public final class EmbedHooks {
             return;
         }
         out.add(module.hook(set)
-                .setId("dat.postPreviewSet")
+                .setId("dat.postPreviewRender")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
                     Object[] renderArgs = chain.getArgs().toArray();

@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "versionCode": 352017,
-  "packageName": "com.discord",
   "requiredHooks": [
     "message.bind",
     "message.render",
@@ -9,7 +8,6 @@
   ],
   "hooks": {
     "message.bind": {
-      "required": true,
       "target": {
         "class": "com.discord.chat.presentation.message.MessageView",
         "name": "b",
@@ -24,7 +22,6 @@
       "contentGetter": "getContent"
     },
     "message.render": {
-      "required": true,
       "target": {
         "class": "com.discord.chat.presentation.message.view.MessageContentView",
         "name": "c",
@@ -40,7 +37,6 @@
       "contentArgument": 2
     },
     "message.textConversion": {
-      "required": true,
       "target": {
         "class": "kl.b",
         "name": "B0",
@@ -56,36 +52,25 @@
       "contextArgument": 1
     },
     "message.reply": {
-      "required": false,
       "enabled": false,
       "reason": "352017 smali does not yet establish the reply configuration entry point or referenced-message argument."
     },
     "embed.bind": {
-      "required": false,
       "enabled": false,
       "reason": "352017 embed binding target has not been verified."
     },
     "embed.postPreviewBind": {
-      "required": false,
       "enabled": false,
       "reason": "352017 post-preview binding target has not been verified."
     },
     "embed.postPreviewRender": {
-      "required": false,
       "enabled": false,
       "reason": "352017 post-preview render target has not been verified."
     },
     "poll.bind": {
-      "required": false,
       "enabled": false,
       "reason": "352017 poll binding target has not been verified."
     }
-  },
-  "members": {
-    "messageClass": "com.discord.chat.bridge.Message",
-    "messageIdGetter": "getId",
-    "messageContentGetter": "getContent",
-    "structurableTextClass": "l8.h"
   },
   "types": {
     "StructurableText": "l8.h",
@@ -125,8 +110,7 @@
   ],
   "accessors": {
     "Message": {
-      "getId": "getId-3Eiw7ao",
-      "getContent": "getContent"
+      "getId": "getId-3Eiw7ao"
     }
   },
   "fields": {
@@ -139,6 +123,30 @@
     "TextContentNode": {
       "getContent": "a"
     },
+    "StrongContentNode": {
+      "getContent": "a"
+    },
+    "LHeadingContentNode": {
+      "getContent": "c"
+    },
+    "StrikethroughContentNode": {
+      "getContent": "a"
+    },
+    "SubtextContentNode": {
+      "getContent": "a"
+    },
+    "LinkContentNode": {
+      "getContent": "a"
+    },
+    "BulletListContentNode": {
+      "getItems": "c"
+    },
+    "HeadingContentNode": {
+      "getContent": "b"
+    },
+    "SpoilerContentNode": {
+      "getContent": "a"
+    },
     "UnicodeEmojiContentNode": {
       "getContent": "b",
       "getSurrogate": "c"
@@ -146,8 +154,17 @@
     "CustomEmojiContentNode": {
       "getAlt": "c"
     },
-    "BulletListContentNode": {
-      "getItems": "c"
+    "ParagraphContentNode": {
+      "getContent": "a"
+    },
+    "EmphasisContentNode": {
+      "getContent": "a"
+    },
+    "BlockQuoteContentNode": {
+      "getContent": "a"
+    },
+    "UnderlineContentNode": {
+      "getContent": "a"
     }
   }
 }

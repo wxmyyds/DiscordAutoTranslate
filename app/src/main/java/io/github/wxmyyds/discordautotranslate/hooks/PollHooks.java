@@ -33,7 +33,7 @@ import io.github.libxposed.api.XposedModule;
  *       选项：PollMessageAccessory.getAnswers()（List&lt;PollAnswerAccessory&gt;）
  *              → PollAnswerAdapter → PollMediaView.setMedia → DraweeSpanStringBuilder
  * </pre>
- * 投票文本全程不经 {@code toSpannable}（无 Markdown 管线），因此采用
+ * 投票文本不经过正文 StructurableText 转换入口，而是直接绑定到视图，因此采用
  * 「绑定参数深层重建」：bind 时若某段文本的译文已就绪，用 Kotlin data class 的
  * {@code copy} 链把译文换入 accessory（PollMessageAccessory → PollData → PollMedia /
  * PollMessageAccessory → PollAnswerAccessory → PollAnswer → PollMedia）；未就绪的

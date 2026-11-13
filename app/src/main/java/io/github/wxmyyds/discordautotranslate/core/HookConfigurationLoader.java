@@ -45,8 +45,4 @@ public final class HookConfigurationLoader {
             return HookConfiguration.parse(json.toString(), versionCode);
         }
     }
-
-    public static HookConfiguration parse(String json, int versionCode) throws JSONException {
-        return HookConfiguration.parse(json, versionCode);
-    }
 }

@@ -1,7 +1,6 @@
 # 渲染与回填（ContentNodes）
 
-翻译替换发生在 `TextUtilsKt.toSpannable`（消息文本渲染入口）。
-富文本替换始终保留 `AnnotatedStructurableText` 及其结构节点；不将失败的富文本改写成纯文本。
+翻译替换发生在 profile 选择的 `message.textConversion` 方法。具体目标由 Discord `versionCode` 对应的 Hook 配置指定；富文本替换始终保留 `AnnotatedStructurableText` 及其结构节点，不将失败的富文本改写成纯文本。
 
 ## 请求文本
 
@@ -31,4 +30,5 @@
 
 - 片段按节点出现位置消费，不能按对象身份映射；同一文本节点实例可能在树中出现多次。
 - 链接、emoji、提及、代码与列表等节点由宿主原样渲染。
+- 节点重建策略由版本 profile 指定：公开 data class 使用 `componentN()/copy(...)`；混淆节点只有在 `constructorFallbackTypes` 显式列入后才按已核实的字段和构造器重建，未知节点不猜测。
 - 不允许部分成功：出现片段计数不符或任一节点重建失败时，整棵替换树都不提交。

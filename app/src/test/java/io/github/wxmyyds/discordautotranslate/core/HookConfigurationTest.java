@@ -4,12 +4,15 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.json.JSONException;
 import org.junit.After;
 import org.junit.Test;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
 
 public class HookConfigurationTest {
     public static final class SelectorFixture {
@@ -49,6 +52,9 @@ public class HookConfigurationTest {
         Method method = config.findMethod("body", getClass().getClassLoader());
 
         assertNotNull(method);
+        assertTrue(config.hasAllRequiredTargets(getClass().getClassLoader()));
+        assertTrue(config.hasAllRequiredHooks(Collections.singleton("body")));
+        assertFalse(config.hasAllRequiredHooks(Collections.<String>emptySet()));
         assertEquals(3, method.getParameterCount());
         assertEquals(SelectorFixture.class, method.getParameterTypes()[0]);
     }
@@ -70,10 +76,11 @@ public class HookConfigurationTest {
     @Test
     public void rejectsWrongVersionAndDisabledHook() throws Exception {
         String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
-                + "\"hooks\":{\"reply\":{\"enabled\":false}}}";
+                + "\"requiredHooks\":[\"reply\"],\"hooks\":{\"reply\":{\"enabled\":false}}}";
         HookConfiguration config = HookConfiguration.parse(json, 352017);
 
         assertNull(config.findMethod("reply", getClass().getClassLoader()));
+        assertFalse(config.hasAllRequiredTargets(getClass().getClassLoader()));
         assertThrows(JSONException.class, () -> HookConfiguration.parse(json, 340013));
     }
 

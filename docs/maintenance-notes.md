@@ -17,19 +17,15 @@
 
 ## 已确认的架构教训（改代码前先读）
 
-1. **渲染漏斗是 `TextUtilsKt.toSpannable`，不是 `setMessageContent`**。
-   阶段 1 曾断言「6 参 `setMessageContent` 是所有正文渲染的唯一漏斗」，
-   实测既无译文也无图标。真实链路是
-   `MessageContentViewHolder.bind → setMessageContent-hYrISQc$default →
-   setMessageContent-hYrISQc(34 参) → TextUtilsKt.toSpannable`；
-   回复引用直接走 `toSpannable`，不经 setMessageContent。
+1. **文本转换目标按 profile 变化**：`340013` 使用 `TextUtilsKt.toSpannable`，
+   `352017` 使用已核对的 `kl.b.B0` 静态方法。绑定和转换目标由 profile 指定，
+   回复引用、Embed、帖子预览与 Poll 只有在对应 profile 核实后才能启用。
 2. **替换对象类型**：必须是 `AnnotatedStructurableText` 或
    `PrimitiveStructurableText` 之一，否则渲染器抛 `RuntimeException`；
    Discord 自带的 simpleast Markdown 解析器在 APK 内无调用方，不能复用。
-3. **节点重建用 Kotlin data class 通用能力**（`componentN`/`copy`），
-   `copyWith` 取第一个 `List` 参数作为内容字段——基于 340.13 全部节点
-   `copy` 签名核对；若未来出现「首个 List 参数不是内容字段」的节点需改按
-   字段名匹配。
+3. **节点重建按 profile 选择**：`340013` 使用 Kotlin data class 的
+   `componentN()/copy(...)`；`352017` 混淆节点仅按 `constructorFallbackTypes`
+   白名单及已核实字段、构造器顺序重建。未知类型不通过猜字段或方法回退。
 4. **正文存储绝不能依赖 View**：RecyclerView 复用视图，译文/状态一律以
    messageId 为键存 `StateStore`；同正文不同对象需身份映射（`IdentityMessageMap`）。
 5. **旧默认值会静默失效**：配置读取是「已存值优先于默认值」。曾出现用户在
@@ -41,13 +37,8 @@
 
 ## 排查与验证要点
 
-- `XLog` 同时写 `android.util.Log` 与框架日志，`adb logcat -s DiscordAutoTranslate`
-  可见；启动输出 `hook pipeline armed: N/MIN_REQUIRED_HOOKS`。
-- 详细日志默认开启（`Config.DEF_VERBOSE_LOG = true`）；
-  诊断记录（`no-target`/`target(...)`/`invoked`/`row-refresh` 等）在
-  `docs/icons-and-layout.md` 判读表。
-- 用户导出的 LSPosed 日志可能**不含 Discord 进程的 logcat**：
-  判定前先确认能否抓到 Discord 进程日志，而不是继续加诊断输出。
+- `android.util.Log` 使用 `DiscordAutoTranslate` 标签输出启动 Hook 错误、未知版本及配置安装失败；当前代码不输出旧版 `XLog` 或 `hook pipeline armed` 诊断行。
+- 用户导出的 LSPosed 日志可能**不含 Discord 进程的 logcat**；若要确认上述启动错误，需检查 Discord 进程日志。
 - 单元测试无 Robolectric，**不能测 Android 类**；`ContentNodes` 的测试用
   同名假节点类模拟 Kotlin data class，才能真正执行反射代码路径。
 - 构建与自动化测试**只能通过 GitHub Actions**（AGENTS.md 强制），

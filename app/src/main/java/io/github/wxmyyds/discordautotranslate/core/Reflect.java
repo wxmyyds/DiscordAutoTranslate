@@ -4,7 +4,6 @@ import androidx.annotation.Nullable;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 
 /**
  * Discord 内部类的反射存取工具。
@@ -66,12 +65,6 @@ public final class Reflect {
                 return m;
             }
         }
-        if ("getContent".equals(namePrefix) && paramCount == 0) {
-            Method component = findMethodByName(c, "component1");
-            if (component != null) {
-                return component;
-            }
-        }
         return null;
     }
 
@@ -89,52 +82,6 @@ public final class Reflect {
                 m.setAccessible(true);
                 return m;
             }
-        }
-        if ("getContent".equals(namePrefix)) {
-            Method component = findMethodByName(c, "component1");
-            if (component != null && component.getReturnType() == String.class) {
-                return component;
-            }
-        }
-        return null;
-    }
-
-    @Nullable
-    private static Method findMethodByName(Class<?> type, String name) {
-        for (Method method : type.getDeclaredMethods()) {
-            if (name.equals(method.getName()) && method.getParameterCount() == 0) {
-                method.setAccessible(true);
-                return method;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 按「精确方法名 + 参数个数 + 指定下标参数与模型类型可赋值匹配」查找方法。
-     *
-     * <p>{@link #findMethod} 的前缀校验只作用于首参；宿主 bind 方法的模型参数
-     * 位于任意下标（Embed 在 1、帖子预览在 0、投票在 0），因此提供此通用形式。</p>
-     */
-    @Nullable
-    public static Method findMethodAt(Class<?> c, String name, int paramCount,
-                                      int typeIndex, Class<?> type) {
-        if (c == null) {
-            return null;
-        }
-        for (Method m : c.getDeclaredMethods()) {
-            if (!m.getName().equals(name)) {
-                continue;
-            }
-            Class<?>[] ps = m.getParameterTypes();
-            if (ps.length != paramCount || typeIndex >= ps.length) {
-                continue;
-            }
-            if (!ps[typeIndex].isAssignableFrom(type) && !type.isAssignableFrom(ps[typeIndex])) {
-                continue;
-            }
-            m.setAccessible(true);
-            return m;
         }
         return null;
     }
@@ -208,46 +155,7 @@ public final class Reflect {
         String semanticType = HookConfiguration.semanticTypeName(target.getClass());
         String configuredField = configuration == null
                 ? null : configuration.fieldName(semanticType, memberName);
-        if (configuredField != null) {
-            return getField(target, configuredField);
-        }
-        Class<?> preferredType = "getItems".equals(memberName) ? java.util.List.class : null;
-        Field field = uniqueContentField(target.getClass(), preferredType);
-        return field == null ? null : getField(target, field.getName());
-    }
-
-    @Nullable
-    private static Field uniqueContentField(Class<?> type, @Nullable Class<?> preferredType) {
-        Field found = null;
-        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-            for (Field field : current.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
-                    continue;
-                }
-                Class<?> fieldType = field.getType();
-                boolean matches = preferredType != null
-                        ? preferredType.isAssignableFrom(fieldType)
-                        : (java.util.List.class.isAssignableFrom(fieldType)
-                        || fieldType == String.class);
-                if (!matches) {
-                    continue;
-                }
-                if (found != null) {
-                    if (preferredType == null && java.util.List.class.isAssignableFrom(fieldType)
-                            && !java.util.List.class.isAssignableFrom(found.getType())) {
-                        found = field;
-                        continue;
-                    }
-                    if (preferredType == null
-                            && java.util.List.class.isAssignableFrom(found.getType())) {
-                        continue;
-                    }
-                    return null;
-                }
-                found = field;
-            }
-        }
-        return found;
+        return configuredField == null ? null : getField(target, configuredField);
     }
 
     /** 安全读取 String getter；目标版本混淆 getter 时回退到内容字段。 */

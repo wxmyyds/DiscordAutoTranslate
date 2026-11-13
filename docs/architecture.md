@@ -34,24 +34,21 @@ io.github.wxmyyds.discordautotranslate
     MessageHooks / HookBridge / EmbedHooks / PollHooks
     ContentNodes / StructurableTextFactory / RerenderRegistry / RowRefresher
     InlineIconInjector / InlineIconSpan / InlineIconGeometry / IconClickSpanFactory
-    IdentityMessageMap / RowRefresher
   translate/                  ApiTester（连接测试 / 测试翻译）
   ui/                         SettingsActivity / XposedServiceConnectionHolder
 ```
 
-## Hook 体系（目标 Discord 340.13 / versionCode 340013）
+## Hook 体系（受支持的版本配置）
 
-| Hook | 作用 | 说明 |
-|---|---|---|
-| `MessageContentViewHolder.bind`（17 参） | 视图 → 消息 ID 的唯一可靠来源 | 登记 `viewToMessageId`；正文渲染前记录原文参数 |
-| `MessageView.setMessage`（7 参） | 行控件 + 消息 ID | `this` 即行控件；绑定时机稳定，图标在此挂载（主路径） |
-| `MessageView.onInterceptTouchEvent` | 放行图标点击 | 触点落在图标范围内返回 false，事件下发给图标 |
-| `MessageContentView` 展开式 `setMessageContent`（34 参，首参 `MessageMargins`） | 电台正文渲染 | 用「名字前缀 + 参数最多 + 首参类型」定位，避免匹配哈希后缀 |
-| `TextUtilsKt.toSpannable`（29 参） | **所有文本渲染的唯一汇聚点** | 全部正文/引用/Embed 都经此，翻译替换在此完成 |
-| `MessageViewReplyPreview.configureReply`（3 参） | 回复引用 | 把引用视图登记到被引用消息 ID，译文就绪后重渲染 |
+每个 Discord `versionCode` 只加载同名 profile；没有精确匹配的 JSON，或必需目标无法解析时，消息 Hook 不会安装。具体 selector、参数索引和混淆字段见 `app/src/main/assets/hook-config/`。
 
-`MessageHooks.MIN_REQUIRED_HOOKS = 4`：低于该数回滚已装 Hook 并抛错，
-避免“部分安装成功”的静默失效。
+| `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
+|---|---|---|---|
+| `340013` | 消息绑定、正文渲染、文本转换、回复引用 | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
+| `352017` | 消息绑定、正文渲染、文本转换 | 回复、Embed、帖子预览、Poll 未核实并禁用 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法 |
+
+必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
+
 
 ## 状态与并发（防串位 / 防旧结果覆盖）
 
@@ -68,21 +65,17 @@ io.github.wxmyyds.discordautotranslate
 
 ## 热重载
 
-- `onHotReloaded` 从 `getOldHookHandles()` 的目标 `Executable` 反推宿主
-  ClassLoader（`ModuleEntry.classLoaderFromOldHooks`），旧代次只持有引用，
-  新代次必须自行从方法反推。
+- `onHotReloaded` 从 `getOldHookHandles()` 的目标 `Executable` 反推宿主 ClassLoader；若未能恢复版本配置或 ClassLoader，则重新安装启动 Hook。
 - `ModuleResources.reset()` 后重新 `attach(this)`，否则图标资源解析失败。
 - `TranslationCache.reset()` 清理旧单例；`Scheduler.shutdown()` 经
   `Engine.cancel(Thread)` → `Http.cancelRequestOn` 关闭在途连接。
 
 ## 版本适配
 
-模块启动时读取 `com.discord.BuildConfig.VERSION_CODE`，与 340013 不一致打印警告，
-但仍尝试安装 Hook（不承诺兼容其他版本）。
+模块读取 Discord `PackageInfo.versionCode`，只加载 `hook-config/<versionCode>.json`。未知版本、JSON 无效或任一必需 Hook 目标无法解析时，不安装消息 Hook；不会退回到其他版本配置。可选 Hook 只有在对应 profile 已核实并启用后才安装。
 
-## 能力范围（当前 main）
+## 能力范围（按 profile）
 
-- 正文（含 Markdown/提及/表情/代码/链接/标题/列表）；回复引用；
-  编辑后重新翻译；富 Embed（标题/描述/字段/原生帖子预览标题）与投票卡片。
-- 严格协议/结构不匹配时保留原节点并标记失败，不保存无效译文；用户点击图标可手动重试。
-- 行内翻译图标：三态（翻译中/成功/原文）、旋转动画、点击切换/重试。
+- `340013`：正文（含 Markdown/提及/表情/代码/链接/标题/列表）、回复引用、富 Embed、帖子预览标题与投票卡片。
+- `352017`：正文翻译与重渲染；回复引用、Embed、帖子预览和 Poll 仍禁用，待目标方法核实后再单独启用。
+- 两个 profile 都保留失败时的原始节点树；用户可通过图标重试或切换原文/译文。

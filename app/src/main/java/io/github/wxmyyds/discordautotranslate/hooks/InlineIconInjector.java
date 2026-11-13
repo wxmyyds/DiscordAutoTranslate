@@ -15,15 +15,13 @@ import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
 /**
  * 在消息正文渲染结果末尾注入行内翻译图标。
  *
- * <p>注入点选择：{@code MessageHooks} 的 {@code toSpannable} Hook。它是所有正文渲染的
- * 唯一汇聚点，在这里拿到的 {@code DraweeSpanStringBuilder} 就是最终交给
- * {@code MessageContentView} 的对象（继承 {@code SpannableStringBuilder}，可写）。</p>
+ * <p>注入点由版本配置中的 {@code message.textConversion} 选择；该 Hook 收到宿主生成的
+ * 最终 {@code SpannableStringBuilder}，在同一对象末尾追加图标。</p>
  *
  * <h3>注入范围（需求：只处理正常消息正文的可翻译文本）</h3>
  * <ol>
- *   <li>必须有渲染宿主：{@code MessageContentView.setMessageContent} 与
- *       Embed 绑定（{@code EmbedHooks}）都会在调用链内设置 {@link #CURRENT_HOST}；
- *       回复引用（{@code MessageViewReplyPreview}）不设置宿主，天然被排除。</li>
+ *   <li>必须有渲染宿主：正文渲染入口与 Embed 绑定（{@code EmbedHooks}）会在调用链内设置
+ *       {@link #CURRENT_HOST}；回复引用不设置宿主，因此不注入。</li>
  *   <li>必须有可翻译文本：{@code TextExtractor} 的 {@code textNodeCount > 0}。
  *       纯图片、纯表情、纯提及消息的文本节点数为 0，不注入。</li>
  *   <li>Embed 每卡片只挂一个图标：只有 {@code HookBridge.markEmbedIconKey}
@@ -32,18 +30,17 @@ import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
  * </ol>
  *
  * <h3>宿主 View 的传递</h3>
- * <p>{@code toSpannable} 是静态方法，拿不到渲染它的 {@code TextView}；而旋转动画必须
- * 有宿主才能驱动重绘。因此 {@code setMessageContent} Hook 在调用链同步范围内把宿主放进
- * {@link #CURRENT_HOST}（ThreadLocal），注入完成后立即清理。同一线程内
- * {@code setMessageContent → toSpannable} 是同步的，因此该传递是可靠的。</p>
+ * <p>文本转换方法是静态的，拿不到渲染它的 View；旋转动画需要宿主驱动重绘。
+ * 因此正文渲染 Hook 在同步调用文本转换期间将宿主放进 {@link #CURRENT_HOST}，
+ * 注入完成后立即清理。</p>
  */
 public final class InlineIconInjector {
 
     /**
-     * 当前渲染宿主（{@code MessageContentView}）。
+     * 当前正文渲染宿主。
      *
-     * <p>仅在 {@code setMessageContent} 调用链的同步范围内有效；为 {@code null}
-     * 表示这次 {@code toSpannable} 不是正常消息正文渲染（回复引用 / Embed / 其他）。</p>
+     * <p>仅在正文或 Embed 渲染调用链的同步范围内有效；为 {@code null} 表示本次转换来自回复引用
+     * 或其他不应注入行内图标的无宿主路径。</p>
      */
     private static final ThreadLocal<View> CURRENT_HOST = new ThreadLocal<>();
 
@@ -62,14 +59,14 @@ public final class InlineIconInjector {
     private InlineIconInjector() {
     }
 
-    /** 由 {@code setMessageContent} Hook 在调用 {@code super} 前设置，调用后必须清理。 */
+    /** 由正文渲染 Hook 在调用文本转换前设置，调用后必须清理。 */
     static void enterHost(@Nullable View host) {
         if (host != null) {
             CURRENT_HOST.set(host);
         }
     }
 
-    /** 由 {@code setMessageContent} Hook 在返回前清理，避免宿主泄漏到后续其它渲染。 */
+    /** 由正文渲染 Hook 在返回前清理，避免宿主泄漏到后续其它渲染。 */
     static void exitHost() {
         CURRENT_HOST.remove();
     }
@@ -80,7 +77,7 @@ public final class InlineIconInjector {
      * <p>任何异常都不得影响原渲染，因此内部整体 try/catch，失败时原样返回。</p>
      *
      * @param structurable 本次渲染的 {@code StructurableText}（用于反查消息 ID 与文本量）
-     * @param rendered     {@code TextUtilsKt.toSpannable} 的返回值
+     * @param rendered     配置选定的文本转换方法返回值
      * @param rawContext   渲染上下文（运行时才知类型）
      * @param hostCl       宿主 ClassLoader，用于创建可点击 span 代理
      * @return 传入的 {@code rendered}（就地修改后仍返回同一引用）

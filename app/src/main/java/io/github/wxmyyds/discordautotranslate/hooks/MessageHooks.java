@@ -13,42 +13,15 @@ import org.json.JSONObject;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 /**
- * Discord 消息渲染 Hook 的安装与实现。
- *
- * <p>具体类名、方法名、参数签名与参数索引由对应 Discord 版本的
- * {@code hook-config/<versionCode>.json} 决定；本类只实现消息绑定、渲染、文本转换与回复逻辑。
- * 以下链路是 340.13 配置对应的已核对实现：</p>
- * <pre>
- * 消息列表  MessageContentViewHolder.bind
- *             → MessageContentView.setMessageContent-hYrISQc$default
- *             → MessageContentView.setMessageContent-hYrISQc   (展开式，34 参)
- *             → TextUtilsKt.toSpannable                         (真正把结构转成 Spannable)
- * 回复引用  MessageViewReplyPreview → TextUtilsKt.toSpannable   (不经 setMessageContent)
- * </pre>
- *
- * <p>因此本类只安装四个渲染 Hook：</p>
- * <ol>
- *   <li>bind：{@code MessageContentViewHolder.bind}，唯一可靠的
- *       「视图 → 消息 ID」来源（{@code MessageContentAccessory.getMessageId}）。</li>
- *   <li>渲染入口：{@code MessageContentView} 上的展开式 {@code setMessageContent}
- *       （参数最多、首参为 {@code MessageMargins} 的那个重载），
- *       提供「视图 + 内容」，用于登记重渲染、触发翻译，并把宿主视图传给行内图标注入器。
- *       注意：不能 Hook 6 参的 {@code setMessageContent}，它只被
- *       {@code TextDisplayComponentView} 调用，不在消息路径上。</li>
- *   <li>文本漏斗：{@code TextUtilsKt.toSpannable}，所有文本渲染的唯一汇聚点
- *       （含回复引用与 Embed）。翻译替换与行内图标注入都在此处完成，因为该方法是静态的、
- *       接收的 {@code StructurableText} 与 bind 阶段是同一实例，可用身份映射反查消息 ID。</li>
- *   <li>回复引用：{@code MessageViewReplyPreview.configureReply}，
- *       把引用内的正文视图关联到被引用消息 ID，使引用内译文也能更新。</li>
- * </ol>
- *
- * <p>所有 Hook 均以 {@code ExceptionMode.PROTECTIVE} 安装，保证模块自身异常不会
- * 让 Discord 崩溃（需求 §5.1）。</p>
+ * 根据活动版本配置安装消息绑定、正文渲染、文本转换和可选回复引用 Hook。
+ * 类名、方法签名及参数位置只保存在 {@code hook-config/<versionCode>.json}；
+ * 本类负责稳定的翻译与重渲染行为，并返回句柄供热重载清理。
  */
 public final class MessageHooks {
 
@@ -57,13 +30,14 @@ public final class MessageHooks {
 
     /** Install profile-selected hooks and return their handles for hot reload cleanup. */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl,
-                                                            HookConfiguration config) {
+                                                            HookConfiguration config,
+                                                            Set<String> installedHookIds) {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(config.requiredHookCount());
         try {
-            installBindHook(module, cl, config, handles);
-            installExpandedRenderHook(module, cl, config, handles);
-            installToSpannableHook(module, cl, config, handles);
-            installReplyHook(module, cl, config, handles);
+            installBindHook(module, cl, config, handles, installedHookIds);
+            installBodyRenderHook(module, cl, config, handles, installedHookIds);
+            installTextConversionHook(module, cl, config, handles, installedHookIds);
+            installReplyHook(module, cl, config, handles, installedHookIds);
         } catch (Throwable t) {
             for (XposedInterface.HookHandle handle : handles) {
                 try {
@@ -73,6 +47,7 @@ public final class MessageHooks {
                 }
             }
             handles.clear();
+            installedHookIds.clear();
         }
         return handles;
     }
@@ -81,7 +56,8 @@ public final class MessageHooks {
 
     private static void installBindHook(XposedModule module, ClassLoader cl,
                                         HookConfiguration config,
-                                        List<XposedInterface.HookHandle> out) {
+                                        List<XposedInterface.HookHandle> out,
+                                        Set<String> installedHookIds) {
         if (!config.isEnabled("message.bind")) {
             return;
         }
@@ -101,6 +77,7 @@ public final class MessageHooks {
                     }
                     return chain.proceed();
                 }));
+        installedHookIds.add("message.bind");
     }
 
     /** Establishes the content identity mapping from the configured model argument. */
@@ -130,15 +107,16 @@ public final class MessageHooks {
         }
     }
 
-    // ------------------------------------------------- Hook 2: 展开式 setMessageContent
+    // -------------------------------------------------- Hook 2: 正文渲染入口
 
     /**
      * Hook 配置选出的正文渲染入口。它提供「视图 + 内容」，
      * 是挂图标、登记重渲染与触发翻译的位置。不做替换（替换统一在文本转换 Hook 完成）。
      */
-    private static void installExpandedRenderHook(XposedModule module, ClassLoader cl,
+    private static void installBodyRenderHook(XposedModule module, ClassLoader cl,
                                                   HookConfiguration config,
-                                                  List<XposedInterface.HookHandle> out) {
+                                                  List<XposedInterface.HookHandle> out,
+                                                  Set<String> installedHookIds) {
         if (!config.isEnabled("message.render")) {
             return;
         }
@@ -152,7 +130,7 @@ public final class MessageHooks {
         int contentArgument = spec.optInt("contentArgument", -1);
 
         out.add(module.hook(render)
-                .setId("dat.setMessageContent")
+                .setId("dat.messageRender")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
                     Object viewObject = viewArgument >= 0
@@ -187,30 +165,32 @@ public final class MessageHooks {
                         InlineIconInjector.exitHost();
                     }
                 }));
+        installedHookIds.add("message.render");
     }
 
-    // ------------------------------------------------------- Hook 3: toSpannable
+    // ----------------------------------------------- Hook 3: 文本转换
 
     /**
      * Hook 配置选出的文本转换入口：消息、回复引用和 Embed 文本在此登记与替换，
      * 行内图标注入也在宿主生成 Spannable 后完成。
      */
-    private static void installToSpannableHook(XposedModule module, ClassLoader cl,
+    private static void installTextConversionHook(XposedModule module, ClassLoader cl,
                                                HookConfiguration config,
-                                               List<XposedInterface.HookHandle> out) {
+                                               List<XposedInterface.HookHandle> out,
+                                               Set<String> installedHookIds) {
         if (!config.isEnabled("message.textConversion")) {
             return;
         }
-        Method toSpannable = config.findMethod("message.textConversion", cl);
+        Method conversionMethod = config.findMethod("message.textConversion", cl);
         JSONObject spec = config.hook("message.textConversion");
-        if (toSpannable == null || spec == null) {
+        if (conversionMethod == null || spec == null) {
             return;
         }
         int contentArgument = spec.optInt("contentArgument", 0);
         int contextArgument = spec.optInt("contextArgument", 1);
 
-        out.add(module.hook(toSpannable)
-                .setId("dat.toSpannable")
+        out.add(module.hook(conversionMethod)
+                .setId("dat.textConversion")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
                     Object source = safeArg(chain, contentArgument);
@@ -218,7 +198,7 @@ public final class MessageHooks {
                     try {
                         String messageId = HookBridge.get().resolveMessageId(source);
                         if (messageId != null) {
-                            // 回复引用/Embed 路径不经过 setMessageContent，
+                            // 回复引用/Embed 路径不经过正文渲染入口，
                             // 在此登记内容并触发翻译。
                             HookBridge.get().rememberContent(messageId, source);
 
@@ -254,30 +234,31 @@ public final class MessageHooks {
                         return rendered;
                     }
                 }));
+        installedHookIds.add("message.textConversion");
     }
 
     // ------------------------------------------------------------- Hook 4: 回复引用
 
     /**
-     * Hook {@code MessageViewReplyPreview.configureReply}：把回复引用内的正文视图
-     * 关联到被引用消息自己的 ID，使引用内的内容也能被翻译。
+     * 配置启用时，登记引用消息 ID 与正文身份，供翻译和重渲染使用。
      * 行内图标不注入回复引用（{@link InlineIconInjector} 在无宿主时跳过），
      * 但引用内的译文切换仍需要重渲染登记。
      */
     private static void installReplyHook(XposedModule module, ClassLoader cl,
                                          HookConfiguration config,
-                                         List<XposedInterface.HookHandle> out) {
+                                         List<XposedInterface.HookHandle> out,
+                                         Set<String> installedHookIds) {
         if (!config.isEnabled("message.reply")) {
             return;
         }
-        Method configure = config.findMethod("message.reply", cl);
+        Method replyBind = config.findMethod("message.reply", cl);
         JSONObject spec = config.hook("message.reply");
-        if (configure == null || spec == null) {
+        if (replyBind == null || spec == null) {
             return;
         }
 
-        out.add(module.hook(configure)
-                .setId("dat.configureReply")
+        out.add(module.hook(replyBind)
+                .setId("dat.messageReply")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
                     try {
@@ -287,16 +268,17 @@ public final class MessageHooks {
                     }
                     Object result = chain.proceed();
                     try {
-                        replyPost(chain, configure, spec);
+                        replyPost(chain, replyBind, spec);
                     } catch (Throwable ignored) {
                         // 后处理失败不影响宿主。
                     }
                     return result;
                 }));
+        installedHookIds.add("message.reply");
     }
 
     /** 后置：登记回复引用的重渲染目标，使译文完成后引用内也能更新。 */
-    private static void replyPost(XposedInterface.Chain chain, Method configureReply,
+    private static void replyPost(XposedInterface.Chain chain, Method replyBind,
                                   JSONObject spec) {
         Object preview = chain.getThisObject();
         if (preview == null) {
@@ -311,7 +293,7 @@ public final class MessageHooks {
             return;
         }
         RerenderRegistry.register(messageId, replyText, preview,
-                configureReply, chain.getArgs().toArray());
+                replyBind, chain.getArgs().toArray());
     }
 
     /** 前置：从配置指定的引用消息参数登记消息 ID 与正文身份映射。 */

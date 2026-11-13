@@ -15,28 +15,14 @@ import java.util.List;
 /**
  * Discord 消息内容结构的反射访问层（需求 §7 阶段 3）。
  *
- * <p>背景（已核对 smali 源码）：
- * {@code TextUtilsKt.toSpannable(StructurableText, ...)} 是所有文本渲染的唯一入口，
- * 且只有两个分支：
- * <ul>
- *   <li>{@code AnnotatedStructurableText} → 遍历 {@code List<ContentNode>} 渲染；</li>
- *   <li>{@code PrimitiveStructurableText} → 整体当纯文本渲染；</li>
- *   <li>其他类型 → {@code throw RuntimeException}。</li>
- * </ul>
+ * <p>Hook 配置选择版本对应的文本转换入口。已核对的渲染器接受两类正文：
+ * {@code AnnotatedStructurableText} 遍历 {@code List<ContentNode>}，
+ * {@code PrimitiveStructurableText} 按纯文本渲染；其他类型会抛出异常。
+ * 本类保留 Annotated 结构，只替换自然语言文本节点，其他结构节点原样保留。</p>
  *
- * <p>早期做法是把带 Markdown 的消息整体替换成 {@code PrimitiveStructurableText}，
- * 不会崩溃（渲染器接受该类型），但会丢失全部 Markdown 格式。
- * 本类改为保留 {@code AnnotatedStructurableText} 类型，
- * 只把其中的 {@code TextContentNode}（自然语言）替换为译文节点，
- * 结构化节点（提及/表情/链接/代码块等）原样保留，从而保住格式。</p>
- *
- * <p>节点重建采用 Kotlin data class 的通用能力：
- * <ul>
- *   <li>用 {@code componentN()} 取出原节点的全部字段；</li>
- *   <li>只替换其中的内容字段（List 或 String）；</li>
- *   <li>调用 {@code copy(...)} 重建节点，保留其余字段（如 Heading 的 level、
- *       Link 的 LinkContextData、CodeBlock 的 lang）。</li>
- * </ul>
+ * <p>节点重建策略由版本配置确定：保留公开 Kotlin data class 方法的版本用
+ * {@code componentN()/copy(...)}；混淆节点在 profile 中列入
+ * {@code constructorFallbackTypes} 时，按已核对的字段与构造器顺序重建。未知类型不猜测。
  * 只遍历与 {@link TextExtractor} 相同的格式容器；提及、频道、emoji 和未知节点
  * 即使含有子列表也整节点保留，不参与译文分配。</p>
  */
@@ -70,10 +56,6 @@ public final class ContentNodes {
     public static boolean isPrimitive(@Nullable Object structurableText) {
         return structurableText != null && "PrimitiveStructurableText".equals(
                 HookConfiguration.semanticTypeName(structurableText.getClass()));
-    }
-
-    private static String classNameOf(@Nullable Object o) {
-        return o == null ? "" : HookConfiguration.semanticTypeName(o.getClass());
     }
 
     /** 取 AnnotatedStructurableText 的 List<ContentNode>；失败返回 null。 */
@@ -310,14 +292,20 @@ public final class ContentNodes {
     }
 
     /**
-     * 用 {@code copy(...)} 重建节点，只替换内容列表，其余字段原样保留。
+     * 按当前版本配置选择节点重建方案：公开 data class 使用 {@code copy(...)}，
+     * 混淆类型使用 profile 声明的构造器；只替换子节点列表，其余字段保持原值。
      */
     @Nullable
     private static Object copyWith(Object node, List<Object> newChildren) {
         Class<?> cls = node.getClass();
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String semanticType = HookConfiguration.semanticTypeName(cls);
+        if (configuration != null && configuration.allowsConstructorRebuild(semanticType)) {
+            return constructWithReplacedChildren(node, newChildren);
+        }
         Method copy = findCopyMethod(cls);
         if (copy == null) {
-            return constructWithReplacedChildrenIfConfigured(node, newChildren);
+            return null;
         }
         // 逐个参数：内容字段用新列表，其他字段用 componentN 原值。
         Class<?>[] types = copy.getParameterTypes();
@@ -334,20 +322,7 @@ public final class ContentNodes {
         if (contentIndex < 0) {
             return null;
         }
-        Object out = Reflect.call(copy, node, args);
-        return out != null ? out
-                : constructWithReplacedChildrenIfConfigured(node, newChildren);
-    }
-
-    @Nullable
-    private static Object constructWithReplacedChildrenIfConfigured(
-            Object node, List<Object> newChildren) {
-        HookConfiguration configuration = HookConfiguration.activeConfiguration();
-        String semanticType = HookConfiguration.semanticTypeName(node.getClass());
-        if (configuration == null || !configuration.allowsConstructorRebuild(semanticType)) {
-            return null;
-        }
-        return constructWithReplacedChildren(node, newChildren);
+        return Reflect.call(copy, node, args);
     }
 
     @Nullable

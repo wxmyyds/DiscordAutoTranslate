@@ -11,16 +11,14 @@ import java.util.List;
 /**
  * 构造 Discord 的 {@code StructurableText} 实例（需求 §7 阶段 3）。
  *
- * <p>依据 {@code TextUtilsKt.toSpannable} 的分支（已核对 smali）：
+ * <p>按配置指定的 StructurableText 类型构造 Primitive 与 Annotated 实例。
  * <ul>
  *   <li>{@code AnnotatedStructurableText} → 渲染内容节点列表；</li>
  *   <li>{@code PrimitiveStructurableText} → 整体当纯文本；</li>
  *   <li>其他类型 → 抛 {@code RuntimeException}。</li>
  * </ul>
  *
- * <p>因此替换时必须产出上述两种类型之一。为保留 Markdown，优先产出
- * {@code AnnotatedStructurableText}（见 {@link ContentNodes}）；
- * 若构造器缺失或调用失败，替换明确失败，调用方继续渲染未修改的原对象。</p>
+ * <p>为译文优先保留 Annotated 结构；若构造失败，调用方继续使用原始正文。</p>
  */
 public final class StructurableTextFactory {
 

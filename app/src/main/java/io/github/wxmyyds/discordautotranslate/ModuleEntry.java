@@ -24,7 +24,9 @@ import io.github.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import io.github.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
 import io.github.wxmyyds.discordautotranslate.hooks.MessageHooks;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -56,8 +58,6 @@ public class ModuleEntry extends XposedModule {
 
     private volatile boolean installed;
     private volatile boolean bootstrapInstalled;
-    private volatile ClassLoader targetClassLoader;
-    private volatile int targetVersionCode = -1;
     private volatile HookConfiguration hookConfiguration;
 
     // ------------------------------------------------------------ 生命周期
@@ -80,8 +80,7 @@ public class ModuleEntry extends XposedModule {
             // 防止重复注册启动钩子。
             return;
         }
-        targetClassLoader = param.getClassLoader();
-        installBootstrapHook(param.getClassLoader());
+        installBootstrapHook();
     }
 
     /**
@@ -120,15 +119,9 @@ public class ModuleEntry extends XposedModule {
             }
         }
 
-        // 热重载不会重放 onPackageReady，因此必须从旧 Hook 目标反推宿主 ClassLoader，
-        // 否则新代次无法重新安装 Hook（旧实例的 targetClassLoader 已经不存在）。
-        ClassLoader recovered = targetClassLoader;
-        if (recovered == null) {
-            recovered = classLoaderFromOldHooks(param.getOldHookHandles());
-        }
-        if (recovered != null) {
-            targetClassLoader = recovered;
-        }
+        // 热重载不会重放 onPackageReady，因此从旧 Hook 的目标反推宿主 ClassLoader，
+        // 用于直接恢复已选中的版本配置。
+        ClassLoader recovered = classLoaderFromOldHooks(param.getOldHookHandles());
 
         // Drop old state and the old thread pool so stale results cannot leak in.
         Scheduler.MainThread.clear();
@@ -147,13 +140,14 @@ public class ModuleEntry extends XposedModule {
 
         Object savedState = param.getSavedInstanceState();
         HookConfiguration restored = null;
+        int restoredVersionCode = -1;
         if (savedState instanceof Bundle) {
             Bundle bundle = (Bundle) savedState;
-            targetVersionCode = bundle.getInt("hookVersionCode", -1);
+            restoredVersionCode = bundle.getInt("hookVersionCode", -1);
             String json = bundle.getString("hookConfigJson");
-            if (targetVersionCode >= 0 && json != null) {
+            if (restoredVersionCode >= 0 && json != null) {
                 try {
-                    restored = HookConfigurationLoader.parse(json, targetVersionCode);
+                    restored = HookConfiguration.parse(json, restoredVersionCode);
                 } catch (Throwable ignored) {
                     restored = null;
                 }
@@ -166,25 +160,21 @@ public class ModuleEntry extends XposedModule {
         hookConfiguration = null;
         reloadConfig();
 
-        ClassLoader cl = targetClassLoader;
-        if (cl == null) {
-            return;
-        }
-        if (restored != null) {
+        if (restored != null && recovered != null) {
             try {
-                install(cl, restored);
+                install(recovered, restored);
                 installed = true;
             } catch (Throwable ignored) {
                 installed = false;
             }
         } else {
-            installBootstrapHook(cl);
+            installBootstrapHook();
         }
     }
 
     // ------------------------------------------------------------ 安装与卸载
 
-    private void installBootstrapHook(ClassLoader cl) {
+    private void installBootstrapHook() {
         if (bootstrapInstalled) {
             return;
         }
@@ -202,7 +192,7 @@ public class ModuleEntry extends XposedModule {
                             if (contextObject instanceof Context) {
                                 Context context = (Context) contextObject;
                                 if (TARGET_PACKAGE.equals(context.getPackageName())) {
-                                    installForApplication(context, cl);
+                                    installForApplication(context, context.getClassLoader());
                                 }
                             }
                         } catch (Throwable t) {
@@ -233,7 +223,6 @@ public class ModuleEntry extends XposedModule {
                         "no hook profile for Discord versionCode=" + versionCode);
                 return;
             }
-            targetVersionCode = versionCode;
             install(cl, config);
             installed = true;
         } catch (Throwable t) {
@@ -243,14 +232,19 @@ public class ModuleEntry extends XposedModule {
     }
 
     private void install(ClassLoader cl, HookConfiguration config) {
+        if (!config.hasAllRequiredTargets(cl)) {
+            throw new IllegalStateException("configured required hook target is unavailable");
+        }
         hookConfiguration = config;
         HookConfiguration.activate(config);
         StructurableTextFactory.init(cl, config);
         Scheduler.MainThread.install();
         reloadConfig();
 
-        List<XposedInterface.HookHandle> created = MessageHooks.install(this, cl, config);
-        if (created.size() < config.requiredHookCount()) {
+        Set<String> installedMessageHookIds = new HashSet<>();
+        List<XposedInterface.HookHandle> created = MessageHooks.install(
+                this, cl, config, installedMessageHookIds);
+        if (!config.hasAllRequiredHooks(installedMessageHookIds)) {
             for (XposedInterface.HookHandle handle : created) {
                 try {
                     handle.unhook();
@@ -259,7 +253,7 @@ public class ModuleEntry extends XposedModule {
                 }
             }
             throw new IllegalStateException("incomplete configured hook installation: "
-                    + created.size() + "/" + config.requiredHookCount());
+                    + installedMessageHookIds);
         }
         hooks.addAll(created);
         hooks.addAll(EmbedHooks.install(this, cl, config));
@@ -305,8 +299,6 @@ public class ModuleEntry extends XposedModule {
         ModuleResources.reset();
         installed = false;
         bootstrapInstalled = false;
-        targetClassLoader = null;
-        targetVersionCode = -1;
         hookConfiguration = null;
         HookConfiguration.activate(null);
     }

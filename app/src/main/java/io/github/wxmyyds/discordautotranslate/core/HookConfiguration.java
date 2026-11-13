@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Iterator;
+import java.util.Set;
 
 /** Parsed, version-specific Discord hook metadata. */
 public final class HookConfiguration {
@@ -126,6 +127,35 @@ public final class HookConfiguration {
         return required == null ? 0 : required.length();
     }
 
+    public boolean hasAllRequiredTargets(ClassLoader hostClassLoader) {
+        JSONArray required = root.optJSONArray("requiredHooks");
+        if (required == null) {
+            return false;
+        }
+        for (int i = 0; i < required.length(); i++) {
+            String hookId = required.optString(i, "");
+            if (hookId.isEmpty() || !isEnabled(hookId)
+                    || findMethod(hookId, hostClassLoader) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean hasAllRequiredHooks(Set<String> installedHookIds) {
+        JSONArray required = root.optJSONArray("requiredHooks");
+        if (required == null || required.length() == 0 || installedHookIds == null) {
+            return false;
+        }
+        for (int i = 0; i < required.length(); i++) {
+            String hookId = required.optString(i, "");
+            if (hookId.isEmpty() || !isEnabled(hookId) || !installedHookIds.contains(hookId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     @Nullable
     public JSONObject hook(String id) {
         JSONObject hooks = root.optJSONObject("hooks");
@@ -133,24 +163,9 @@ public final class HookConfiguration {
     }
 
     @Nullable
-    public JSONObject section(String name) {
-        return root.optJSONObject(name);
-    }
-
-    @Nullable
     public String string(String section, String key) {
         JSONObject object = root.optJSONObject(section);
         return object == null ? null : object.optString(key, null);
-    }
-
-    public int intValue(String section, String key, int fallback) {
-        JSONObject object = root.optJSONObject(section);
-        return object == null ? fallback : object.optInt(key, fallback);
-    }
-
-    public boolean booleanValue(String section, String key, boolean fallback) {
-        JSONObject object = root.optJSONObject(section);
-        return object == null ? fallback : object.optBoolean(key, fallback);
     }
 
     /** Finds a declared method using only the selector stored in this version's config. */

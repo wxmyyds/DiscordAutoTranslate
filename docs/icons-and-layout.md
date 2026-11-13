@@ -2,14 +2,10 @@
 
 ## 行内翻译图标（正式功能）
 
-图标作为文本流的一部分注入 `TextUtilsKt.toSpannable` 返回的
-`DraweeSpanStringBuilder` 尾部，随文字自然换行、可精确点击。
+图标作为文本流的一部分注入版本配置选定的文本转换结果尾部，随文字自然换行、可精确点击。
 
-- **注入点**：`toSpannable`（所有正文渲染的唯一汇聚点）拿到
-  `DraweeSpanStringBuilder` 后，在末尾追加一个 `InlineIconSpan`。
-- **挂载时机（主路径）**：Hook `MessageView.setMessage`（7 参），其 `this`
-  就是行控件本身，无需沿父链上溯；在 `chain.proceed()` 之后挂载（此时子视图
-  状态稳定），并处理行复用到新消息的清理，避免图标串位。
+- **注入点**：统一文本转换 Hook 拿到 `SpannableStringBuilder` 后，在末尾追加 `InlineIconSpan`。
+- **挂载时机**：正文渲染和 Embed 绑定期间通过调用链传递宿主 View；回复引用无宿主，不注入。
 - **三态**（`@drawable` + `setColorFilter` 着色）：
   - 翻译中：`progress_activity_24`（旋转，灰 `#B9BBBE`）；
   - 翻译成功：`translate_24`（主题蓝 `#5865F2`）；
@@ -18,11 +14,7 @@
   - 待翻译不显示图标。
 - **旋转动画**：翻译中状态对 ImageView/span 反复重绘（`postOnAnimation`
   驱动，曾修复卡死），其他状态停止并归零。
-- **点击**：`MessageView.onInterceptTouchEvent` 返回 `!allowChildGestures`，
-  会在 `ACTION_DOWN` 抢走手势，图标自身的 onTouchEvent 收不到事件。
-  因此 Hook `MessageView.onInterceptTouchEvent`：触点落在图标范围内时直接返回
-  false（不拦截），用 `IconClickSpanFactory`/命中判定（范围比较 + 8dp 容差）。
-  回调接入 `HookBridge.onIconClicked`：切换原文/译文、失败重试。
+- **点击**：图标 span 通过 `IconClickSpanFactory` 实现宿主 `NestedClickableSpan` 接口；宿主分发触摸并调用 `onClick` 后，转交 `HookBridge.onIconClicked` 切换原文/译文或重试。
 - **注入范围**：只处理正常消息正文（文本节点数 > 0 且非 IDLE）；回复引用
   内不注入；富 Embed 每卡片一个（主段优先）；帖子预览挂在 footer；
   投票卡片挂在问题文本末尾。
@@ -31,14 +23,13 @@
 
 ## 布局刷新（译文/切换后行高立即更新）
 
-现象根因（均已在代码/smali 中核实）：
+根因与下列已核实路径有关（Discord `340013`）：
 
 1. 重渲染原本在宿主布局过程（measure/layout）中同步执行，此时再请求布局无效；
-2. 旧 `RerenderRegistry.rerender` 把「绑定未知」当作「已复用」永久删除目标，
-   长列表滚动（LRU 512）后旧条目被淘汰 → 该消息不再刷新；
-3. 宿主刷新单行只走 `notifyItemChanged`，且 `MessageContentViewHolder.bind`
-   有 `Intrinsics.areEqual(lastMessageContent, newData)` 早退：内容相等直接
-   return，`setMessageContent`/`toSpannable` 不再执行。
+2. 旧 `RerenderRegistry.rerender` 把「绑定未知」当作「已复用」永久删除目标，长列表滚动（LRU 512）后旧条目被淘汰，消息不再刷新；
+3. 宿主刷新单行只走 `notifyItemChanged`，且 `MessageContentViewHolder.bind` 有内容相等早退，正文渲染与文本转换不再执行。
+
+352017 使用 profile 中声明的静态正文渲染方法；其重渲染参数由配置提供。
 
 修复：
 
