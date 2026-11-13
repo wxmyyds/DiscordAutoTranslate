@@ -85,6 +85,19 @@ public final class HookConfiguration {
         return typeAccessors == null ? null : typeAccessors.optString(accessor, null);
     }
 
+    public boolean allowsConstructorRebuild(String semanticType) {
+        JSONArray types = root.optJSONArray("constructorFallbackTypes");
+        if (types == null) {
+            return false;
+        }
+        for (int i = 0; i < types.length(); i++) {
+            if (semanticType.equals(types.optString(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Nullable
     public String typeClass(String semanticName) {
         JSONObject types = root.optJSONObject("types");

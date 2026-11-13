@@ -317,7 +317,7 @@ public final class ContentNodes {
         Class<?> cls = node.getClass();
         Method copy = findCopyMethod(cls);
         if (copy == null) {
-            return constructWithReplacedChildren(node, newChildren);
+            return constructWithReplacedChildrenIfConfigured(node, newChildren);
         }
         // 逐个参数：内容字段用新列表，其他字段用 componentN 原值。
         Class<?>[] types = copy.getParameterTypes();
@@ -335,7 +335,19 @@ public final class ContentNodes {
             return null;
         }
         Object out = Reflect.call(copy, node, args);
-        return out != null ? out : constructWithReplacedChildren(node, newChildren);
+        return out != null ? out
+                : constructWithReplacedChildrenIfConfigured(node, newChildren);
+    }
+
+    @Nullable
+    private static Object constructWithReplacedChildrenIfConfigured(
+            Object node, List<Object> newChildren) {
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String semanticType = HookConfiguration.semanticTypeName(node.getClass());
+        if (configuration == null || !configuration.allowsConstructorRebuild(semanticType)) {
+            return null;
+        }
+        return constructWithReplacedChildren(node, newChildren);
     }
 
     @Nullable

@@ -109,6 +109,20 @@
     "BlockQuoteContentNode": "j7.f",
     "UnderlineContentNode": "j7.k5"
   },
+  "constructorFallbackTypes": [
+    "StrongContentNode",
+    "LHeadingContentNode",
+    "StrikethroughContentNode",
+    "SubtextContentNode",
+    "LinkContentNode",
+    "BulletListContentNode",
+    "HeadingContentNode",
+    "SpoilerContentNode",
+    "ParagraphContentNode",
+    "EmphasisContentNode",
+    "BlockQuoteContentNode",
+    "UnderlineContentNode"
+  ],
   "accessors": {
     "Message": {
       "getId": "getId-3Eiw7ao",
