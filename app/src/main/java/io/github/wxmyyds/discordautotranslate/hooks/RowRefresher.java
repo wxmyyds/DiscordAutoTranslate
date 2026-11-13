@@ -68,27 +68,18 @@ final class RowRefresher {
     private static final java.util.Set<String> PENDING_ROW_REFRESH =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
-    /** Optional direct content-view fields on holders; 340.13 is validated by itemView ancestry. */
-    private static final String[] CONTENT_VIEW_FIELDS = {
-            "messageContentView", "embedView", "postPreviewEmbedView", "pollView"};
-
-    /** holder 是否以 {@code view} 作为其内容承载视图；据此过滤无关视图的误刷新。 */
+    /** Resolve content ownership through configured holder fields or the item-view hierarchy. */
     private static boolean ownsContentView(Object holder, View view) {
-        for (String fieldName : CONTENT_VIEW_FIELDS) {
-            if (Reflect.getField(holder, fieldName) == view) {
-                return true;
-            }
+        HookConfiguration config = HookConfiguration.activeConfiguration();
+        if (config == null) return false;
+        for (String semanticType : new String[]{"MessageContentViewHolder", "EmbedViewHolder",
+                "PostPreviewEmbedViewHolder", "PollViewHolder"}) {
+            String fieldName = config.fieldName(semanticType, "contentView");
+            if (fieldName != null && Reflect.getField(holder, fieldName) == view) return true;
         }
-        // Discord 340.13 keeps the content child under the ViewHolder's itemView rather
-        // than exposing it as a holder field. findContainingViewHolder already identifies
-        // the owning holder; verify containment through the actual view hierarchy instead.
-        Object itemView = Reflect.getField(holder, "itemView");
-        if (itemView instanceof View && isDescendantOrSelf(view, (View) itemView)) {
-            HookDiagnostics.infoOnce("rowRefresh.ownerViaItemView",
-                    "content holder matched through itemView descendant hierarchy");
-            return true;
-        }
-        return false;
+        String itemViewField = config.fieldName("RecyclerViewViewHolder", "itemView");
+        Object itemView = itemViewField == null ? null : Reflect.getField(holder, itemViewField);
+        return itemView instanceof View && isDescendantOrSelf(view, (View) itemView);
     }
 
     @Nullable
@@ -106,8 +97,11 @@ final class RowRefresher {
     /** Resolve a RecyclerView holder, including when its framework containment lookup misses. */
     @Nullable
     private static Object findContainingViewHolder(android.view.ViewParent recycler, View view) {
-        Method findContaining = findRecyclerApiMethod(
-                recycler.getClass(), "findContainingViewHolder", View.class);
+        HookConfiguration config = HookConfiguration.activeConfiguration();
+        String findContainingName = config == null ? null
+                : config.accessorName("RecyclerView", "findContainingViewHolder");
+        Method findContaining = findContainingName == null ? null : findRecyclerApiMethod(
+                recycler.getClass(), findContainingName, View.class);
         Object holder = Reflect.call(findContaining, recycler, view);
         if (holder != null) {
             return holder;
@@ -117,8 +111,8 @@ final class RowRefresher {
                     "RecyclerView containment API unavailable; scanning attached item views");
         }
 
-        Method childCountMethod = findRecyclerApiMethod(recycler.getClass(), "getChildCount");
-        Method childAtMethod = findRecyclerApiMethod(recycler.getClass(), "getChildAt", int.class);
+        Method childCountMethod = recyclerAccessor(recycler, "getChildCount");
+        Method childAtMethod = recyclerAccessor(recycler, "getChildAt", int.class);
         Object countValue = Reflect.call(childCountMethod, recycler);
         if (!(countValue instanceof Integer) || childAtMethod == null) {
             reportRowRefreshFailure("attachedChildScanMethods");
@@ -135,9 +129,12 @@ final class RowRefresher {
                 continue;
             }
             Object layoutParams = itemView.getLayoutParams();
-            Object childHolder = Reflect.getField(layoutParams, "viewHolder");
-            if (childHolder != null
-                    && Reflect.getField(childHolder, "itemView") == itemView) {
+            String holderField = configuredField("RecyclerViewLayoutParams", "viewHolder");
+            String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
+            Object childHolder = holderField == null ? null
+                    : Reflect.getField(layoutParams, holderField);
+            if (childHolder != null && itemViewField != null
+                    && Reflect.getField(childHolder, itemViewField) == itemView) {
                 HookDiagnostics.infoOnce("rowRefresh.layoutParamsHolderMatched",
                         "RecyclerView item holder resolved from item layout params");
                 return childHolder;
@@ -193,11 +190,19 @@ final class RowRefresher {
                 reportRowRefreshFailure("contentOwnership");
                 return false;
             }
-            Object contentAdapter = Reflect.call(
-                    findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
-            View messageRow = findAncestorView(view, MESSAGE_VIEW_CLASS);
+            String getAdapterName = configuredAccessor("RecyclerView", "getAdapter");
+            String holderPositionName = configuredAccessor(
+                    "RecyclerViewViewHolder", "getBindingAdapterPosition");
+            String absolutePositionName = configuredAccessor(
+                    "RecyclerViewViewHolder", "getAbsoluteAdapterPosition");
+            String rowRecyclerField = configuredField("RecyclerViewViewHolder", "recyclerView");
+            String bindingAdapterField = configuredField("RecyclerViewViewHolder", "bindingAdapter");
+            Object contentAdapter = getAdapterName == null ? null : Reflect.call(
+                    findInheritedMethod(contentRecycler.getClass(), getAdapterName, 0), contentRecycler);
+            View messageRow = findAncestorView(view, configuredType("MessageView"));
             Object rowHolder = messageRow == null ? null : holderFromItemView(messageRow);
-            Object rowRecyclerObject = Reflect.getField(rowHolder, "recyclerView");
+            Object rowRecyclerObject = rowRecyclerField == null ? null
+                    : Reflect.getField(rowHolder, rowRecyclerField);
             if (contentAdapter == null || rowHolder == null
                     || !(rowRecyclerObject instanceof android.view.ViewParent)) {
                 reportRowRefreshFailure(contentAdapter == null ? "contentAdapter"
@@ -205,9 +210,10 @@ final class RowRefresher {
                 return false;
             }
             android.view.ViewParent rowRecycler = (android.view.ViewParent) rowRecyclerObject;
-            Object rowAdapter = Reflect.call(
-                    findInheritedMethod(rowRecycler.getClass(), "getAdapter", 0), rowRecycler);
-            Object itemView = Reflect.getField(rowHolder, "itemView");
+            Object rowAdapter = getAdapterName == null ? null : Reflect.call(
+                    findInheritedMethod(rowRecycler.getClass(), getAdapterName, 0), rowRecycler);
+            String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
+            Object itemView = itemViewField == null ? null : Reflect.getField(rowHolder, itemViewField);
             if (rowAdapter == null) {
                 reportRowRefreshFailure("rowAdapter");
                 return false;
@@ -216,13 +222,12 @@ final class RowRefresher {
                 reportRowRefreshFailure("messageViewItem");
                 return false;
             }
-            Object bindingPositionValue = Reflect.call(
-                    findInheritedMethod(rowHolder.getClass(), "getBindingAdapterPosition", 0),
-                    rowHolder);
-            Object absolutePositionValue = Reflect.call(
-                    findInheritedMethod(rowHolder.getClass(), "getAbsoluteAdapterPosition", 0),
-                    rowHolder);
-            Object bindingAdapter = Reflect.getField(rowHolder, "bindingAdapter");
+            Object bindingPositionValue = holderPositionName == null ? null : Reflect.call(
+                    findInheritedMethod(rowHolder.getClass(), holderPositionName, 0), rowHolder);
+            Object absolutePositionValue = absolutePositionName == null ? null : Reflect.call(
+                    findInheritedMethod(rowHolder.getClass(), absolutePositionName, 0), rowHolder);
+            Object bindingAdapter = bindingAdapterField == null ? null
+                    : Reflect.getField(rowHolder, bindingAdapterField);
             int bindingPosition = bindingPositionValue instanceof Integer
                     ? (Integer) bindingPositionValue : -1;
             int absolutePosition = absolutePositionValue instanceof Integer
@@ -240,9 +245,8 @@ final class RowRefresher {
             // minified host, adapter notifications are exposed through the adapter's
             // observable rather than a reflectable notifyItemChanged method.
             int contentPosition = -1;
-            Object contentPosValue = Reflect.call(
-                    findInheritedMethod(contentHolder.getClass(), "getBindingAdapterPosition", 0),
-                    contentHolder);
+            Object contentPosValue = holderPositionName == null ? null : Reflect.call(
+                    findInheritedMethod(contentHolder.getClass(), holderPositionName, 0), contentHolder);
             if (contentPosValue instanceof Integer) {
                 contentPosition = (Integer) contentPosValue;
             }
@@ -275,7 +279,7 @@ final class RowRefresher {
             postRecyclerState(rowRecycler, "outer", view, messageRow);
             messageRow.post(() -> HookDiagnostics.info("row refresh after layout"
                     + " content=" + sizeOf(view)
-                    + " accessories=" + sizeOf(findAncestorView(view, MESSAGE_ACCESSORIES_VIEW_CLASS))
+                    + " accessories=" + sizeOf(findAncestorView(view, configuredType("MessageAccessoriesView")))
                     + " row=" + sizeOf(messageRow)
                     + " recycler=" + sizeOfViewParent(rowRecycler)));
             HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
@@ -331,12 +335,19 @@ final class RowRefresher {
                 + ",layoutRequested=" + view.isLayoutRequested()
                 + ",height=" + view.getHeight()
                 + ",measured=" + view.getMeasuredHeight()
-                + ",P=" + Reflect.getField(recycler, "P")
-                + ",Q=" + Reflect.getField(recycler, "Q")
-                + ",R=" + Reflect.getField(recycler, "R")
-                + ",S=" + Reflect.getField(recycler, "S")
-                + ",T=" + Reflect.getField(recycler, "T")
-                + ",U=" + Reflect.getField(recycler, "U") + "}";
+                + ",P=" + readRecyclerState(recycler, "stateP")
+                + ",Q=" + readRecyclerState(recycler, "stateQ")
+                + ",R=" + readRecyclerState(recycler, "stateR")
+                + ",S=" + readRecyclerState(recycler, "stateS")
+                + ",T=" + readRecyclerState(recycler, "stateT")
+                + ",U=" + readRecyclerState(recycler, "stateU") + "}";
+    }
+
+    @Nullable
+    private static Object readRecyclerState(Object recycler, String key) {
+        String field = configuredField("RecyclerView", key);
+        return field == null ? null : Reflect.getField(recycler, field);
+    }
     }
 
     private static String sizeOf(@Nullable View view) {
@@ -374,11 +385,11 @@ final class RowRefresher {
                         }
                         requestLayoutChain(view);
                         relayoutContentSelf(view);
-                        relayoutNamedAncestor(view, MESSAGE_ACCESSORIES_VIEW_CLASS);
-                        relayoutNamedAncestor(view, MESSAGE_VIEW_CLASS);
+                        relayoutNamedAncestor(view, configuredType("MessageAccessoriesView"));
+                        relayoutNamedAncestor(view, configuredType("MessageView"));
                         view.invalidate();
                         dispatchRecyclerLayout(findRecyclerView(view));
-                        View messageRow = findAncestorView(view, MESSAGE_VIEW_CLASS);
+                        View messageRow = findAncestorView(view, configuredType("MessageView"));
                         dispatchRecyclerLayout(messageRow == null
                                 ? null : findRecyclerView(messageRow));
                     } catch (Throwable ignored) {
@@ -392,12 +403,14 @@ final class RowRefresher {
     }
 
     private static boolean notifyAdapterItemChanged(Object adapter, int position) {
-        Object observable = Reflect.getField(adapter, "observable");
-        if (observable == null) {
+        String observableField = configuredField("RecyclerViewAdapter", "observable");
+        String notifyName = configuredAccessor("RecyclerViewAdapterObservable", "notifyItemChanged");
+        Object observable = observableField == null ? null : Reflect.getField(adapter, observableField);
+        if (observable == null || notifyName == null) {
             return false;
         }
         Method notifyRangeChanged = findInheritedMethod(
-                observable.getClass(), "notifyItemChanged", 3,
+                observable.getClass(), notifyName, 3,
                 int.class, int.class, Object.class);
         if (notifyRangeChanged == null) {
             return false;
@@ -415,8 +428,12 @@ final class RowRefresher {
         if (itemView == null) {
             return null;
         }
-        Object holder = Reflect.getField(itemView.getLayoutParams(), "viewHolder");
-        return holder != null && Reflect.getField(holder, "itemView") == itemView
+        String holderField = configuredField("RecyclerViewLayoutParams", "viewHolder");
+        String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
+        Object holder = holderField == null ? null
+                : Reflect.getField(itemView.getLayoutParams(), holderField);
+        return holder != null && itemViewField != null
+                && Reflect.getField(holder, itemViewField) == itemView
                 ? holder : null;
     }
 
@@ -462,13 +479,45 @@ final class RowRefresher {
         return null;
     }
 
-    /** 沿父链找到最近的 RecyclerView（按类名判断，避免编译期依赖）。 */
+    @Nullable
+    private static HookConfiguration configuration() {
+        return HookConfiguration.activeConfiguration();
+    }
+
+    @Nullable
+    private static String configuredType(String semanticType) {
+        HookConfiguration config = configuration();
+        return config == null ? null : config.typeClass(semanticType);
+    }
+
+    @Nullable
+    private static String configuredField(String semanticType, String member) {
+        HookConfiguration config = configuration();
+        return config == null ? null : config.fieldName(semanticType, member);
+    }
+
+    @Nullable
+    private static String configuredAccessor(String semanticType, String member) {
+        HookConfiguration config = configuration();
+        return config == null ? null : config.accessorName(semanticType, member);
+    }
+
+    @Nullable
+    private static Method recyclerAccessor(android.view.ViewParent recycler, String member,
+                                          Class<?>... parameterTypes) {
+        String name = configuredAccessor("RecyclerView", member);
+        return name == null ? null : findRecyclerApiMethod(
+                recycler.getClass(), name, parameterTypes);
+    }
+
+    /** 沿父链找到最近的 RecyclerView。 */
     @Nullable
     private static android.view.ViewParent findRecyclerView(View view) {
+        String recyclerClass = configuredType("RecyclerView");
+        if (recyclerClass == null) return null;
         android.view.ViewParent parent = view.getParent();
         for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
-            if (Reflect.isInstanceOfName(parent,
-                    "androidx.recyclerview.widget.RecyclerView")) {
+            if (Reflect.isInstanceOfName(parent, recyclerClass)) {
                 return parent;
             }
             parent = parent.getParent();
@@ -574,6 +623,7 @@ final class RowRefresher {
 
     @Nullable
     private static View findAncestorView(@Nullable View view, String className) {
+        if (view == null || className == null || className.isEmpty()) return null;
         View current = view;
         for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && current != null; depth++) {
             if (Reflect.isInstanceOfName(current, className)) {
@@ -586,29 +636,28 @@ final class RowRefresher {
     }
     private static boolean consumeRecyclerPendingUpdates(
             @Nullable android.view.ViewParent recycler) {
-        if (recycler == null || !recycler.getClass().getName().equals(
-                "androidx.recyclerview.widget.RecyclerView")
-                && !Reflect.isInstanceOfName(recycler,
-                "androidx.recyclerview.widget.RecyclerView")) {
+        String recyclerClass = configuredType("RecyclerView");
+        if (recycler == null || recyclerClass == null
+                || !Reflect.isInstanceOfName(recycler, recyclerClass)) {
             return false;
         }
         try {
-            Object suppressed = Reflect.getField(recycler, "layoutSuppressed");
-            Object interceptDepth = Reflect.getField(recycler, "interceptRequestLayoutDepth");
-            Object computing = Reflect.call(findRecyclerApiMethod(
-                    recycler.getClass(), "isComputingLayout"), recycler);
+            String suppressedField = configuredField("RecyclerView", "layoutSuppressed");
+            String interceptField = configuredField("RecyclerView", "interceptRequestLayoutDepth");
+            Object suppressed = suppressedField == null ? null : Reflect.getField(recycler, suppressedField);
+            Object interceptDepth = interceptField == null ? null : Reflect.getField(recycler, interceptField);
+            Method computingMethod = recyclerAccessor(recycler, "isComputingLayout");
+            Object computing = computingMethod == null ? null : Reflect.call(computingMethod, recycler);
             if (!Boolean.FALSE.equals(suppressed)
                     || !(interceptDepth instanceof Integer)
                     || ((Integer) interceptDepth) != 0
                     || !Boolean.FALSE.equals(computing)) {
                 HookDiagnostics.info("RecyclerView pending updates deferred"
-                        + " suppressed=" + suppressed
-                        + " interceptDepth=" + interceptDepth
+                        + " suppressed=" + suppressed + " interceptDepth=" + interceptDepth
                         + " computing=" + computing);
                 return false;
             }
-            Method consumeUpdates = findRecyclerApiMethod(
-                    recycler.getClass(), "consumePendingUpdates");
+            Method consumeUpdates = recyclerAccessor(recycler, "consumePendingUpdates");
             if (consumeUpdates == null) {
                 HookDiagnostics.info("RecyclerView consume pending updates target missing");
                 return false;
@@ -623,27 +672,19 @@ final class RowRefresher {
     }
 
     private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
-        if (recycler == null) {
-            return;
-        }
+        if (recycler == null) return;
         try {
-            Object suppressed = Reflect.getField(recycler, "layoutSuppressed");
-            Object interceptDepth = Reflect.getField(recycler, "interceptRequestLayoutDepth");
-            Object computing = Reflect.call(findRecyclerApiMethod(
-                    recycler.getClass(), "isComputingLayout"), recycler);
-
+            String suppressedField = configuredField("RecyclerView", "layoutSuppressed");
+            String interceptField = configuredField("RecyclerView", "interceptRequestLayoutDepth");
+            Object suppressed = suppressedField == null ? null : Reflect.getField(recycler, suppressedField);
+            Object interceptDepth = interceptField == null ? null : Reflect.getField(recycler, interceptField);
+            Method computingMethod = recyclerAccessor(recycler, "isComputingLayout");
+            Object computing = computingMethod == null ? null : Reflect.call(computingMethod, recycler);
             if (!Boolean.FALSE.equals(suppressed)
                     || !(interceptDepth instanceof Integer)
-                    || ((Integer) interceptDepth) != 0
-                    || Boolean.TRUE.equals(computing)) {
-                return;
-            }
-            Method dispatchLayout = findRecyclerApiMethod(
-                    recycler.getClass(), "dispatchLayout");
-
-            if (dispatchLayout != null) {
-                dispatchLayout.invoke(recycler);
-            }
+                    || ((Integer) interceptDepth) != 0 || Boolean.TRUE.equals(computing)) return;
+            Method dispatchLayout = recyclerAccessor(recycler, "dispatchLayout");
+            if (dispatchLayout != null) dispatchLayout.invoke(recycler);
         } catch (Throwable ignored) {
             // 派发布局失败可忽略。
         }
@@ -669,11 +710,7 @@ final class RowRefresher {
         }
     }
 
-    private static final String MESSAGE_ACCESSORIES_VIEW_CLASS =
-            "com.discord.chat.presentation.message.MessageAccessoriesView";
-    private static final String MESSAGE_VIEW_CLASS =
-            "com.discord.chat.presentation.message.MessageView";
-
+    private static final int RELAYOUT_MAX_DEPTH = 32;
     /**
      * 父链传播的最大深度。
      *

@@ -99,7 +99,9 @@
     "RecyclerViewAdapter": "k3.m0",
     "RecyclerViewAdapterObservable": "k3.n0",
     "MessageContentViewHolder": "ea.p0",
-    "RecyclerView": "androidx.recyclerview.widget.RecyclerView"
+    "RecyclerView": "androidx.recyclerview.widget.RecyclerView",
+    "MessageAccessoriesView": "com.discord.chat.presentation.message.MessageAccessoriesView",
+    "MessageView": "com.discord.chat.presentation.message.MessageView"
   },
   "constructorFallbackTypes": [
     "StrongContentNode",
@@ -129,7 +131,11 @@
     "RecyclerView": {
       "isComputingLayout": "R",
       "consumePendingUpdates": "o",
-      "dispatchLayout": "r"
+      "dispatchLayout": "r",
+      "getAdapter": "getAdapter",
+      "findContainingViewHolder": "findContainingViewHolder",
+      "getChildCount": "getChildCount",
+      "getChildAt": "getChildAt"
     }
   },
   "fields": {
@@ -146,7 +152,13 @@
     },
     "RecyclerView": {
       "layoutSuppressed": "U",
-      "interceptRequestLayoutDepth": "S"
+      "interceptRequestLayoutDepth": "S",
+      "stateP": "P",
+      "stateQ": "Q",
+      "stateR": "R",
+      "stateS": "S",
+      "stateT": "T",
+      "stateU": "U"
     },
     "MessageContentViewHolder": {
       "bindCache": "v"

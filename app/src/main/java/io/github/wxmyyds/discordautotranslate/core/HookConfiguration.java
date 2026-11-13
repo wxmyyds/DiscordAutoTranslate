@@ -50,10 +50,10 @@ public final class HookConfiguration {
         return active;
     }
 
-    public static String member(String key, String fallback) {
+    @Nullable
+    public static String member(String key, String ignoredFallback) {
         HookConfiguration configuration = active;
-        String value = configuration == null ? null : configuration.string("members", key);
-        return value == null || value.isEmpty() ? fallback : value;
+        return configuration == null ? null : configuration.string("members", key);
     }
 
     /** Returns the semantic model type name declared for a runtime class in the active profile. */

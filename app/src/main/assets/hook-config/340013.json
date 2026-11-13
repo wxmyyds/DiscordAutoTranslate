@@ -130,11 +130,59 @@
     "pollHolderViewField": "itemView",
     "pollBindingField": "binding",
     "pollQuestionTextField": "questionText",
-    "pollMessageIdGetter": "getMessageId"
+    "pollMessageIdGetter": "getMessageId",
+    "pollDataGetter": "getData",
+    "pollQuestionGetter": "getQuestion",
+    "pollAnswersGetter": "getAnswers",
+    "pollAnswerGetter": "getAnswer",
+    "pollMediaGetter": "getPollMedia",
+    "pollMediaTextGetter": "getText"
+  },
+  "accessors": {
+    "RecyclerViewViewHolder": {
+      "getBindingAdapterPosition": "getBindingAdapterPosition",
+      "getAbsoluteAdapterPosition": "getAbsoluteAdapterPosition"
+    },
+    "RecyclerViewAdapterObservable": {
+      "notifyItemChanged": "notifyItemRangeChanged"
+    },
+    "RecyclerView": {
+      "isComputingLayout": "isComputingLayout",
+      "consumePendingUpdates": "consumePendingUpdateOperations",
+      "dispatchLayout": "dispatchLayout",
+      "getAdapter": "getAdapter",
+      "findContainingViewHolder": "findContainingViewHolder",
+      "getChildCount": "getChildCount",
+      "getChildAt": "getChildAt"
+    }
+  },
+  "fields": {
+    "RecyclerViewViewHolder": {
+      "itemView": "itemView",
+      "bindingAdapter": "mBindingAdapter",
+      "recyclerView": "mOwnerRecyclerView"
+    },
+    "RecyclerViewLayoutParams": {
+      "viewHolder": "mViewHolder"
+    },
+    "RecyclerViewAdapter": {
+      "observable": "mObservable"
+    },
+    "RecyclerView": {
+      "layoutSuppressed": "mLayoutSuppressed",
+      "interceptRequestLayoutDepth": "mInterceptRequestLayoutDepth"
+    }
   },
   "types": {
     "StructurableText": "com.discord.chat.bridge.structurabletext.StructurableText",
     "PrimitiveStructurableText": "com.discord.chat.bridge.structurabletext.PrimitiveStructurableText",
-    "AnnotatedStructurableText": "com.discord.chat.bridge.structurabletext.AnnotatedStructurableText"
+    "AnnotatedStructurableText": "com.discord.chat.bridge.structurabletext.AnnotatedStructurableText",
+    "RecyclerView": "androidx.recyclerview.widget.RecyclerView",
+    "RecyclerViewViewHolder": "androidx.recyclerview.widget.RecyclerView$ViewHolder",
+    "RecyclerViewLayoutParams": "androidx.recyclerview.widget.RecyclerView$LayoutParams",
+    "RecyclerViewAdapter": "androidx.recyclerview.widget.RecyclerView$Adapter",
+    "RecyclerViewAdapterObservable": "androidx.recyclerview.widget.RecyclerView$AdapterDataObservable",
+    "MessageAccessoriesView": "com.discord.chat.presentation.message.MessageAccessoriesView",
+    "MessageView": "com.discord.chat.presentation.message.MessageView"
   }
 }
