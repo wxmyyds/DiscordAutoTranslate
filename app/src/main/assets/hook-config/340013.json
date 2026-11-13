@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "versionCode": 340013,
+  "packageName": "com.discord",
+  "requiredHooks": [
+    "message.bind",
+    "message.render",
+    "message.textConversion",
+    "message.reply"
+  ],
+  "hooks": {
+    "message.bind": {
+      "required": true,
+      "target": {
+        "class": "com.discord.chat.presentation.message.viewholder.MessageContentViewHolder",
+        "namePrefix": "bind",
+        "static": false,
+        "parameterCount": 17,
+        "parameterTypes": {
+          "0": "com.discord.chat.presentation.message.messagepart.MessageContentAccessory"
+        }
+      },
+      "modelArgument": 0,
+      "messageIdGetter": "getMessageId",
+      "contentGetter": "getContent",
+      "contentViewField": "messageContentView"
+    },
+    "message.render": {
+      "required": true,
+      "target": {
+        "class": "com.discord.chat.presentation.message.view.MessageContentView",
+        "namePrefix": "setMessageContent",
+        "static": false,
+        "minParameterCount": 20,
+        "parameterTypes": {
+          "0": "com.discord.chat.presentation.message.messagepart.MessageMargins",
+          "1": "com.discord.chat.bridge.structurabletext.StructurableText"
+        },
+        "selection": "mostParameters"
+      },
+      "viewSource": "this",
+      "contentArgument": 1
+    },
+    "message.textConversion": {
+      "required": true,
+      "target": {
+        "class": "com.discord.chat.presentation.textutils.TextUtilsKt",
+        "namePrefix": "toSpannable",
+        "static": true,
+        "parameterCount": 29,
+        "parameterTypes": {
+          "0": "com.discord.chat.bridge.structurabletext.StructurableText"
+        }
+      },
+      "contentArgument": 0,
+      "contextArgument": 1
+    },
+    "message.reply": {
+      "required": true,
+      "target": {
+        "class": "com.discord.chat.presentation.message.MessageViewReplyPreview",
+        "namePrefix": "configureReply",
+        "static": false,
+        "parameterCount": 3
+      },
+      "referencedMessageArgument": 0,
+      "referencedMessageClass": "com.discord.chat.bridge.referencedmessage.LoadedReferencedMessage",
+      "referencedMessageGetter": "getMessage",
+      "messageIdGetter": "getId",
+      "contentGetter": "getContent",
+      "bindingField": "binding",
+      "textViewField": "replyText"
+    },
+    "embed.bind": {
+      "required": false,
+      "target": {
+        "class": "com.discord.chat.presentation.message.viewholder.EmbedViewHolder",
+        "name": "bind",
+        "static": false,
+        "parameterCount": 9,
+        "parameterTypes": {
+          "1": "com.discord.chat.presentation.message.messagepart.EmbedMessageAccessory"
+        }
+      },
+      "accessoryArgument": 1
+    },
+    "embed.postPreviewBind": {
+      "required": false,
+      "target": {
+        "class": "com.discord.chat.presentation.message.viewholder.PostPreviewEmbedViewHolder",
+        "name": "bind",
+        "static": false,
+        "parameterCount": 3,
+        "parameterTypes": {
+          "0": "com.discord.chat.bridge.postpreviewembed.PostPreviewEmbed"
+        }
+      }
+    },
+    "embed.postPreviewRender": {
+      "required": false,
+      "target": {
+        "class": "com.discord.chat.presentation.message.view.PostPreviewEmbedView",
+        "namePrefix": "setPostPreviewEmbed",
+        "static": false,
+        "parameterCount": 16,
+        "parameterTypes": {
+          "0": "java.lang.String"
+        }
+      },
+      "messageIdArgument": 0,
+      "titleArgument": 1
+    },
+    "poll.bind": {
+      "required": false,
+      "target": {
+        "class": "com.discord.chat.presentation.message.viewholder.PollViewHolder",
+        "name": "bind",
+        "static": false,
+        "parameterCount": 4,
+        "parameterTypes": {
+          "0": "com.discord.chat.presentation.message.messagepart.PollMessageAccessory"
+        }
+      }
+    }
+  },
+  "members": {
+    "messageAccessoryClass": "com.discord.chat.presentation.message.messagepart.MessageContentAccessory",
+    "messageAccessoryIdGetter": "getMessageId",
+    "messageAccessoryContentGetter": "getContent",
+    "messageContentViewField": "messageContentView",
+    "structurableTextClass": "com.discord.chat.bridge.structurabletext.StructurableText",
+    "replyMessageIdGetter": "getId",
+    "replyContentGetter": "getContent",
+    "embedAccessoryClass": "com.discord.chat.presentation.message.messagepart.EmbedMessageAccessory",
+    "embedMessageIdGetter": "getMessageId",
+    "embedGetter": "getEmbed",
+    "postPreviewClass": "com.discord.chat.bridge.postpreviewembed.PostPreviewEmbed",
+    "pollAccessoryClass": "com.discord.chat.presentation.message.messagepart.PollMessageAccessory",
+    "embedHolderViewField": "itemView",
+    "embedMessageIdGetter": "getMessageId",
+    "embedGetter": "getEmbed",
+    "embedDescriptionGetter": "getDescription",
+    "embedTitleGetter": "getTitle",
+    "embedFieldsGetter": "getFields",
+    "embedFieldNameGetter": "getName",
+    "embedFieldValueGetter": "getValue",
+    "postPreviewHolderViewField": "itemView",
+    "postPreviewMessageIdGetter": "getMessageId",
+    "postPreviewTitleGetter": "getTitle",
+    "postPreviewFooterGetter": "getFooter",
+    "pollHolderViewField": "itemView",
+    "pollBindingField": "binding",
+    "pollQuestionTextField": "questionText",
+    "pollMessageIdGetter": "getMessageId"
+  },
+  "accessors": {
+    "MessageContentAccessory": {
+      "getMessageId": "getMessageId",
+      "getContent": "getContent"
+    },
+    "Message": {
+      "getId": "getId",
+      "getContent": "getContent"
+    },
+    "LoadedReferencedMessage": {
+      "getMessage": "getMessage"
+    },
+    "EmbedMessageAccessory": {
+      "getMessageId": "getMessageId",
+      "getEmbed": "getEmbed"
+    },
+    "Embed": {
+      "getDescription": "getDescription",
+      "getTitle": "getTitle",
+      "getFields": "getFields"
+    },
+    "EmbedField": {
+      "getName": "getName",
+      "getValue": "getValue"
+    },
+    "PostPreviewEmbed": {
+      "getMessageId": "getMessageId",
+      "getTitle": "getTitle",
+      "getFooter": "getFooter"
+    },
+    "PollMessageAccessory": {
+      "getMessageId": "getMessageId",
+      "getData": "getData",
+      "getAnswers": "getAnswers"
+    },
+    "PollData": {
+      "getQuestion": "getQuestion"
+    },
+    "PollAnswerAccessory": {
+      "getAnswer": "getAnswer"
+    },
+    "PollAnswer": {
+      "getPollMedia": "getPollMedia"
+    },
+    "PollMedia": {
+      "getText": "getText"
+    }
+  },
+  "fields": {
+    "MessageContentViewHolder": {
+      "messageContentView": "messageContentView"
+    },
+    "MessageViewReplyPreview": {
+      "binding": "binding"
+    },
+    "ReplyPreviewBinding": {
+      "replyText": "replyText"
+    },
+    "EmbedViewHolder": {
+      "itemView": "itemView"
+    },
+    "PostPreviewEmbedViewHolder": {
+      "itemView": "itemView"
+    },
+    "PollViewHolder": {
+      "itemView": "itemView"
+    },
+    "PollView": {
+      "binding": "binding"
+    },
+    "PollBinding": {
+      "questionText": "questionText"
+    }
+  },
+  "types": {
+    "StructurableText": "com.discord.chat.bridge.structurabletext.StructurableText",
+    "PrimitiveStructurableText": "com.discord.chat.bridge.structurabletext.PrimitiveStructurableText",
+    "AnnotatedStructurableText": "com.discord.chat.bridge.structurabletext.AnnotatedStructurableText"
+  }
+}

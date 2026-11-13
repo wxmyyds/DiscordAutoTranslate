@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "versionCode": 352017,
+  "packageName": "com.discord",
+  "requiredHooks": [
+    "message.bind",
+    "message.render",
+    "message.textConversion"
+  ],
+  "hooks": {
+    "message.bind": {
+      "required": true,
+      "target": {
+        "class": "com.discord.chat.presentation.message.MessageView",
+        "name": "b",
+        "static": false,
+        "parameterCount": 4,
+        "parameterTypes": {
+          "0": "com.discord.chat.bridge.Message"
+        }
+      },
+      "modelArgument": 0,
+      "messageIdGetter": "getId",
+      "contentGetter": "getContent"
+    },
+    "message.render": {
+      "required": true,
+      "target": {
+        "class": "com.discord.chat.presentation.message.view.MessageContentView",
+        "name": "c",
+        "static": true,
+        "parameterCount": 38,
+        "parameterTypes": {
+          "0": "com.discord.chat.presentation.message.view.MessageContentView",
+          "1": "m9.f0",
+          "2": "l8.h"
+        }
+      },
+      "viewArgument": 0,
+      "contentArgument": 2
+    },
+    "message.textConversion": {
+      "required": true,
+      "target": {
+        "class": "kl.b",
+        "name": "B0",
+        "static": true,
+        "parameterCount": 30,
+        "returnType": "oj.c",
+        "parameterTypes": {
+          "0": "l8.h",
+          "1": "android.content.Context"
+        }
+      },
+      "contentArgument": 0,
+      "contextArgument": 1
+    },
+    "message.reply": {
+      "required": false,
+      "enabled": false,
+      "reason": "352017 smali does not yet establish the reply configuration entry point or referenced-message argument."
+    },
+    "embed.bind": {
+      "required": false,
+      "enabled": false,
+      "reason": "352017 embed binding target has not been verified."
+    },
+    "embed.postPreviewBind": {
+      "required": false,
+      "enabled": false,
+      "reason": "352017 post-preview binding target has not been verified."
+    },
+    "embed.postPreviewRender": {
+      "required": false,
+      "enabled": false,
+      "reason": "352017 post-preview render target has not been verified."
+    },
+    "poll.bind": {
+      "required": false,
+      "enabled": false,
+      "reason": "352017 poll binding target has not been verified."
+    }
+  },
+  "members": {
+    "messageClass": "com.discord.chat.bridge.Message",
+    "messageIdGetter": "getId",
+    "messageContentGetter": "getContent",
+    "structurableTextClass": "l8.h"
+  },
+  "types": {
+    "StructurableText": "l8.h",
+    "PrimitiveStructurableText": "l8.e",
+    "AnnotatedStructurableText": "l8.b",
+    "TextContentNode": "j7.e5",
+    "StrongContentNode": "j7.y4",
+    "LHeadingContentNode": "j7.w0",
+    "StrikethroughContentNode": "j7.v4",
+    "InlineCodeContentNode": "j7.t0",
+    "CodeBlockContentNode": "j7.r",
+    "SubtextContentNode": "j7.b5",
+    "LinkContentNode": "j7.c1",
+    "BulletListContentNode": "j7.i",
+    "HeadingContentNode": "j7.q0",
+    "SpoilerContentNode": "j7.m4",
+    "UnicodeEmojiContentNode": "j7.n5",
+    "CustomEmojiContentNode": "j7.b0",
+    "ParagraphContentNode": "j7.g4",
+    "EmphasisContentNode": "j7.g0",
+    "BlockQuoteContentNode": "j7.f",
+    "UnderlineContentNode": "j7.k5"
+  },
+  "accessors": {
+    "Message": {
+      "getId": "getId-3Eiw7ao",
+      "getContent": "getContent"
+    }
+  },
+  "fields": {
+    "PrimitiveStructurableText": {
+      "getContent": "a"
+    },
+    "AnnotatedStructurableText": {
+      "getContent": "a"
+    },
+    "TextContentNode": {
+      "getContent": "a"
+    },
+    "UnicodeEmojiContentNode": {
+      "getContent": "b",
+      "getSurrogate": "c"
+    },
+    "CustomEmojiContentNode": {
+      "getAlt": "c"
+    },
+    "BulletListContentNode": {
+      "getItems": "c"
+    }
+  }
+}

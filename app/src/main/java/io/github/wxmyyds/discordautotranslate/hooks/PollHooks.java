@@ -9,6 +9,9 @@ import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
+import org.json.JSONObject;
+
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 import io.github.wxmyyds.discordautotranslate.core.StateStore;
 
@@ -46,14 +49,6 @@ import io.github.libxposed.api.XposedModule;
  */
 public final class PollHooks {
 
-    private static final String CLS_POLL_HOLDER =
-            "com.discord.chat.presentation.message.viewholder.PollViewHolder";
-    private static final String CLS_POLL_ACCESSORY =
-            "com.discord.chat.presentation.message.messagepart.PollMessageAccessory";
-
-    /** PollViewHolder.bind(PollMessageAccessory, Function3, Function3, Function8)。 */
-    private static final int POLL_BIND_PARAM_COUNT = 4;
-
     /** 选项数量上限，防御异常数据导致的反射放大。 */
     private static final int MAX_ANSWERS = 25;
 
@@ -61,25 +56,25 @@ public final class PollHooks {
     }
 
     /** 安装投票翻译 Hook；目标版本缺少必需类型时不安装此可选功能。 */
-    public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
+    public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl,
+                                                            HookConfiguration config) {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(1);
-        Class<?> holder = Reflect.loadClass(cl, CLS_POLL_HOLDER);
-        Class<?> accessory = Reflect.loadClass(cl, CLS_POLL_ACCESSORY);
-        if (holder == null || accessory == null) {
+        if (!config.isEnabled("poll.bind")) {
             return handles;
         }
-        Method bind = Reflect.findMethodAt(holder, "bind",
-                POLL_BIND_PARAM_COUNT, 0, accessory);
-        if (bind == null) {
+        Method bind = config.findMethod("poll.bind", cl);
+        JSONObject spec = config.hook("poll.bind");
+        if (bind == null || spec == null) {
             return handles;
         }
+        int accessoryArgument = spec.optInt("accessoryArgument", 0);
         handles.add(module.hook(bind)
                 .setId("dat.pollBind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
                     if (!HookBridge.get().isRerendering()) {
                         try {
-                            registerPollTexts(chain, bind);
+                            registerPollTexts(chain, bind, spec);
                         } catch (Throwable ignored) {
                             // 登记失败不影响宿主绑定。
                         }
@@ -87,15 +82,19 @@ public final class PollHooks {
                     // 无状态替换：每次 bind（含重渲染与滑回）都按当前译文重建。
                     Object[] renderArgs = chain.getArgs().toArray();
                     try {
-                        renderArgs[0] = translatePollAccessory(renderArgs[0]);
+                        if (accessoryArgument >= 0 && accessoryArgument < renderArgs.length) {
+                            renderArgs[accessoryArgument] =
+                                    translatePollAccessory(renderArgs[accessoryArgument]);
+                        }
                     } catch (Throwable ignored) {
                         // 替换失败保留宿主原文。
                     }
                     Object result = chain.proceed(renderArgs);
                     // 图标同样无状态追加：bind 后问题文本已定型，随当前状态着色。
                     try {
-                        attachQuestionIcon(chain.getArg(0),
-                                asView(Reflect.getField(chain.getThisObject(), "itemView")));
+                        attachQuestionIcon(safeArg(chain, accessoryArgument),
+                                asView(Reflect.getField(chain.getThisObject(),
+                                        HookConfiguration.member("pollHolderViewField", "itemView"))));
                     } catch (Throwable ignored) {
                         // 图标失败不影响宿主渲染。
                     }
@@ -107,16 +106,19 @@ public final class PollHooks {
     // ------------------------------------------------------------------ 登记
 
     /** 登记问题与各选项文本：状态键 + 触发翻译 + 重渲染目标（原始实参）。 */
-    private static void registerPollTexts(XposedInterface.Chain chain, Method bind) {
-        Object accessory = chain.getArg(0);
+    private static void registerPollTexts(XposedInterface.Chain chain, Method bind,
+                                          JSONObject spec) {
+        Object accessory = safeArg(chain, spec.optInt("accessoryArgument", 0));
         if (accessory == null) {
             return;
         }
-        String messageId = Reflect.callString(accessory, "getMessageId");
+        String messageId = Reflect.callString(accessory,
+                HookConfiguration.member("pollMessageIdGetter", "getMessageId"));
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
-        View view = asView(Reflect.getField(chain.getThisObject(), "itemView"));
+        View view = asView(Reflect.getField(chain.getThisObject(),
+                HookConfiguration.member("pollHolderViewField", "itemView")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
         Object data = Reflect.call(Reflect.findMethod(
@@ -361,8 +363,10 @@ public final class PollHooks {
     /** 取投票问题文本视图：{@code pollView.binding.questionText}。 */
     @Nullable
     private static TextView questionTextViewOf(View pollView) {
-        Object binding = Reflect.getField(pollView, "binding");
-        Object questionText = Reflect.getField(binding, "questionText");
+        Object binding = Reflect.getField(pollView,
+                HookConfiguration.member("pollBindingField", "binding"));
+        Object questionText = Reflect.getField(binding,
+                HookConfiguration.member("pollQuestionTextField", "questionText"));
         return questionText instanceof TextView ? (TextView) questionText : null;
     }
 
@@ -484,6 +488,11 @@ public final class PollHooks {
     }
 
     // ------------------------------------------------------------------ 工具
+
+    @Nullable
+    private static Object safeArg(XposedInterface.Chain chain, int index) {
+        return index < 0 || index >= chain.getArgs().size() ? null : chain.getArg(index);
+    }
 
     @Nullable
     private static View asView(@Nullable Object o) {

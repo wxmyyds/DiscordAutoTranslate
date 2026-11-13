@@ -4,6 +4,9 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
+import org.json.JSONObject;
+
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 import io.github.wxmyyds.discordautotranslate.core.StateStore;
 
@@ -47,24 +50,6 @@ import io.github.libxposed.api.XposedModule;
  */
 public final class EmbedHooks {
 
-    private static final String CLS_EMBED_VIEW_HOLDER =
-            "com.discord.chat.presentation.message.viewholder.EmbedViewHolder";
-    private static final String CLS_EMBED_ACCESSORY =
-            "com.discord.chat.presentation.message.messagepart.EmbedMessageAccessory";
-    private static final String CLS_POST_PREVIEW_HOLDER =
-            "com.discord.chat.presentation.message.viewholder.PostPreviewEmbedViewHolder";
-    private static final String CLS_POST_PREVIEW =
-            "com.discord.chat.bridge.postpreviewembed.PostPreviewEmbed";
-    private static final String CLS_POST_PREVIEW_VIEW =
-            "com.discord.chat.presentation.message.view.PostPreviewEmbedView";
-
-    /** EmbedViewHolder.bind(ChatEventHandler, EmbedMessageAccessory, I, I, Function0, SpoilerConfig, Function2, OnLongClickListener, D)。 */
-    private static final int EMBED_BIND_PARAM_COUNT = 9;
-    /** PostPreviewEmbedViewHolder.bind(PostPreviewEmbed, Function4, SpoilerConfig)。 */
-    private static final int POST_PREVIEW_BIND_PARAM_COUNT = 3;
-    /** setPostPreviewEmbed-4itWklQ(messageId, title, subtitle, color, footer, …5 String, OnClickListener, ZZZZ, SpoilerConfig)。 */
-    private static final int POST_PREVIEW_SET_PARAM_COUNT = 16;
-
     /** 字段数量上限，防御异常数据导致的反射放大。 */
     private static final int MAX_FIELDS = 25;
 
@@ -75,26 +60,26 @@ public final class EmbedHooks {
      * 安装 Embed 翻译 Hook。全部为增强能力：任一类或方法在目标版本上不存在时
      * 仅放弃对应部分，不影响既有消息翻译（安装失败不抛出）。
      */
-    public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl) {
+    public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl,
+                                                            HookConfiguration config) {
         List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
-        installRichEmbedBindHook(module, cl, handles);
-        installPostPreviewBindHook(module, cl, handles);
-        installPostPreviewSetHook(module, cl, handles);
+        installRichEmbedBindHook(module, cl, config, handles);
+        installPostPreviewBindHook(module, cl, config, handles);
+        installPostPreviewSetHook(module, cl, config, handles);
         return handles;
     }
 
     // ---------------------------------------------------------- 富 Embed（链接卡片等）
 
     private static void installRichEmbedBindHook(XposedModule module, ClassLoader cl,
+                                                 HookConfiguration config,
                                                  List<XposedInterface.HookHandle> out) {
-        Class<?> holder = Reflect.loadClass(cl, CLS_EMBED_VIEW_HOLDER);
-        Class<?> accessory = Reflect.loadClass(cl, CLS_EMBED_ACCESSORY);
-        if (holder == null || accessory == null) {
+        if (!config.isEnabled("embed.bind")) {
             return;
         }
-        Method bind = Reflect.findMethodAt(holder, "bind",
-                EMBED_BIND_PARAM_COUNT, 1, accessory);
-        if (bind == null) {
+        Method bind = config.findMethod("embed.bind", cl);
+        JSONObject spec = config.hook("embed.bind");
+        if (bind == null || spec == null) {
             return;
         }
         out.add(module.hook(bind)
@@ -104,11 +89,12 @@ public final class EmbedHooks {
                     // 宿主必须在调用链内传递给 toSpannable（同一线程同步）：
                     // 行内图标靠它驱动旋转重绘；重渲染时同样需要，故无条件设置。
                     InlineIconInjector.enterHost(
-                            asView(Reflect.getField(chain.getThisObject(), "itemView")));
+                            asView(Reflect.getField(chain.getThisObject(),
+                                    HookConfiguration.member("embedHolderViewField", "itemView"))));
                     try {
                         if (!HookBridge.get().isRerendering()) {
                             try {
-                                richEmbedPre(chain, bind);
+                                richEmbedPre(chain, bind, spec);
                             } catch (Throwable ignored) {
                                 // 预处理失败不影响宿主绑定。
                             }
@@ -124,29 +110,37 @@ public final class EmbedHooks {
      * 富 Embed 绑定前置：登记各文本段（描述/标题/字段）的状态键与身份映射，
      * 注册重渲染目标，并触发翻译。替换由 toSpannable 漏斗按各段自己的键完成。
      */
-    private static void richEmbedPre(XposedInterface.Chain chain, Method bind) {
-        Object accessory = chain.getArg(1);
+    private static void richEmbedPre(XposedInterface.Chain chain, Method bind,
+                                     JSONObject spec) {
+        int accessoryArgument = spec.optInt("accessoryArgument", 1);
+        Object accessory = accessoryArgument < 0
+                || accessoryArgument >= chain.getArgs().size()
+                ? null : chain.getArg(accessoryArgument);
         if (accessory == null) {
             return;
         }
-        String messageId = Reflect.callString(accessory, "getMessageId");
+        String messageId = Reflect.callString(accessory,
+                HookConfiguration.member("embedMessageIdGetter", "getMessageId"));
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
         Object embed = Reflect.call(Reflect.findMethod(
-                accessory.getClass(), "getEmbed", 0), accessory);
+                accessory.getClass(), HookConfiguration.member("embedGetter", "getEmbed"), 0), accessory);
         if (embed == null) {
             return;
         }
-        View view = asView(Reflect.getField(chain.getThisObject(), "itemView"));
+        View view = asView(Reflect.getField(chain.getThisObject(),
+                HookConfiguration.member("embedHolderViewField", "itemView")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
         // 图标主段优先取描述（正文主体），缺描述时回落标题、再回落首个字段。
         String primary = registerEmbedText(view, messageId, embed,
-                "getDescription", holder, bind, args);
+                HookConfiguration.member("embedDescriptionGetter", "getDescription"),
+                holder, bind, args);
         if (primary == null) {
             primary = registerEmbedText(view, messageId, embed,
-                    "getTitle", holder, bind, args);
+                    HookConfiguration.member("embedTitleGetter", "getTitle"),
+                    holder, bind, args);
         }
         if (primary == null) {
             primary = registerEmbedFields(view, messageId, embed, holder, bind, args);
@@ -192,7 +186,7 @@ public final class EmbedHooks {
                                               Object embed, Object holder, Method bind,
                                               Object[] args) {
         Object fields = Reflect.call(Reflect.findMethod(
-                embed.getClass(), "getFields", 0), embed);
+                embed.getClass(), HookConfiguration.member("embedFieldsGetter", "getFields"), 0), embed);
         if (!(fields instanceof List)) {
             return null;
         }
@@ -203,12 +197,14 @@ public final class EmbedHooks {
                 break;
             }
             String nameKey = registerEmbedText(view, messageId, field,
-                    "getName", holder, bind, args);
+                    HookConfiguration.member("embedFieldNameGetter", "getName"),
+                    holder, bind, args);
             if (first == null) {
                 first = nameKey;
             }
             String valueKey = registerEmbedText(view, messageId, field,
-                    "getValue", holder, bind, args);
+                    HookConfiguration.member("embedFieldValueGetter", "getValue"),
+                    holder, bind, args);
             if (first == null) {
                 first = valueKey;
             }
@@ -219,15 +215,14 @@ public final class EmbedHooks {
     // ---------------------------------------------------------- 原生帖子预览（X 等）
 
     private static void installPostPreviewBindHook(XposedModule module, ClassLoader cl,
+                                                   HookConfiguration config,
                                                    List<XposedInterface.HookHandle> out) {
-        Class<?> holder = Reflect.loadClass(cl, CLS_POST_PREVIEW_HOLDER);
-        Class<?> model = Reflect.loadClass(cl, CLS_POST_PREVIEW);
-        if (holder == null || model == null) {
+        if (!config.isEnabled("embed.postPreviewBind")) {
             return;
         }
-        Method bind = Reflect.findMethodAt(holder, "bind",
-                POST_PREVIEW_BIND_PARAM_COUNT, 0, model);
-        if (bind == null) {
+        Method bind = config.findMethod("embed.postPreviewBind", cl);
+        JSONObject spec = config.hook("embed.postPreviewBind");
+        if (bind == null || spec == null) {
             return;
         }
         out.add(module.hook(bind)
@@ -236,11 +231,12 @@ public final class EmbedHooks {
                 .intercept(chain -> {
                     // 同富 Embed：宿主在调用链内传递，供 footer 上的行内图标使用。
                     InlineIconInjector.enterHost(
-                            asView(Reflect.getField(chain.getThisObject(), "itemView")));
+                            asView(Reflect.getField(chain.getThisObject(),
+                                    HookConfiguration.member("postPreviewHolderViewField", "itemView"))));
                     try {
                         if (!HookBridge.get().isRerendering()) {
                             try {
-                                postPreviewPre(chain, bind);
+                                postPreviewPre(chain, bind, spec);
                             } catch (Throwable ignored) {
                                 // 预处理失败不影响宿主绑定。
                             }
@@ -263,13 +259,18 @@ public final class EmbedHooks {
      *       仅图标身份映射，footer 文本本身不被替换。</li>
      * </ol>
      */
-    private static void postPreviewPre(XposedInterface.Chain chain, Method bind) {
-        Object model = chain.getArg(0);
+    private static void postPreviewPre(XposedInterface.Chain chain, Method bind,
+                                       JSONObject spec) {
+        int modelArgument = spec.optInt("modelArgument", 0);
+        Object model = modelArgument < 0 || modelArgument >= chain.getArgs().size()
+                ? null : chain.getArg(modelArgument);
         if (model == null) {
             return;
         }
-        String messageId = Reflect.callString(model, "getMessageId");
-        String title = Reflect.callString(model, "getTitle");
+        String messageId = Reflect.callString(model,
+                HookConfiguration.member("postPreviewMessageIdGetter", "getMessageId"));
+        String title = Reflect.callString(model,
+                HookConfiguration.member("postPreviewTitleGetter", "getTitle"));
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId) || title == null) {
             return;
         }
@@ -278,7 +279,8 @@ public final class EmbedHooks {
         if (key == null || wrapped == null) {
             return; // 空标题，或目标版本缺少 PrimitiveStructurableText 构造能力
         }
-        View view = asView(Reflect.getField(chain.getThisObject(), "itemView"));
+        View view = asView(Reflect.getField(chain.getThisObject(),
+                HookConfiguration.member("postPreviewHolderViewField", "itemView")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
         if (view != null) {
@@ -287,31 +289,20 @@ public final class EmbedHooks {
         RerenderRegistry.register(key, view, holder, bind, args);
         // 正文语义上等价于一条纯文本消息：走同一条翻译触发路径。
         HookBridge.get().onMessageBound(view, key, wrapped);
-        Object footer = Reflect.call(Reflect.findMethod(
-                model.getClass(), "getFooter", 0), model);
+        Object footer = Reflect.call(Reflect.findMethod(model.getClass(),
+                HookConfiguration.member("postPreviewFooterGetter", "getFooter"), 0), model);
         HookBridge.get().rememberIconOnlyContent(key, footer);
     }
 
     private static void installPostPreviewSetHook(XposedModule module, ClassLoader cl,
+                                                  HookConfiguration config,
                                                   List<XposedInterface.HookHandle> out) {
-        Class<?> viewCls = Reflect.loadClass(cl, CLS_POST_PREVIEW_VIEW);
-        if (viewCls == null) {
+        if (!config.isEnabled("embed.postPreviewRender")) {
             return;
         }
-        Method set = null;
-        for (Method m : viewCls.getDeclaredMethods()) {
-            if (!m.getName().startsWith("setPostPreviewEmbed") || m.getName().contains("$")) {
-                continue;
-            }
-            Class<?>[] ps = m.getParameterTypes();
-            if (ps.length != POST_PREVIEW_SET_PARAM_COUNT || ps[0] != String.class) {
-                continue;
-            }
-            m.setAccessible(true);
-            set = m;
-            break;
-        }
-        if (set == null) {
+        Method set = config.findMethod("embed.postPreviewRender", cl);
+        JSONObject spec = config.hook("embed.postPreviewRender");
+        if (set == null || spec == null) {
             return;
         }
         out.add(module.hook(set)
@@ -320,7 +311,7 @@ public final class EmbedHooks {
                 .intercept(chain -> {
                     Object[] renderArgs = chain.getArgs().toArray();
                     try {
-                        substitutePostPreviewTitle(renderArgs);
+                        substitutePostPreviewTitle(renderArgs, spec);
                     } catch (Throwable ignored) {
                         // 替换失败保留宿主原标题。
                     }
@@ -333,22 +324,27 @@ public final class EmbedHooks {
      * 第 0 参是消息 ID、第 1 参是标题（均已在 smali 中核对）。
      * 标题译文就绪时替换之；未就绪时保持原文（译文完成后经重渲染再次进入这里）。
      */
-    private static void substitutePostPreviewTitle(Object[] renderArgs) {
-        if (renderArgs.length < 2 || !(renderArgs[0] instanceof String)) {
+    private static void substitutePostPreviewTitle(Object[] renderArgs, JSONObject spec) {
+        int messageIdIndex = spec.optInt("messageIdArgument", 0);
+        int titleIndex = spec.optInt("titleArgument", 1);
+        if (messageIdIndex < 0 || titleIndex < 0
+                || messageIdIndex >= renderArgs.length || titleIndex >= renderArgs.length
+                || !(renderArgs[messageIdIndex] instanceof String)) {
             return;
         }
-        Object titleArg = renderArgs[1];
+        Object titleArg = renderArgs[titleIndex];
         if (!(titleArg instanceof String)) {
             return;
         }
-        String key = HookBridge.get().embedTextStateKey((String) renderArgs[0], (String) titleArg);
+        String key = HookBridge.get().embedTextStateKey(
+                (String) renderArgs[messageIdIndex], (String) titleArg);
         if (key == null) {
             return;
         }
         StateStore.Entry e = StateStore.get().peek(key);
         if (e != null && e.status == StateStore.Status.TRANSLATED
                 && !e.showingOriginal && e.translatedText != null) {
-            renderArgs[1] = e.translatedText;
+            renderArgs[titleIndex] = e.translatedText;
         }
     }
 

@@ -73,8 +73,9 @@ public final class RerenderRegistry {
      */
     public static void register(String messageId, View contentView, Object invocationTarget,
                                 Method method, Object[] args) {
-        if (messageId == null || contentView == null || invocationTarget == null
-                || method == null || args == null) {
+        if (messageId == null || contentView == null || method == null || args == null
+                || (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                && invocationTarget == null)) {
             return;
         }
         pruneIfNeeded();
@@ -147,7 +148,8 @@ public final class RerenderRegistry {
                     continue;
                 }
                 Object invocationTarget = target.invocationTarget.get();
-                if (invocationTarget == null) {
+                if (!java.lang.reflect.Modifier.isStatic(target.method.getModifiers())
+                        && invocationTarget == null) {
                     it.remove();
                     continue;
                 }

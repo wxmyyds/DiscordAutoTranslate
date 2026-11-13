@@ -2,6 +2,7 @@ package io.github.wxmyyds.discordautotranslate.hooks;
 
 import androidx.annotation.Nullable;
 
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 
 import java.lang.reflect.Constructor;
@@ -32,11 +33,9 @@ public final class StructurableTextFactory {
     }
 
     /** 由模块入口在拿到目标 ClassLoader 后初始化。 */
-    public static void init(@Nullable ClassLoader cl) {
-        sPrimitiveClass = Reflect.loadClass(cl,
-                "com.discord.chat.bridge.structurabletext.PrimitiveStructurableText");
-        sAnnotatedClass = Reflect.loadClass(cl,
-                "com.discord.chat.bridge.structurabletext.AnnotatedStructurableText");
+    public static void init(@Nullable ClassLoader cl, HookConfiguration config) {
+        sPrimitiveClass = Reflect.loadClass(cl, config.typeClass("PrimitiveStructurableText"));
+        sAnnotatedClass = Reflect.loadClass(cl, config.typeClass("AnnotatedStructurableText"));
 
         sPrimitiveCtor = ctorOf(sPrimitiveClass, String.class);
         sAnnotatedCtor = ctorOf(sAnnotatedClass, List.class);

@@ -2,6 +2,19 @@
 
 本页集中记录开发过程中确认过的教训、易踩的坑与当前已知边界，供后续修改参考。
 
+## 版本化 Hook 配置
+
+- Discord Hook 资料位于 `app/src/main/assets/hook-config/<versionCode>.json`；运行时从
+  Discord `PackageInfo.versionCode` 精确读取对应文件，不存在匹配文件时不安装消息 Hook。
+- `hooks.*.target` 描述类、方法、静态/实例类型、参数数量和可选参数签名；绑定参数索引、
+  混淆类型语义名、访问器与字段别名也应放在该版本 JSON 中。
+- `requiredHooks` 只列出该版本已通过 smali 核实且启动必须成功的 Hook。未核实的回复、Embed、
+  帖子预览或 Poll 入口保持 `enabled: false`，不能用其他版本的选择器作为默认值。
+- 静态渲染方法将 View 和正文都作为显式参数；对应 profile 要设置 `viewArgument` 和
+  `contentArgument`，重渲染登记会以静态调用方式执行它。
+- 新增或修改 profile 后，先做 JSON/签名核对；编译与单元测试通过 GitHub Actions 运行，
+  不在本地运行 Gradle 或 `javac`。
+
 ## 已确认的架构教训（改代码前先读）
 
 1. **渲染漏斗是 `TextUtilsKt.toSpannable`，不是 `setMessageContent`**。

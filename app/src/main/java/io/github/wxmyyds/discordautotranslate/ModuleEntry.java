@@ -1,11 +1,17 @@
 package io.github.wxmyyds.discordautotranslate;
 
+import android.app.Application;
+import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.os.Bundle;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import io.github.wxmyyds.discordautotranslate.core.Config;
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
+import io.github.wxmyyds.discordautotranslate.core.HookConfigurationLoader;
 import io.github.wxmyyds.discordautotranslate.core.ModuleResources;
 import io.github.wxmyyds.discordautotranslate.core.Scheduler;
 import io.github.wxmyyds.discordautotranslate.core.StateStore;
@@ -49,7 +55,10 @@ public class ModuleEntry extends XposedModule {
     private final List<XposedInterface.HookHandle> hooks = new java.util.ArrayList<>();
 
     private volatile boolean installed;
+    private volatile boolean bootstrapInstalled;
     private volatile ClassLoader targetClassLoader;
+    private volatile int targetVersionCode = -1;
+    private volatile HookConfiguration hookConfiguration;
 
     // ------------------------------------------------------------ 生命周期
 
@@ -67,19 +76,12 @@ public class ModuleEntry extends XposedModule {
         if (!TARGET_PACKAGE.equals(param.getPackageName())) {
             return;
         }
-        if (installed) {
-            // 防止重复安装（需求 §风险 6：不得重复注册 Hook）。
+        if (installed || bootstrapInstalled) {
+            // 防止重复注册启动钩子。
             return;
         }
         targetClassLoader = param.getClassLoader();
-
-        try {
-            install(param.getClassLoader());
-            installed = true;
-        } catch (Throwable ignored) {
-            // Hook 失败不能导致 Discord 崩溃（需求 §5.1）：模块保持不激活，宿主正常渲染。
-            installed = false;
-        }
+        installBootstrapHook(param.getClassLoader());
     }
 
     /**
@@ -89,6 +91,12 @@ public class ModuleEntry extends XposedModule {
     @Override
     public boolean onHotReloading(@NonNull XposedModuleInterface.HotReloadingParam param) {
         try {
+            Bundle state = new Bundle();
+            if (hookConfiguration != null) {
+                state.putInt("hookVersionCode", hookConfiguration.versionCode());
+                state.putString("hookConfigJson", hookConfiguration.rawJson());
+            }
+            param.setSavedInstanceState(state);
             release();
             return true;
         } catch (Throwable ignored) {
@@ -137,52 +145,125 @@ public class ModuleEntry extends XposedModule {
         // reset() 会把框架引用置空；必须重新绑定，否则图标资源全部解析失败。
         ModuleResources.attach(this);
 
+        Object savedState = param.getSavedInstanceState();
+        HookConfiguration restored = null;
+        if (savedState instanceof Bundle) {
+            Bundle bundle = (Bundle) savedState;
+            targetVersionCode = bundle.getInt("hookVersionCode", -1);
+            String json = bundle.getString("hookConfigJson");
+            if (targetVersionCode >= 0 && json != null) {
+                try {
+                    restored = HookConfigurationLoader.parse(json, targetVersionCode);
+                } catch (Throwable ignored) {
+                    restored = null;
+                }
+            }
+        }
+
         hooks.clear();
         installed = false;
-
-        // 重新读取配置（需求 §5.1：热重载后必须重新读取有效配置）。
+        bootstrapInstalled = false;
+        hookConfiguration = null;
         reloadConfig();
 
-        // 重新安装 Hook。
         ClassLoader cl = targetClassLoader;
         if (cl == null) {
             return;
         }
-        try {
-            install(cl);
-            installed = true;
-        } catch (Throwable ignored) {
-            // 重装失败：模块保持不激活，等待下次 onPackageReady 或重启。
+        if (restored != null) {
+            try {
+                install(cl, restored);
+                installed = true;
+            } catch (Throwable ignored) {
+                installed = false;
+            }
+        } else {
+            installBootstrapHook(cl);
         }
     }
 
     // ------------------------------------------------------------ 安装与卸载
 
-    private void install(ClassLoader cl) {
-        StructurableTextFactory.init(cl);
+    private void installBootstrapHook(ClassLoader cl) {
+        if (bootstrapInstalled) {
+            return;
+        }
+        try {
+            java.lang.reflect.Method attach = Application.class.getDeclaredMethod(
+                    "attach", Context.class);
+            attach.setAccessible(true);
+            XposedInterface.HookHandle handle = hook(attach)
+                    .setId("dat.applicationAttach")
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        Object result = chain.proceed();
+                        try {
+                            Object contextObject = chain.getArg(0);
+                            if (contextObject instanceof Context) {
+                                Context context = (Context) contextObject;
+                                if (TARGET_PACKAGE.equals(context.getPackageName())) {
+                                    installForApplication(context, cl);
+                                }
+                            }
+                        } catch (Throwable t) {
+                            android.util.Log.e("DiscordAutoTranslate",
+                                    "failed to select Discord hook profile", t);
+                        }
+                        return result;
+                    });
+            hooks.add(handle);
+            bootstrapInstalled = true;
+        } catch (Throwable t) {
+            android.util.Log.e("DiscordAutoTranslate", "failed to install app bootstrap hook", t);
+            installed = false;
+        }
+    }
+
+    private void installForApplication(Context context, ClassLoader cl) {
+        if (installed) {
+            return;
+        }
+        try {
+            PackageInfo packageInfo = context.getPackageManager().getPackageInfo(
+                    TARGET_PACKAGE, 0);
+            int versionCode = packageInfo.versionCode;
+            HookConfiguration config = HookConfigurationLoader.load(context, versionCode);
+            if (config == null) {
+                android.util.Log.w("DiscordAutoTranslate",
+                        "no hook profile for Discord versionCode=" + versionCode);
+                return;
+            }
+            targetVersionCode = versionCode;
+            install(cl, config);
+            installed = true;
+        } catch (Throwable t) {
+            android.util.Log.e("DiscordAutoTranslate", "failed to install configured hooks", t);
+            installed = false;
+        }
+    }
+
+    private void install(ClassLoader cl, HookConfiguration config) {
+        hookConfiguration = config;
+        HookConfiguration.activate(config);
+        StructurableTextFactory.init(cl, config);
         Scheduler.MainThread.install();
         reloadConfig();
-        // 行内图标所需的 Drawable 由 ModuleResources 按需解析（内部已缓存），
-        // 不再需要在安装阶段预加载到某个视图类。
 
-        List<XposedInterface.HookHandle> created = MessageHooks.install(this, cl);
-        if (created.size() < MessageHooks.MIN_REQUIRED_HOOKS) {
-            // 半安装状态会让模块“看似已启用、实际不工作”；回滚并等待重启。
+        List<XposedInterface.HookHandle> created = MessageHooks.install(this, cl, config);
+        if (created.size() < config.requiredHookCount()) {
             for (XposedInterface.HookHandle handle : created) {
                 try {
                     handle.unhook();
                 } catch (Throwable ignored) {
-                    // 回滚尽力而为。
+                    // Roll back incomplete required hook installation.
                 }
             }
-            throw new IllegalStateException("incomplete hook installation: "
-                    + created.size() + "/" + MessageHooks.MIN_REQUIRED_HOOKS);
+            throw new IllegalStateException("incomplete configured hook installation: "
+                    + created.size() + "/" + config.requiredHookCount());
         }
         hooks.addAll(created);
-        // Embed 翻译为可选功能；目标版本缺少对应类时不安装该 Hook。
-        hooks.addAll(EmbedHooks.install(this, cl));
-        // 投票翻译为可选功能；目标版本缺少对应类时不安装该 Hook。
-        hooks.addAll(PollHooks.install(this, cl));
+        hooks.addAll(EmbedHooks.install(this, cl, config));
+        hooks.addAll(PollHooks.install(this, cl, config));
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
@@ -220,8 +301,14 @@ public class ModuleEntry extends XposedModule {
         HookBridge.get().reset();
         TranslationCache.reset();
         RerenderRegistry.clear();
+        StructurableTextFactory.reset();
         ModuleResources.reset();
         installed = false;
+        bootstrapInstalled = false;
+        targetClassLoader = null;
+        targetVersionCode = -1;
+        hookConfiguration = null;
+        HookConfiguration.activate(null);
     }
 
     private void reloadConfig() {

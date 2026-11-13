@@ -4,6 +4,7 @@ import androidx.annotation.Nullable;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 /**
  * Discord 内部类的反射存取工具。
@@ -43,8 +44,9 @@ public final class Reflect {
         if (c == null) {
             return null;
         }
+        String configuredPrefix = accessorName(c, namePrefix);
         for (Method m : c.getDeclaredMethods()) {
-            if (!m.getName().startsWith(namePrefix)) {
+            if (!m.getName().startsWith(configuredPrefix)) {
                 continue;
             }
             Class<?>[] ps = m.getParameterTypes();
@@ -64,6 +66,12 @@ public final class Reflect {
                 return m;
             }
         }
+        if ("getContent".equals(namePrefix) && paramCount == 0) {
+            Method component = findMethodByName(c, "component1");
+            if (component != null) {
+                return component;
+            }
+        }
         return null;
     }
 
@@ -73,12 +81,30 @@ public final class Reflect {
         if (c == null) {
             return null;
         }
+        String configuredPrefix = accessorName(c, namePrefix);
         for (Method m : c.getDeclaredMethods()) {
             if (m.getParameterTypes().length == 0
-                    && m.getName().startsWith(namePrefix)
+                    && m.getName().startsWith(configuredPrefix)
                     && m.getReturnType() == String.class) {
                 m.setAccessible(true);
                 return m;
+            }
+        }
+        if ("getContent".equals(namePrefix)) {
+            Method component = findMethodByName(c, "component1");
+            if (component != null && component.getReturnType() == String.class) {
+                return component;
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private static Method findMethodByName(Class<?> type, String name) {
+        for (Method method : type.getDeclaredMethods()) {
+            if (name.equals(method.getName()) && method.getParameterCount() == 0) {
+                method.setAccessible(true);
+                return method;
             }
         }
         return null;
@@ -121,8 +147,9 @@ public final class Reflect {
         }
         Class<?> c = target.getClass();
         while (c != null) {
+            String configuredName = fieldName(c, fieldName);
             try {
-                Field f = c.getDeclaredField(fieldName);
+                Field f = c.getDeclaredField(configuredName);
                 f.setAccessible(true);
                 return f.get(target);
             } catch (NoSuchFieldException e) {
@@ -132,6 +159,26 @@ public final class Reflect {
             }
         }
         return null;
+    }
+
+    private static String fieldName(Class<?> type, String memberName) {
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        if (configuration == null) {
+            return memberName;
+        }
+        String semanticType = HookConfiguration.semanticTypeName(type);
+        String configured = configuration.fieldName(semanticType, memberName);
+        return configured == null || configured.isEmpty() ? memberName : configured;
+    }
+
+    private static String accessorName(Class<?> type, String accessor) {
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        if (configuration == null) {
+            return accessor;
+        }
+        String semanticType = HookConfiguration.semanticTypeName(type);
+        String configured = configuration.accessorName(semanticType, accessor);
+        return configured == null || configured.isEmpty() ? accessor : configured;
     }
 
     /** 安全调用方法。 */
@@ -147,16 +194,76 @@ public final class Reflect {
         }
     }
 
-    /** 安全读取 String getter。 */
+    /** Invoke a getter or read the configured backing field for version-obfuscated models. */
+    @Nullable
+    public static Object callMember(@Nullable Object target, String memberName) {
+        if (target == null) {
+            return null;
+        }
+        Method getter = findMethod(target.getClass(), memberName, 0);
+        if (getter != null) {
+            return call(getter, target);
+        }
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String semanticType = HookConfiguration.semanticTypeName(target.getClass());
+        String configuredField = configuration == null
+                ? null : configuration.fieldName(semanticType, memberName);
+        if (configuredField != null) {
+            return getField(target, configuredField);
+        }
+        Class<?> preferredType = "getItems".equals(memberName) ? java.util.List.class : null;
+        Field field = uniqueContentField(target.getClass(), preferredType);
+        return field == null ? null : getField(target, field.getName());
+    }
+
+    @Nullable
+    private static Field uniqueContentField(Class<?> type, @Nullable Class<?> preferredType) {
+        Field found = null;
+        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+            for (Field field : current.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
+                    continue;
+                }
+                Class<?> fieldType = field.getType();
+                boolean matches = preferredType != null
+                        ? preferredType.isAssignableFrom(fieldType)
+                        : (java.util.List.class.isAssignableFrom(fieldType)
+                        || fieldType == String.class);
+                if (!matches) {
+                    continue;
+                }
+                if (found != null) {
+                    if (preferredType == null && java.util.List.class.isAssignableFrom(fieldType)
+                            && !java.util.List.class.isAssignableFrom(found.getType())) {
+                        found = field;
+                        continue;
+                    }
+                    if (preferredType == null
+                            && java.util.List.class.isAssignableFrom(found.getType())) {
+                        continue;
+                    }
+                    return null;
+                }
+                found = field;
+            }
+        }
+        return found;
+    }
+
+    /** 安全读取 String getter；目标版本混淆 getter 时回退到内容字段。 */
     @Nullable
     public static String callString(@Nullable Object target, String namePrefix) {
         if (target == null) {
             return null;
         }
         Method m = findStringGetter(target.getClass(), namePrefix);
-        Object v = call(m, target);
-        return v instanceof String ? (String) v : null;
+        Object value = call(m, target);
+        if (!(value instanceof String)) {
+            value = callMember(target, namePrefix);
+        }
+        return value instanceof String ? (String) value : null;
     }
+
 
     /** 判断目标是否为指定类名（含父类链）的实例。 */
     public static boolean isInstanceOfName(@Nullable Object o, String className) {

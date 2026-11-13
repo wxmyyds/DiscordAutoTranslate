@@ -3,6 +3,7 @@ package io.github.wxmyyds.discordautotranslate.hooks;
 import androidx.annotation.Nullable;
 
 import io.github.wxmyyds.discordautotranslate.core.BlankLines;
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 import io.github.wxmyyds.discordautotranslate.core.Segments;
 import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
@@ -62,15 +63,17 @@ public final class ContentNodes {
     // ---------------------------------------------------------------- 类型判断
 
     public static boolean isAnnotated(@Nullable Object structurableText) {
-        return classNameOf(structurableText).endsWith("AnnotatedStructurableText");
+        return structurableText != null && "AnnotatedStructurableText".equals(
+                HookConfiguration.semanticTypeName(structurableText.getClass()));
     }
 
     public static boolean isPrimitive(@Nullable Object structurableText) {
-        return classNameOf(structurableText).endsWith("PrimitiveStructurableText");
+        return structurableText != null && "PrimitiveStructurableText".equals(
+                HookConfiguration.semanticTypeName(structurableText.getClass()));
     }
 
     private static String classNameOf(@Nullable Object o) {
-        return o == null ? "" : o.getClass().getName();
+        return o == null ? "" : HookConfiguration.semanticTypeName(o.getClass());
     }
 
     /** 取 AnnotatedStructurableText 的 List<ContentNode>；失败返回 null。 */
@@ -79,9 +82,7 @@ public final class ContentNodes {
         if (!isAnnotated(structurableText)) {
             return null;
         }
-        Object v = Reflect.call(
-                Reflect.findMethod(
-                        structurableText.getClass(), "getContent", 0), structurableText);
+        Object v = Reflect.callMember(structurableText, "getContent");
         return v instanceof List ? (List<?>) v : null;
     }
 
@@ -175,7 +176,7 @@ public final class ContentNodes {
                 count += countTextNodes((List<?>) n, depth + 1);
                 continue;
             }
-            String simple = n.getClass().getSimpleName();
+            String simple = HookConfiguration.semanticTypeName(n.getClass());
             if ("TextContentNode".equals(simple)) {
                 count += TextExtractor.countSegments(Reflect.callString(n, "getContent"));
                 continue;
@@ -203,9 +204,7 @@ public final class ContentNodes {
             return null;
         }
         String getter = BULLET_LIST.equals(simpleName) ? "getItems" : "getContent";
-        Object v = Reflect.call(
-                Reflect.findMethod(
-                        node.getClass(), getter, 0), node);
+        Object v = Reflect.callMember(node, getter);
         return v instanceof List ? (List<?>) v : null;
     }
 
@@ -230,7 +229,7 @@ public final class ContentNodes {
             return localChanged ? rebuiltChildren : node;
         }
 
-        String simple = node.getClass().getSimpleName();
+        String simple = HookConfiguration.semanticTypeName(node.getClass());
 
         // 按出现位置消费译文片段，同一实例在不同位置可以承载不同片段。
         if ("TextContentNode".equals(simple)) {
@@ -318,7 +317,7 @@ public final class ContentNodes {
         Class<?> cls = node.getClass();
         Method copy = findCopyMethod(cls);
         if (copy == null) {
-            return null;
+            return constructWithReplacedChildren(node, newChildren);
         }
         // 逐个参数：内容字段用新列表，其他字段用 componentN 原值。
         Class<?>[] types = copy.getParameterTypes();
@@ -336,7 +335,93 @@ public final class ContentNodes {
             return null;
         }
         Object out = Reflect.call(copy, node, args);
-        return out;
+        return out != null ? out : constructWithReplacedChildren(node, newChildren);
+    }
+
+    @Nullable
+    private static Object constructWithReplacedChildren(Object node, List<Object> newChildren) {
+        Class<?> cls = node.getClass();
+        List<java.lang.reflect.Field> fields = new ArrayList<>();
+        for (java.lang.reflect.Field field : cls.getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
+                continue;
+            }
+            field.setAccessible(true);
+            fields.add(field);
+        }
+        for (java.lang.reflect.Constructor<?> constructor : cls.getDeclaredConstructors()) {
+            Class<?>[] parameterTypes = constructor.getParameterTypes();
+            int fieldOffset = parameterTypes.length == fields.size() ? 0 : 1;
+            boolean kotlinDefaultConstructor = fieldOffset == 1
+                    && parameterTypes.length >= fields.size() + 1
+                    && parameterTypes[0] == int.class
+                    && (parameterTypes.length == fields.size() + 1
+                    || "kotlin.jvm.internal.DefaultConstructorMarker"
+                    .equals(parameterTypes[parameterTypes.length - 1].getName()));
+            if (fieldOffset == 1 && !kotlinDefaultConstructor) {
+                continue;
+            }
+            if (parameterTypes.length != fields.size() + fieldOffset
+                    && !(kotlinDefaultConstructor
+                    && parameterTypes.length == fields.size() + fieldOffset + 1)) {
+                continue;
+            }
+            Object[] values = new Object[parameterTypes.length];
+            if (kotlinDefaultConstructor) {
+                values[0] = fields.size() >= Integer.SIZE ? -1 : (1 << fields.size()) - 1;
+            }
+            int listIndex = -1;
+            boolean compatible = true;
+            for (int i = 0; i < fields.size(); i++) {
+                int parameterIndex = i + fieldOffset;
+                try {
+                    Object value = fields.get(i).get(node);
+                    Class<?> parameterType = parameterTypes[parameterIndex];
+                    if (value != null && !boxed(parameterType).isInstance(value)) {
+                        compatible = false;
+                        break;
+                    }
+                    if (List.class.isAssignableFrom(parameterType)) {
+                        if (listIndex >= 0) {
+                            compatible = false;
+                            break;
+                        }
+                        listIndex = parameterIndex;
+                        values[parameterIndex] = newChildren;
+                    } else {
+                        values[parameterIndex] = value;
+                    }
+                } catch (Throwable ignored) {
+                    compatible = false;
+                    break;
+                }
+            }
+            if (!compatible || listIndex < 0) {
+                continue;
+            }
+            try {
+                constructor.setAccessible(true);
+                return constructor.newInstance(values);
+            } catch (Throwable ignored) {
+                // Check the next constructor; synthetic Kotlin constructors may not match.
+            }
+        }
+        return null;
+    }
+
+    private static Class<?> boxed(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == boolean.class) return Boolean.class;
+        if (type == byte.class) return Byte.class;
+        if (type == short.class) return Short.class;
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == float.class) return Float.class;
+        if (type == double.class) return Double.class;
+        if (type == char.class) return Character.class;
+        return type;
     }
 
     /** 新建承载译文的文本节点，类型跟随原节点（保持 TextContentNode 语义）。 */
@@ -773,7 +858,7 @@ public final class ContentNodes {
                 walkPlan((List<?>) n, w, depth + 1, styled);
                 continue;
             }
-            String simple = n.getClass().getSimpleName();
+            String simple = HookConfiguration.semanticTypeName(n.getClass());
             if ("TextContentNode".equals(simple)) {
                 String s = Reflect.callString(n, "getContent");
                 if (s == null) {
@@ -935,7 +1020,8 @@ public final class ContentNodes {
                 sb.append(", ");
             }
             Object n = nodes.get(i);
-            sb.append(n == null ? "null" : n.getClass().getSimpleName());
+            sb.append(n == null ? "null"
+                    : HookConfiguration.semanticTypeName(n.getClass()));
         }
         return sb.append(']').toString();
     }

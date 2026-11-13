@@ -105,8 +105,7 @@ public final class TextExtractor {
      */
     @Nullable
     public static String urlLinkDisplayText(Object linkNode) {
-        Object inner = Reflect.call(
-                Reflect.findMethod(linkNode.getClass(), "getContent", 0), linkNode);
+        Object inner = Reflect.callMember(linkNode, "getContent");
         if (!(inner instanceof List)) {
             return null;
         }
@@ -130,7 +129,7 @@ public final class TextExtractor {
      */
     @Nullable
     public static String nodeEmojiText(Object node) {
-        String name = node.getClass().getSimpleName();
+        String name = HookConfiguration.semanticTypeName(node.getClass());
         if (name.endsWith("UnicodeEmojiContentNode")) {
             String s = Reflect.callString(node, "getContent");
             if (s == null || s.isEmpty()) {
@@ -156,7 +155,7 @@ public final class TextExtractor {
             if (node == null) {
                 continue;
             }
-            String name = node.getClass().getSimpleName();
+            String name = HookConfiguration.semanticTypeName(node.getClass());
             if ("TextContentNode".equals(name)) {
                 String s = Reflect.callString(node, "getContent");
                 if (s != null) {
@@ -165,8 +164,7 @@ public final class TextExtractor {
                 continue;
             }
             if (isTextContainer(name)) {
-                Object inner = Reflect.call(
-                        Reflect.findMethod(node.getClass(), "getContent", 0), node);
+                Object inner = Reflect.callMember(node, "getContent");
                 if (inner instanceof List) {
                     appendDescendantText((List<?>) inner, out, depth + 1);
                 }
@@ -179,7 +177,8 @@ public final class TextExtractor {
         if (structurableText == null) {
             return null;
         }
-        String cls = structurableText.getClass().getName();
+        String cls = HookConfiguration.semanticTypeName(structurableText.getClass());
+
 
         if (cls.endsWith("PrimitiveStructurableText")) {
             String s = Reflect.callString(structurableText, "getContent");
@@ -192,8 +191,7 @@ public final class TextExtractor {
         }
 
         if (cls.endsWith("AnnotatedStructurableText")) {
-            Object list = Reflect.call(Reflect.findMethod(
-                    structurableText.getClass(), "getContent", 0), structurableText);
+            Object list = Reflect.callMember(structurableText, "getContent");
             if (!(list instanceof List)) {
                 return EMPTY;
             }
@@ -317,7 +315,8 @@ public final class TextExtractor {
         if (node == null || depth > MAX_DEPTH) {
             return;
         }
-        String name = node.getClass().getSimpleName();
+        String name = HookConfiguration.semanticTypeName(node.getClass());
+
         if (isTextContainer(name)) {
             if ("LinkContentNode".equals(name) && linkDisplayIsUrl(node)) {
                 // URL 链接显示文本原样进请求，充当定位标记：模型看不见 URL
@@ -330,8 +329,7 @@ public final class TextExtractor {
                 out.append(' ').append(url).append(' ');
                 return;
             }
-            Object inner = Reflect.call(
-                    Reflect.findMethod(node.getClass(), "getContent", 0), node);
+            Object inner = Reflect.callMember(node, "getContent");
             if (inner instanceof List) {
                 walkList((List<?>) inner, out, counters, depth + 1, styleSeq,
                         styled || isInlineStyleContainer(name));
@@ -400,8 +398,7 @@ public final class TextExtractor {
                 out.append('\n');
                 return;
             case "BulletListContentNode": {
-                Object items = Reflect.call(
-                        Reflect.findMethod(node.getClass(), "getItems", 0), node);
+                Object items = Reflect.callMember(node, "getItems");
                 if (items instanceof List) {
                     for (Object item : (List<?>) items) {
                         out.append('\n').append("• ");

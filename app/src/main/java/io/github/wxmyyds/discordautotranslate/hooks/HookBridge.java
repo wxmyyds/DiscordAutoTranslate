@@ -327,7 +327,9 @@ public final class HookBridge {
     public void requestRerender(@Nullable View contentView, @Nullable String messageId,
                                 @Nullable Object invocationTarget, @Nullable Method method,
                                 @Nullable Object[] args) {
-        if (invocationTarget == null || method == null || args == null) {
+        if (method == null || args == null
+                || (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                && invocationTarget == null)) {
             return;
         }
         String bound = messageIdOf(contentView);
@@ -345,8 +347,12 @@ public final class HookBridge {
         new Handler(Looper.getMainLooper()).post(task);
     }
 
-    private void invokeRerender(Object invocationTarget, @Nullable View contentView,
+    private void invokeRerender(@Nullable Object invocationTarget, @Nullable View contentView,
                                 @Nullable String messageId, Method method, Object[] args) {
+        if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                && invocationTarget == null) {
+            return;
+        }
         View view = contentView != null
                 ? contentView
                 : (invocationTarget instanceof View ? (View) invocationTarget : null);
