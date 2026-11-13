@@ -426,8 +426,12 @@ public final class ContentNodes {
 
     @Nullable
     private static Method findCopyMethod(Class<?> cls) {
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String prefix = configuration == null ? null
+                : configuration.string("members", "copyMethodPrefix");
+        if (prefix == null || prefix.isEmpty()) return null;
         for (Method m : cls.getDeclaredMethods()) {
-            if ("copy".equals(m.getName()) && m.getParameterCount() > 0) {
+            if (m.getName().startsWith(prefix) && m.getParameterCount() > 0) {
                 m.setAccessible(true);
                 return m;
             }
@@ -435,11 +439,14 @@ public final class ContentNodes {
         return null;
     }
 
-    /** 取 Kotlin data class 的第 n 个字段（componentN 从 1 开始）。 */
+    /** 取 Kotlin data class 第 n 个组件；名称前缀由 profile 提供。 */
     @Nullable
     private static Object component(Object node, int n) {
-        Method m = Reflect.findMethod(
-                node.getClass(), "component" + n, 0);
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String prefix = configuration == null ? null
+                : configuration.string("members", "componentMethodPrefix");
+        if (prefix == null || prefix.isEmpty()) return null;
+        Method m = Reflect.findMethod(node.getClass(), prefix + n, 0);
         return Reflect.call(m, node);
     }
 

@@ -85,6 +85,36 @@ public class HookConfigurationTest {
     }
 
     @Test
+    public void readsIconClickProtocolFromProfileWithoutVersionBranch() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":352017,\"hooks\":{},"
+                + "\"iconClick\":{\"enabled\":true,\"protocol\":\"interfaceProxy\","
+                + "\"interface\":\"example.Clickable\",\"methods\":{"
+                + "\"onClick\":{\"action\":\"toggleTranslation\"},"
+                + "\"getPriority\":{\"action\":\"returnEnum\","
+                + "\"enumClass\":\"example.Priority\",\"enumValue\":\"HIGH\"}}}}";
+        HookConfiguration config = HookConfiguration.parse(json, 352017);
+        org.json.JSONObject iconClick = config.iconClickConfiguration();
+
+        assertNotNull(iconClick);
+        assertTrue(iconClick.optBoolean("enabled"));
+        assertEquals("interfaceProxy", iconClick.optString("protocol"));
+        assertEquals("toggleTranslation",
+                iconClick.getJSONObject("methods").getJSONObject("onClick").optString("action"));
+    }
+
+    @Test
+    public void readsExplicitlyDisabledIconClickProfile() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":340013,\"hooks\":{},"
+                + "\"iconClick\":{\"enabled\":false,\"reason\":\"unverified\"}}";
+        HookConfiguration config = HookConfiguration.parse(json, 340013);
+        org.json.JSONObject iconClick = config.iconClickConfiguration();
+
+        assertNotNull(iconClick);
+        assertFalse(iconClick.optBoolean("enabled"));
+        assertEquals("unverified", iconClick.optString("reason"));
+    }
+
+    @Test
     public void mapsObfuscatedRuntimeTypesFromProfile() throws Exception {
         String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
                 + "\"hooks\":{},\"types\":{\"TextContentNode\":\""

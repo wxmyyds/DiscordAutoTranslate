@@ -62,7 +62,7 @@ public final class EmbedHooks {
                     // 宿主必须在同步文本转换调用链内传递给图标注入器；重渲染也需要，故无条件设置。
                     InlineIconInjector.enterHost(
                             asView(Reflect.getField(chain.getThisObject(),
-                                    HookConfiguration.member("embedHolderViewField", "itemView"))));
+                                    HookConfiguration.member("embedHolderViewField"))));
                     try {
                         if (!HookBridge.get().isRerendering()) {
                             try {
@@ -84,7 +84,7 @@ public final class EmbedHooks {
      */
     private static void richEmbedPre(XposedInterface.Chain chain, Method bind,
                                      JSONObject spec) {
-        int accessoryArgument = spec.optInt("accessoryArgument", 1);
+        int accessoryArgument = spec.optInt("accessoryArgument", -1);
         Object accessory = accessoryArgument < 0
                 || accessoryArgument >= chain.getArgs().size()
                 ? null : chain.getArg(accessoryArgument);
@@ -92,26 +92,26 @@ public final class EmbedHooks {
             return;
         }
         String messageId = Reflect.callString(accessory,
-                HookConfiguration.member("embedMessageIdGetter", "getMessageId"));
+                HookConfiguration.member("embedMessageIdGetter"));
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
         Object embed = Reflect.call(Reflect.findMethod(
-                accessory.getClass(), HookConfiguration.member("embedGetter", "getEmbed"), 0), accessory);
+                accessory.getClass(), HookConfiguration.member("embedGetter"), 0), accessory);
         if (embed == null) {
             return;
         }
         View view = asView(Reflect.getField(chain.getThisObject(),
-                HookConfiguration.member("embedHolderViewField", "itemView")));
+                HookConfiguration.member("embedHolderViewField")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
         // 图标主段优先取描述（正文主体），缺描述时回落标题、再回落首个字段。
         String primary = registerEmbedText(view, messageId, embed,
-                HookConfiguration.member("embedDescriptionGetter", "getDescription"),
+                HookConfiguration.member("embedDescriptionGetter"),
                 holder, bind, args);
         if (primary == null) {
             primary = registerEmbedText(view, messageId, embed,
-                    HookConfiguration.member("embedTitleGetter", "getTitle"),
+                    HookConfiguration.member("embedTitleGetter"),
                     holder, bind, args);
         }
         if (primary == null) {
@@ -158,7 +158,7 @@ public final class EmbedHooks {
                                               Object embed, Object holder, Method bind,
                                               Object[] args) {
         Object fields = Reflect.call(Reflect.findMethod(
-                embed.getClass(), HookConfiguration.member("embedFieldsGetter", "getFields"), 0), embed);
+                embed.getClass(), HookConfiguration.member("embedFieldsGetter"), 0), embed);
         if (!(fields instanceof List)) {
             return null;
         }
@@ -169,13 +169,13 @@ public final class EmbedHooks {
                 break;
             }
             String nameKey = registerEmbedText(view, messageId, field,
-                    HookConfiguration.member("embedFieldNameGetter", "getName"),
+                    HookConfiguration.member("embedFieldNameGetter"),
                     holder, bind, args);
             if (first == null) {
                 first = nameKey;
             }
             String valueKey = registerEmbedText(view, messageId, field,
-                    HookConfiguration.member("embedFieldValueGetter", "getValue"),
+                    HookConfiguration.member("embedFieldValueGetter"),
                     holder, bind, args);
             if (first == null) {
                 first = valueKey;
@@ -204,7 +204,7 @@ public final class EmbedHooks {
                     // 同富 Embed：宿主在调用链内传递，供 footer 上的行内图标使用。
                     InlineIconInjector.enterHost(
                             asView(Reflect.getField(chain.getThisObject(),
-                                    HookConfiguration.member("postPreviewHolderViewField", "itemView"))));
+                                    HookConfiguration.member("postPreviewHolderViewField"))));
                     try {
                         if (!HookBridge.get().isRerendering()) {
                             try {
@@ -233,16 +233,16 @@ public final class EmbedHooks {
      */
     private static void postPreviewPre(XposedInterface.Chain chain, Method bind,
                                        JSONObject spec) {
-        int modelArgument = spec.optInt("modelArgument", 0);
+        int modelArgument = spec.optInt("modelArgument", -1);
         Object model = modelArgument < 0 || modelArgument >= chain.getArgs().size()
                 ? null : chain.getArg(modelArgument);
         if (model == null) {
             return;
         }
         String messageId = Reflect.callString(model,
-                HookConfiguration.member("postPreviewMessageIdGetter", "getMessageId"));
+                HookConfiguration.member("postPreviewMessageIdGetter"));
         String title = Reflect.callString(model,
-                HookConfiguration.member("postPreviewTitleGetter", "getTitle"));
+                HookConfiguration.member("postPreviewTitleGetter"));
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId) || title == null) {
             return;
         }
@@ -252,7 +252,7 @@ public final class EmbedHooks {
             return; // 空标题，或目标版本缺少 PrimitiveStructurableText 构造能力
         }
         View view = asView(Reflect.getField(chain.getThisObject(),
-                HookConfiguration.member("postPreviewHolderViewField", "itemView")));
+                HookConfiguration.member("postPreviewHolderViewField")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
         if (view != null) {
@@ -262,7 +262,7 @@ public final class EmbedHooks {
         // 正文语义上等价于一条纯文本消息：走同一条翻译触发路径。
         HookBridge.get().onMessageBound(view, key, wrapped);
         Object footer = Reflect.call(Reflect.findMethod(model.getClass(),
-                HookConfiguration.member("postPreviewFooterGetter", "getFooter"), 0), model);
+                HookConfiguration.member("postPreviewFooterGetter"), 0), model);
         HookBridge.get().rememberIconOnlyContent(key, footer);
     }
 
@@ -297,8 +297,8 @@ public final class EmbedHooks {
      * 标题译文就绪时替换之；未就绪时保持原文（译文完成后经重渲染再次进入这里）。
      */
     private static void substitutePostPreviewTitle(Object[] renderArgs, JSONObject spec) {
-        int messageIdIndex = spec.optInt("messageIdArgument", 0);
-        int titleIndex = spec.optInt("titleArgument", 1);
+        int messageIdIndex = spec.optInt("messageIdArgument", -1);
+        int titleIndex = spec.optInt("titleArgument", -1);
         if (messageIdIndex < 0 || titleIndex < 0
                 || messageIdIndex >= renderArgs.length || titleIndex >= renderArgs.length
                 || !(renderArgs[messageIdIndex] instanceof String)) {

@@ -6,6 +6,38 @@
     "message.render",
     "message.textConversion"
   ],
+  "iconClick": {
+    "enabled": true,
+    "protocol": "constructorProxy",
+    "spanClass": "lh.d",
+    "requiredSuperclass": "android.text.style.ClickableSpan",
+    "interfaces": ["zf.b"],
+    "constructor": {
+      "parameterTypes": [
+        "java.lang.Integer",
+        "java.lang.Integer",
+        "java.lang.Integer",
+        "java.lang.Boolean",
+        "kotlin.jvm.functions.Function1",
+        "kotlin.jvm.functions.Function1",
+        "int"
+      ],
+      "arguments": [
+        {"kind": "null"},
+        {"kind": "null"},
+        {"kind": "null"},
+        {"kind": "null"},
+        {"kind": "null"},
+        {
+          "kind": "callback",
+          "interface": "kotlin.jvm.functions.Function1",
+          "method": "invoke",
+          "action": "toggleTranslation"
+        },
+        {"kind": "integer", "value": 255}
+      ]
+    }
+  },
   "hooks": {
     "message.bind": {
       "target": {
@@ -72,6 +104,10 @@
       "enabled": false,
       "reason": "352017 poll binding target has not been verified."
     }
+  },
+  "members": {
+    "copyMethodPrefix": "copy",
+    "componentMethodPrefix": "component"
   },
   "types": {
     "StructurableText": "l8.h",

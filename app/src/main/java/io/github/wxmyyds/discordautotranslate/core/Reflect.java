@@ -125,6 +125,9 @@ public final class Reflect {
         }
         String semanticType = HookConfiguration.semanticTypeName(type);
         String configured = configuration.accessorName(semanticType, accessor);
+        if (configured == null || configured.isEmpty()) {
+            configured = configuration.string("members", accessor);
+        }
         return configured == null || configured.isEmpty() ? accessor : configured;
     }
 

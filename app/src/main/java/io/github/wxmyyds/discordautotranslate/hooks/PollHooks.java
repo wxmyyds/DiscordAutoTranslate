@@ -67,7 +67,7 @@ public final class PollHooks {
         if (bind == null || spec == null) {
             return handles;
         }
-        int accessoryArgument = spec.optInt("accessoryArgument", 0);
+        int accessoryArgument = spec.optInt("accessoryArgument", -1);
         handles.add(module.hook(bind)
                 .setId("dat.pollBind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
@@ -94,7 +94,7 @@ public final class PollHooks {
                     try {
                         attachQuestionIcon(safeArg(chain, accessoryArgument),
                                 asView(Reflect.getField(chain.getThisObject(),
-                                        HookConfiguration.member("pollHolderViewField", "itemView"))));
+                                        HookConfiguration.member("pollHolderViewField"))));
                     } catch (Throwable ignored) {
                         // 图标失败不影响宿主渲染。
                     }
@@ -108,17 +108,17 @@ public final class PollHooks {
     /** 登记问题与各选项文本：状态键 + 触发翻译 + 重渲染目标（原始实参）。 */
     private static void registerPollTexts(XposedInterface.Chain chain, Method bind,
                                           JSONObject spec) {
-        Object accessory = safeArg(chain, spec.optInt("accessoryArgument", 0));
+        Object accessory = safeArg(chain, spec.optInt("accessoryArgument", -1));
         if (accessory == null) {
             return;
         }
         String messageId = Reflect.callString(accessory,
-                HookConfiguration.member("pollMessageIdGetter", "getMessageId"));
+                HookConfiguration.member("pollMessageIdGetter"));
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
         View view = asView(Reflect.getField(chain.getThisObject(),
-                HookConfiguration.member("pollHolderViewField", "itemView")));
+                HookConfiguration.member("pollHolderViewField")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
         Object data = Reflect.call(Reflect.findMethod(
@@ -364,9 +364,9 @@ public final class PollHooks {
     @Nullable
     private static TextView questionTextViewOf(View pollView) {
         Object binding = Reflect.getField(pollView,
-                HookConfiguration.member("pollBindingField", "binding"));
+                HookConfiguration.member("pollBindingField"));
         Object questionText = Reflect.getField(binding,
-                HookConfiguration.member("pollQuestionTextField", "questionText"));
+                HookConfiguration.member("pollQuestionTextField"));
         return questionText instanceof TextView ? (TextView) questionText : null;
     }
 
@@ -436,7 +436,10 @@ public final class PollHooks {
         if (node == null) {
             return null;
         }
-        Method copy = findPrefixMethod(node.getClass(), "copy", 1);
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String prefix = configuration == null ? null
+                : configuration.string("members", "copyMethodPrefix");
+        Method copy = findPrefixMethod(node.getClass(), prefix, 1);
         if (copy == null) {
             return null;
         }
@@ -460,7 +463,8 @@ public final class PollHooks {
 
     /** 按名字前缀查找方法（参数个数下限、排除 {@code $} 合成方法）。 */
     @Nullable
-    private static Method findPrefixMethod(Class<?> cls, String prefix, int minParams) {
+    private static Method findPrefixMethod(Class<?> cls, @Nullable String prefix, int minParams) {
+        if (prefix == null || prefix.isEmpty()) return null;
         for (Method m : cls.getDeclaredMethods()) {
             if (!m.getName().startsWith(prefix) || m.getName().contains("$")) {
                 continue;
@@ -477,7 +481,11 @@ public final class PollHooks {
     /** 取第 n 个组件（componentN）。 */
     @Nullable
     private static Object callComponent(Object node, int n) {
-        String expectedName = "component" + n;
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        String prefix = configuration == null ? null
+                : configuration.string("members", "componentMethodPrefix");
+        if (prefix == null || prefix.isEmpty()) return null;
+        String expectedName = prefix + n;
         for (Method method : node.getClass().getDeclaredMethods()) {
             if (method.getParameterCount() == 0 && method.getName().equals(expectedName)) {
                 method.setAccessible(true);

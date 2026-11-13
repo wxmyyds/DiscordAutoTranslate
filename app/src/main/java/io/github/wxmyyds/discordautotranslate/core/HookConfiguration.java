@@ -35,10 +35,33 @@ public final class HookConfiguration {
         if (versionCode != expectedVersionCode) {
             throw new JSONException("hook config versionCode mismatch: " + versionCode);
         }
-        if (root.optJSONObject("hooks") == null) {
+        JSONObject hooks = root.optJSONObject("hooks");
+        if (hooks == null) {
             throw new JSONException("hook config is missing hooks");
         }
+        validateHookSelectors(hooks);
         return new HookConfiguration(versionCode, json, root);
+    }
+
+    private static void validateHookSelectors(JSONObject hooks) throws JSONException {
+        Iterator<String> ids = hooks.keys();
+        while (ids.hasNext()) {
+            String id = ids.next();
+            JSONObject hook = hooks.optJSONObject(id);
+            if (hook == null) {
+                throw new JSONException("hook entry is not an object: " + id);
+            }
+            if (!hook.optBoolean("enabled", true)) {
+                continue;
+            }
+            JSONObject target = hook.optJSONObject("target");
+            if (target == null || target.optString("class", "").isEmpty()
+                    || (!target.has("name") && !target.has("namePrefix"))
+                    || (!target.has("parameterCount") && !target.has("minParameterCount"))
+                    || !target.has("static")) {
+                throw new JSONException("enabled hook has an incomplete target: " + id);
+            }
+        }
     }
 
     public static void activate(HookConfiguration configuration) {
@@ -50,8 +73,7 @@ public final class HookConfiguration {
         return active;
     }
 
-    @Nullable
-    public static String member(String key, String ignoredFallback) {
+    public static String member(String key) {
         HookConfiguration configuration = active;
         return configuration == null ? null : configuration.string("members", key);
     }
@@ -154,6 +176,12 @@ public final class HookConfiguration {
             }
         }
         return true;
+    }
+
+    @Nullable
+    public JSONObject iconClickConfiguration() {
+        JSONObject object = root.optJSONObject("iconClick");
+        return object == null ? null : new JSONObject(object.toString());
     }
 
     @Nullable

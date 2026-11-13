@@ -1,173 +1,242 @@
 package io.github.wxmyyds.discordautotranslate.hooks;
 
+import android.text.style.ClickableSpan;
+
 import androidx.annotation.Nullable;
 
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 
-import java.lang.reflect.InvocationHandler;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
 
-/**
- * 行内图标的可点击 span。
- *
- * <p>Discord 352017 的消息触摸分发器只查询宿主 {@code zf/b} marker 接口，随后把命中的
- * span 强转为 {@code lh/d}。该类继承 Android {@code ClickableSpan} 并实现 marker，且其
- * 构造器接收 Kotlin {@code Function1} 点击回调。由于类名随宿主版本混淆，运行时反射创建，
- * 不引入编译期 Discord 依赖。</p>
- */
+/** Creates the host-recognized icon click span using the active hook profile protocol. */
 public final class IconClickSpanFactory {
-
-    private static final String CLS_HOST_CLICKABLE_SPAN = "lh.d";
-    private static final String CLS_HOST_CLICKABLE_MARKER = "zf.b";
-    private static final String CLS_KOTLIN_FUNCTION1 = "kotlin.jvm.functions.Function1";
-
-    private static final String CLS_LEGACY_NESTED_CLICKABLE =
-            "com.discord.react_gesture_handler.nested_touch.NestedClickableSpan";
-    private static final String CLS_LEGACY_TOUCH_PRIORITY =
-            "com.discord.react_gesture_handler.nested_touch.NestedClickableSpan$TouchPriority";
+    private static final Object INVALID_ARGUMENT = new Object();
 
     private IconClickSpanFactory() {
     }
 
-    /**
-     * 创建目标 Discord 版本可识别的点击 span。
-     *
-     * @param hostCl 宿主 ClassLoader
-     * @param messageId 所属消息 ID，点击时用于查回该消息的状态
-     * @return 可点击 span；宿主类型解析失败时返回 null
-     */
     @Nullable
     public static Object create(@Nullable ClassLoader hostCl, @Nullable String messageId) {
-        if (hostCl == null || messageId == null) {
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        JSONObject spec = configuration == null ? null : configuration.iconClickConfiguration();
+        if (hostCl == null || messageId == null || spec == null
+                || !spec.optBoolean("enabled", false)) {
             return null;
         }
-
-        Object hostSpan = createHostClickableSpan(hostCl, messageId);
-        if (hostSpan != null) {
-            return hostSpan;
-        }
-        return createLegacyNestedClickable(hostCl, messageId);
-    }
-
-    /** Discord 352017 的 zf/f 只接受实现 zf/b 且实际为 lh/d 的 span。 */
-    @Nullable
-    private static Object createHostClickableSpan(ClassLoader hostCl, String messageId) {
-        Class<?> spanClass = Reflect.loadClass(hostCl, CLS_HOST_CLICKABLE_SPAN);
-        Class<?> markerClass = Reflect.loadClass(hostCl, CLS_HOST_CLICKABLE_MARKER);
-        Class<?> function1Class = Reflect.loadClass(hostCl, CLS_KOTLIN_FUNCTION1);
-        if (spanClass == null || markerClass == null || function1Class == null
-                || !android.text.style.ClickableSpan.class.isAssignableFrom(spanClass)
-                || !markerClass.isInterface() || !markerClass.isAssignableFrom(spanClass)
-                || !function1Class.isInterface()) {
-            return null;
-        }
-
         try {
-            Object clickCallback = Proxy.newProxyInstance(hostCl,
-                    new Class<?>[]{function1Class}, clickCallback(messageId));
-            java.lang.reflect.Constructor<?> constructor = spanClass.getDeclaredConstructor(
-                    Integer.class, Integer.class, Integer.class, Boolean.class,
-                    function1Class, function1Class, int.class);
-            constructor.setAccessible(true);
-            // 保留宿主默认样式/长按处理，将 Function1 的第二个参数设为点击回调。
-            Object span = constructor.newInstance(null, null, null, null, null, clickCallback, 0xff);
-            HookDiagnostics.infoOnce("icon.click.host-span-ready",
-                    "icon click span created using host class " + CLS_HOST_CLICKABLE_SPAN);
+            Object span;
+            switch (spec.optString("protocol", "")) {
+                case "constructorProxy":
+                    span = createByConstructor(hostCl, messageId, spec);
+                    break;
+                case "interfaceProxy":
+                    span = createByInterface(hostCl, messageId, spec);
+                    break;
+                default:
+                    span = null;
+            }
+            if (span == null) {
+                HookDiagnostics.warnOnce("icon.click.span-unavailable",
+                        "icon click span unavailable: configured protocol could not be created");
+            }
             return span;
         } catch (Throwable t) {
-            HookDiagnostics.warnOnce("icon.click.host-span-create-failed",
-                    "icon click span creation failed for host class " + CLS_HOST_CLICKABLE_SPAN
-                            + ": " + t.getClass().getSimpleName());
+            HookDiagnostics.warnOnce("icon.click.span-create-failed",
+                    "icon click span creation failed: " + t.getClass().getSimpleName());
             return null;
         }
     }
 
-    /** 兼容仍使用公开 NestedClickableSpan 接口的旧 Discord 版本。 */
     @Nullable
-    private static Object createLegacyNestedClickable(ClassLoader hostCl, String messageId) {
-        Class<?> iface = Reflect.loadClass(hostCl, CLS_LEGACY_NESTED_CLICKABLE);
-        if (iface == null || !iface.isInterface()) {
-            HookDiagnostics.warnOnce("icon.click.span-unavailable",
-                    "icon click span unavailable: neither host clickable span nor legacy interface resolved");
+    private static Object createByConstructor(ClassLoader hostCl, String messageId,
+                                               JSONObject spec) throws Exception {
+        Class<?> spanClass = configuredClass(hostCl, spec.optString("spanClass", ""));
+        Class<?> expectedSuperclass = configuredClass(
+                hostCl, spec.optString("requiredSuperclass", ""));
+        if (spanClass == null || expectedSuperclass == null
+                || !expectedSuperclass.isAssignableFrom(spanClass)
+                || !ClickableSpan.class.isAssignableFrom(spanClass)) {
             return null;
         }
-        Object highPriority = resolveHighPriority(hostCl);
-        try {
-            return Proxy.newProxyInstance(hostCl, new Class<?>[]{iface},
-                    new InvocationHandler() {
-                        @Override
-                        public Object invoke(Object proxy, Method method, Object[] args) {
-                            switch (method.getName()) {
-                                case "onClick":
-                                    HookBridge.get().onIconClicked(messageId);
-                                    return null;
-                                case "onLongClick":
-                                    return Boolean.FALSE;
-                                case "enableHighlight":
-                                    return null;
-                                case "getTouchPriority":
-                                    return highPriority;
-                                case "hashCode":
-                                    return System.identityHashCode(proxy);
-                                case "equals":
-                                    return args != null && args.length == 1 && proxy == args[0];
-                                case "toString":
-                                    return "InlineIconClickSpan";
-                                default:
-                                    return null;
-                            }
-                        }
-                    });
-        } catch (Throwable t) {
-            HookDiagnostics.warnOnce("icon.click.legacy-span-create-failed",
-                    "legacy icon click span creation failed: " + t.getClass().getSimpleName());
+        Class<?>[] interfaces = configuredInterfaces(hostCl, spec.optJSONArray("interfaces"));
+        if (interfaces == null) {
             return null;
         }
-    }
-
-    private static InvocationHandler clickCallback(String messageId) {
-        return new InvocationHandler() {
-            @Override
-            public Object invoke(Object proxy, Method method, Object[] args) {
-                switch (method.getName()) {
-                    case "invoke":
-                        HookDiagnostics.infoOnce("icon.click.callback-reached",
-                                "icon click callback reached host span Function1");
-                        HookBridge.get().onIconClicked(messageId);
-                        return null;
-                    case "hashCode":
-                        return System.identityHashCode(proxy);
-                    case "equals":
-                        return args != null && args.length == 1 && proxy == args[0];
-                    case "toString":
-                        return "InlineIconClickCallback";
-                    default:
-                        return null;
-                }
+        for (Class<?> iface : interfaces) {
+            if (!iface.isInterface() || !iface.isAssignableFrom(spanClass)) {
+                return null;
             }
-        };
-    }
+        }
 
-    /** 取旧接口的 {@code TouchPriority.HIGH}；解析失败返回 null。 */
-    @Nullable
-    private static Object resolveHighPriority(ClassLoader hostCl) {
-        Class<?> priorityCls = Reflect.loadClass(hostCl, CLS_LEGACY_TOUCH_PRIORITY);
-        if (priorityCls == null || !priorityCls.isEnum()) {
+        JSONObject constructorSpec = spec.optJSONObject("constructor");
+        JSONArray parameterNames = constructorSpec == null ? null
+                : constructorSpec.optJSONArray("parameterTypes");
+        JSONArray argumentSpecs = constructorSpec == null ? null
+                : constructorSpec.optJSONArray("arguments");
+        if (parameterNames == null || argumentSpecs == null
+                || parameterNames.length() != argumentSpecs.length()) {
             return null;
         }
-        try {
-            Object[] constants = priorityCls.getEnumConstants();
-            if (constants != null) {
-                for (Object constant : constants) {
-                    if (constant instanceof Enum && "HIGH".equals(((Enum<?>) constant).name())) {
-                        return constant;
+        Class<?>[] parameterTypes = new Class<?>[parameterNames.length()];
+        Object[] arguments = new Object[argumentSpecs.length()];
+        for (int i = 0; i < parameterTypes.length; i++) {
+            parameterTypes[i] = resolveType(hostCl, parameterNames.optString(i, ""));
+            arguments[i] = resolveArgument(hostCl, messageId, argumentSpecs.optJSONObject(i));
+            if (parameterTypes[i] == null || arguments[i] == INVALID_ARGUMENT
+                    || !accepts(parameterTypes[i], arguments[i])) {
+                return null;
+            }
+        }
+        Constructor<?> constructor = spanClass.getDeclaredConstructor(parameterTypes);
+        constructor.setAccessible(true);
+        Object result = constructor.newInstance(arguments);
+        HookDiagnostics.infoOnce("icon.click.span-ready",
+                "icon click span created with configured constructor protocol");
+        return result;
+    }
+
+    @Nullable
+    private static Object createByInterface(ClassLoader hostCl, String messageId,
+                                             JSONObject spec) throws Exception {
+        Class<?> iface = configuredClass(hostCl, spec.optString("interface", ""));
+        JSONObject handlers = spec.optJSONObject("methods");
+        if (iface == null || !iface.isInterface() || handlers == null) {
+            return null;
+        }
+        return Proxy.newProxyInstance(hostCl, new Class<?>[]{iface}, (proxy, method, args) -> {
+            JSONObject behavior = handlers.optJSONObject(method.getName());
+            return behavior == null ? objectMethod(proxy, method, args)
+                    : invokeConfiguredBehavior(hostCl, messageId, proxy, method, args, behavior);
+        });
+    }
+
+    @Nullable
+    private static Object invokeConfiguredBehavior(ClassLoader hostCl, String messageId,
+            Object proxy, Method method, Object[] args, JSONObject behavior) throws Exception {
+        switch (behavior.optString("action", "")) {
+            case "toggleTranslation":
+                HookDiagnostics.infoOnce("icon.click.callback-reached",
+                        "icon click callback reached configured host span handler");
+                HookBridge.get().onIconClicked(messageId);
+                return null;
+            case "returnFalse":
+                return false;
+            case "returnNull":
+                return null;
+            case "returnEnum":
+                Class<?> enumClass = configuredClass(hostCl, behavior.optString("enumClass", ""));
+                if (enumClass == null || !enumClass.isEnum()) {
+                    return null;
+                }
+                String enumValue = behavior.optString("enumValue", "");
+                for (Object value : enumClass.getEnumConstants()) {
+                    if (value instanceof Enum && enumValue.equals(((Enum<?>) value).name())) {
+                        return value;
                     }
                 }
-            }
-        } catch (Throwable ignored) {
-            // Default priority remains usable for the legacy interface.
+                return null;
+            default:
+                return objectMethod(proxy, method, args);
         }
-        return null;
+    }
+
+    @Nullable
+    private static Object resolveArgument(ClassLoader hostCl, String messageId,
+                                          @Nullable JSONObject argument) throws Exception {
+        if (argument == null) {
+            return INVALID_ARGUMENT;
+        }
+        switch (argument.optString("kind", "")) {
+            case "null": return null;
+            case "integer": return argument.optInt("value");
+            case "boolean": return argument.optBoolean("value");
+            case "string": return argument.optString("value", "");
+            case "callback":
+                Class<?> callbackInterface = configuredClass(
+                        hostCl, argument.optString("interface", ""));
+                String callbackMethod = argument.optString("method", "");
+                JSONObject behavior = new JSONObject().put(
+                        "action", argument.optString("action", ""));
+                if (callbackInterface == null || !callbackInterface.isInterface()
+                        || callbackMethod.isEmpty()) {
+                    return INVALID_ARGUMENT;
+                }
+                return Proxy.newProxyInstance(hostCl, new Class<?>[]{callbackInterface},
+                        (proxy, method, args) -> callbackMethod.equals(method.getName())
+                                ? invokeConfiguredBehavior(hostCl, messageId, proxy, method,
+                                        args, behavior)
+                                : objectMethod(proxy, method, args));
+            default: return INVALID_ARGUMENT;
+        }
+    }
+
+    private static boolean accepts(Class<?> parameterType, Object value) {
+        if (value == null) {
+            return !parameterType.isPrimitive();
+        }
+        if (!parameterType.isPrimitive()) {
+            return parameterType.isInstance(value);
+        }
+        return (parameterType == int.class && value instanceof Integer)
+                || (parameterType == boolean.class && value instanceof Boolean)
+                || (parameterType == long.class && value instanceof Long)
+                || (parameterType == float.class && value instanceof Float)
+                || (parameterType == double.class && value instanceof Double)
+                || (parameterType == short.class && value instanceof Short)
+                || (parameterType == byte.class && value instanceof Byte)
+                || (parameterType == char.class && value instanceof Character);
+    }
+
+    @Nullable
+    private static Class<?>[] configuredInterfaces(ClassLoader hostCl, @Nullable JSONArray names) {
+        if (names == null) {
+            return new Class<?>[0];
+        }
+        List<Class<?>> result = new ArrayList<>();
+        for (int i = 0; i < names.length(); i++) {
+            Class<?> type = configuredClass(hostCl, names.optString(i, ""));
+            if (type == null) {
+                return null;
+            }
+            result.add(type);
+        }
+        return result.toArray(new Class<?>[0]);
+    }
+
+    @Nullable
+    private static Class<?> resolveType(ClassLoader hostCl, String name) {
+        switch (name) {
+            case "boolean": return boolean.class;
+            case "byte": return byte.class;
+            case "char": return char.class;
+            case "short": return short.class;
+            case "int": return int.class;
+            case "long": return long.class;
+            case "float": return float.class;
+            case "double": return double.class;
+            default: return configuredClass(hostCl, name);
+        }
+    }
+
+    @Nullable
+    private static Class<?> configuredClass(ClassLoader hostCl, String name) {
+        return name.isEmpty() ? null : Reflect.loadClass(hostCl, name);
+    }
+
+    private static Object objectMethod(Object proxy, Method method, Object[] args) {
+        switch (method.getName()) {
+            case "hashCode": return System.identityHashCode(proxy);
+            case "equals": return args != null && args.length == 1 && proxy == args[0];
+            case "toString": return "ConfiguredIconClickSpan";
+            default: return null;
+        }
     }
 }

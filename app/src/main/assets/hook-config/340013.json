@@ -7,6 +7,10 @@
     "message.textConversion",
     "message.reply"
   ],
+  "iconClick": {
+    "enabled": false,
+    "reason": "The 340013 source available in this repository does not verify the host clickable-span interface or constructor protocol."
+  },
   "hooks": {
     "message.bind": {
       "target": {
@@ -115,6 +119,8 @@
     }
   },
   "members": {
+    "copyMethodPrefix": "copy",
+    "componentMethodPrefix": "component",
     "embedHolderViewField": "itemView",
     "embedMessageIdGetter": "getMessageId",
     "embedGetter": "getEmbed",
@@ -136,7 +142,23 @@
     "pollAnswersGetter": "getAnswers",
     "pollAnswerGetter": "getAnswer",
     "pollMediaGetter": "getPollMedia",
-    "pollMediaTextGetter": "getText"
+    "pollMediaTextGetter": "getText",
+    "getData": "getData",
+    "getQuestion": "getQuestion",
+    "getAnswers": "getAnswers",
+    "getAnswer": "getAnswer",
+    "getPollMedia": "getPollMedia",
+    "getText": "getText",
+    "getContent": "getContent",
+    "getItems": "getItems",
+    "getSurrogate": "getSurrogate",
+    "getAlt": "getAlt",
+    "getFooter": "getFooter",
+    "getDescription": "getDescription",
+    "getTitle": "getTitle",
+    "getFields": "getFields",
+    "getName": "getName",
+    "getValue": "getValue"
   },
   "accessors": {
     "RecyclerViewViewHolder": {

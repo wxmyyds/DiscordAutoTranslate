@@ -85,7 +85,7 @@ public final class MessageHooks {
 
     /** Establishes the content identity mapping from the configured model argument. */
     private static void bindPre(XposedInterface.Chain chain, JSONObject spec) {
-        int modelArgument = spec.optInt("modelArgument", 0);
+        int modelArgument = spec.optInt("modelArgument", -1);
         if (modelArgument < 0 || modelArgument >= chain.getArgs().size()) {
             return;
         }
@@ -93,8 +93,11 @@ public final class MessageHooks {
         if (model == null) {
             return;
         }
-        String idGetter = spec.optString("messageIdGetter", "getMessageId");
-        String contentGetter = spec.optString("contentGetter", "getContent");
+        String idGetter = spec.optString("messageIdGetter", null);
+        String contentGetter = spec.optString("contentGetter", null);
+        if (idGetter == null || contentGetter == null) {
+            return;
+        }
         String messageId = Reflect.callString(model, idGetter);
         Object content = Reflect.call(Reflect.findMethod(model.getClass(), contentGetter, 0), model);
         boolean validMessageId = messageId != null && HookBridge.looksLikeSnowflake(messageId);
@@ -229,8 +232,8 @@ public final class MessageHooks {
         }
         HookDiagnostics.infoOnce("message.textConversion.target", "message.textConversion target="
                 + conversionMethod.toGenericString());
-        int contentArgument = spec.optInt("contentArgument", 0);
-        int contextArgument = spec.optInt("contextArgument", 1);
+        int contentArgument = spec.optInt("contentArgument", -1);
+        int contextArgument = spec.optInt("contextArgument", -1);
 
         out.add(module.hook(conversionMethod)
                 .setId("dat.textConversion")
@@ -357,24 +360,28 @@ public final class MessageHooks {
 
     /** 前置：从配置指定的引用消息参数登记消息 ID 与正文身份映射。 */
     private static void replyPre(XposedInterface.Chain chain, JSONObject spec) {
-        int argument = spec.optInt("referencedMessageArgument", 0);
+        int argument = spec.optInt("referencedMessageArgument", -1);
         Object referenced = safeArg(chain, argument);
-        if (referenced == null || !Reflect.isInstanceOfName(referenced,
-                spec.optString("referencedMessageClass", ""))) {
+        String referencedClass = spec.optString("referencedMessageClass", null);
+        String referencedGetter = spec.optString("referencedMessageGetter", null);
+        String messageIdGetter = spec.optString("messageIdGetter", null);
+        String contentGetter = spec.optString("contentGetter", null);
+        if (referenced == null || referencedClass == null || referencedGetter == null
+                || messageIdGetter == null || contentGetter == null
+                || !Reflect.isInstanceOfName(referenced, referencedClass)) {
             return;
         }
         Object message = Reflect.call(Reflect.findMethod(referenced.getClass(),
-                spec.optString("referencedMessageGetter", "getMessage"), 0), referenced);
+                referencedGetter, 0), referenced);
         if (message == null) {
             return;
         }
-        String messageId = Reflect.callString(message,
-                spec.optString("messageIdGetter", "getId"));
+        String messageId = Reflect.callString(message, messageIdGetter);
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
         Object content = Reflect.call(Reflect.findMethod(message.getClass(),
-                spec.optString("contentGetter", "getContent"), 0), message);
+                contentGetter, 0), message);
         HookBridge.get().rememberContent(messageId, content);
 
         View replyText = replyTextViewOf(chain.getThisObject(), spec);
@@ -387,9 +394,9 @@ public final class MessageHooks {
     @Nullable
     private static View replyTextViewOf(@Nullable Object replyPreview, JSONObject spec) {
         Object binding = Reflect.getField(replyPreview,
-                spec.optString("bindingField", "binding"));
+                spec.optString("bindingField", null));
         Object replyText = Reflect.getField(binding,
-                spec.optString("textViewField", "replyText"));
+                spec.optString("textViewField", null));
         return asView(replyText);
     }
 
