@@ -63,6 +63,19 @@ public final class ModuleResources {
         sXposed = xposed;
     }
 
+    /** Emit hook diagnostics through LSPosed as well as Android logcat. */
+    public static void logDiagnostic(int priority, String message) {
+        XposedInterface xposed = sXposed;
+        if (xposed == null) {
+            return;
+        }
+        try {
+            xposed.log(priority, "DiscordAutoTranslate", message);
+        } catch (Throwable ignored) {
+            // Diagnostics must never alter the host's rendering or hook behavior.
+        }
+    }
+
     /** 热重载时清理缓存，避免旧代次持有旧 Drawable。 */
     public static void reset() {
         sXposed = null;
