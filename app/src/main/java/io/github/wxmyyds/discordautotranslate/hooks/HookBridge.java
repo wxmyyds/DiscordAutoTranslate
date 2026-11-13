@@ -347,6 +347,10 @@ public final class HookBridge {
             return;
         }
         String bound = messageIdOf(contentView);
+        HookDiagnostics.info("rerender queued targetValid="
+                + (contentView == null || messageId == null
+                || RerenderRegistry.stillBound(messageId, bound))
+                + " viewAttached=" + (contentView != null && contentView.isAttachedToWindow()));
         if (contentView != null && messageId != null && !RerenderRegistry.stillBound(messageId, bound)) {
             return;
         }
@@ -356,6 +360,9 @@ public final class HookBridge {
                     && !RerenderRegistry.stillBound(messageId, currentBound)) {
                 return;
             }
+            HookDiagnostics.info("rerender dispatched viewAttached="
+                    + (view != null && view.isAttachedToWindow())
+                    + " viewClass=" + (view == null ? "null" : view.getClass().getName()));
             invokeRerender(invocationTarget, contentView, messageId, method, args);
         };
         new Handler(Looper.getMainLooper()).post(task);
@@ -378,6 +385,9 @@ public final class HookBridge {
         } finally {
             RERENDERING.remove();
         }
+        HookDiagnostics.info("rerender method completed viewAttached="
+                + (view != null && view.isAttachedToWindow())
+                + " viewHeight=" + (view == null ? -1 : view.getHeight()));
         // 回复引用的调用目标是容器，真正需要重新绑定的是内部正文视图。
         RowRefresher.postInvalidateRow(this::messageIdOf, messageId, view);
     }

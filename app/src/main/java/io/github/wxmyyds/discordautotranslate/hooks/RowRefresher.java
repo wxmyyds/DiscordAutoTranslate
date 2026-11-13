@@ -243,14 +243,27 @@ final class RowRefresher {
             if (contentPosValue instanceof Integer) {
                 contentPosition = (Integer) contentPosValue;
             }
-            if (contentPosition >= 0
-                    && !notifyAdapterItemChanged(contentAdapter, contentPosition)) {
+            HookDiagnostics.info("row refresh started contentHeight=" + view.getHeight()
+                    + " contentMeasured=" + view.getMeasuredHeight()
+                    + " attached=" + view.isAttachedToWindow());
+            boolean contentNotified = contentPosition >= 0
+                    && notifyAdapterItemChanged(contentAdapter, contentPosition);
+            if (contentPosition >= 0 && !contentNotified) {
                 reportRowRefreshFailure("notifyContentItemChanged");
             }
-            if (!notifyAdapterItemChanged(rowAdapter, notifyPosition)) {
+            boolean rowNotified = notifyAdapterItemChanged(rowAdapter, notifyPosition);
+            if (!rowNotified) {
                 reportRowRefreshFailure("notifyRowItemChanged");
                 return false;
             }
+            HookDiagnostics.info("row refresh adapters notified content=" + contentNotified
+                    + " contentPosition=" + contentPosition
+                    + " rowPosition=" + notifyPosition);
+            messageRow.post(() -> HookDiagnostics.info("row refresh after layout"
+                    + " content=" + sizeOf(view)
+                    + " accessories=" + sizeOf(findAncestorView(view, MESSAGE_ACCESSORIES_VIEW_CLASS))
+                    + " row=" + sizeOf(messageRow)
+                    + " recycler=" + sizeOfViewParent(rowRecycler)));
             HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
                     "outer chat adapter notified; recyclerClass="
                             + rowRecycler.getClass().getName()
@@ -262,6 +275,16 @@ final class RowRefresher {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    private static String sizeOf(@Nullable View view) {
+        return view == null ? "missing" : view.getClass().getSimpleName()
+                + "{" + view.getHeight() + "/" + view.getMeasuredHeight() + "}";
+    }
+
+    private static String sizeOfViewParent(@Nullable android.view.ViewParent parent) {
+        return parent instanceof View ? sizeOf((View) parent)
+                : parent == null ? "missing" : parent.getClass().getSimpleName();
     }
 
     /**
