@@ -112,18 +112,14 @@ final class RowRefresher {
             return holder;
         }
         if (findContaining == null) {
-            reportRowRefreshFailure("findContainingViewHolderMethod");
-        } else {
             HookDiagnostics.infoOnce("rowRefresh.containmentScanFallback",
-                    "RecyclerView containment lookup returned no holder; scanning attached item views");
+                    "RecyclerView containment API unavailable; scanning attached item views");
         }
 
         Method childCountMethod = findRecyclerApiMethod(recycler.getClass(), "getChildCount");
         Method childAtMethod = findRecyclerApiMethod(recycler.getClass(), "getChildAt", int.class);
-        Method childHolderMethod = findRecyclerApiMethod(
-                recycler.getClass(), "getChildViewHolder", View.class);
         Object countValue = Reflect.call(childCountMethod, recycler);
-        if (!(countValue instanceof Integer) || childAtMethod == null || childHolderMethod == null) {
+        if (!(countValue instanceof Integer) || childAtMethod == null) {
             reportRowRefreshFailure("attachedChildScanMethods");
             return null;
         }
@@ -137,10 +133,12 @@ final class RowRefresher {
             if (!isDescendantOrSelf(view, itemView)) {
                 continue;
             }
-            Object childHolder = Reflect.call(childHolderMethod, recycler, itemView);
-            if (childHolder != null) {
-                HookDiagnostics.infoOnce("rowRefresh.containmentScanMatched",
-                        "RecyclerView attached item view scan found the owning holder");
+            Object layoutParams = itemView.getLayoutParams();
+            Object childHolder = Reflect.getField(layoutParams, "viewHolder");
+            if (childHolder != null
+                    && Reflect.getField(childHolder, "itemView") == itemView) {
+                HookDiagnostics.infoOnce("rowRefresh.layoutParamsHolderMatched",
+                        "RecyclerView item holder resolved from item layout params");
                 return childHolder;
             }
         }
@@ -222,9 +220,7 @@ final class RowRefresher {
             Object absolutePositionValue = Reflect.call(
                     findInheritedMethod(rowHolder.getClass(), "getAbsoluteAdapterPosition", 0),
                     rowHolder);
-            Object bindingAdapter = Reflect.call(
-                    findInheritedMethod(rowHolder.getClass(), "getBindingAdapter", 0),
-                    rowHolder);
+            Object bindingAdapter = Reflect.getField(rowHolder, "bindingAdapter");
             int bindingPosition = bindingPositionValue instanceof Integer
                     ? (Integer) bindingPositionValue : -1;
             int absolutePosition = absolutePositionValue instanceof Integer

@@ -93,7 +93,9 @@
     "ParagraphContentNode": "j7.g4",
     "EmphasisContentNode": "j7.g0",
     "BlockQuoteContentNode": "j7.f",
-    "UnderlineContentNode": "j7.k5"
+    "UnderlineContentNode": "j7.k5",
+    "RecyclerViewViewHolder": "k3.k1",
+    "RecyclerViewLayoutParams": "k3.u0"
   },
   "constructorFallbackTypes": [
     "StrongContentNode",
@@ -112,9 +114,20 @@
   "accessors": {
     "Message": {
       "getId": "getId-3Eiw7ao"
+    },
+    "RecyclerViewViewHolder": {
+      "getBindingAdapterPosition": "f",
+      "getAbsoluteAdapterPosition": "e"
     }
   },
   "fields": {
+    "RecyclerViewViewHolder": {
+      "itemView": "a",
+      "bindingAdapter": "s"
+    },
+    "RecyclerViewLayoutParams": {
+      "viewHolder": "d"
+    },
     "PrimitiveStructurableText": {
       "getContent": "a"
     },
