@@ -171,6 +171,19 @@ public class InlineIconGeometryTest {
     }
 
     @Test
+    public void clickRangeCoversClickLeadWithoutTouchingPreviousText() {
+        // Injector appends CLICK_LEAD at 100 and the icon placeholder at 101.
+        // Pass the placeholder index; expansion covers the lead but not original text at 99.
+        int clickLeadStart = 100;
+        int iconStart = 101;
+        int iconEnd = 102;
+        int[] range = InlineIconGeometry.clickRange(iconStart, iconEnd);
+        assertEquals(clickLeadStart, range[0]);
+        assertTrue("preceding original character must not be clickable", range[0] > 99);
+        assertEquals(iconEnd, range[1]);
+    }
+
+    @Test
     public void clickRangeCoversBothOffsetsSeenOnDevice() {
         // 设备日志里出现过的两种解析结果都必须能命中：
         //   off = iconStart - 1 → 失败样本（154 / 322）

@@ -156,10 +156,9 @@ public final class InlineIconInjector {
 
             Object clickSpan = IconClickSpanFactory.create(hostCl, messageId);
             if (clickSpan != null) {
-                // 点击 span 必须比图标往前多覆盖一个字符，否则手指落在图标靠左部分时
-                // 宿主算出的 offset 是图标前一格，getSpans 取不到任何 span，
-                // 最终退化为消息点击（详见 InlineIconGeometry.clickRange）。
-                int[] click = InlineIconGeometry.clickRange(leadStart, end);
+                // start 是图标占位符下标；clickRange 再向前覆盖 CLICK_LEAD，不能传 leadStart，
+                // 否则会再多退一格，把正文最后一个字符也包进 ClickableSpan 并染成链接紫色。
+                int[] click = InlineIconGeometry.clickRange(start, end);
                 ssb.setSpan(clickSpan, click[0], click[1], Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
             // 启动/续接旋转动画（仅翻译中状态）。
