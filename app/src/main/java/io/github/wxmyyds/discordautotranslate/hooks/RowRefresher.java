@@ -264,8 +264,8 @@ final class RowRefresher {
             HookDiagnostics.info("row refresh adapters notified content=" + contentNotified
                     + " contentPosition=" + contentPosition
                     + " rowPosition=" + notifyPosition);
-            postRecyclerState(contentRecycler, "content");
-            postRecyclerState(rowRecycler, "outer");
+            postRecyclerState(contentRecycler, "content", view, messageRow);
+            postRecyclerState(rowRecycler, "outer", view, messageRow);
             messageRow.post(() -> HookDiagnostics.info("row refresh after layout"
                     + " content=" + sizeOf(view)
                     + " accessories=" + sizeOf(findAncestorView(view, MESSAGE_ACCESSORIES_VIEW_CLASS))
@@ -284,7 +284,8 @@ final class RowRefresher {
         }
     }
 
-    private static void postRecyclerState(android.view.ViewParent recycler, String label) {
+    private static void postRecyclerState(android.view.ViewParent recycler, String label,
+                                          View contentView, View messageRow) {
         if (!(recycler instanceof View)) {
             return;
         }
@@ -292,6 +293,25 @@ final class RowRefresher {
         recyclerView.postOnAnimation(() -> HookDiagnostics.info(
                 "row refresh recycler state next frame " + label + "="
                         + recyclerState(recycler)));
+        android.view.ViewTreeObserver observer = recyclerView.getViewTreeObserver();
+        if (!observer.isAlive()) {
+            return;
+        }
+        android.view.ViewTreeObserver.OnPreDrawListener listener =
+                new android.view.ViewTreeObserver.OnPreDrawListener() {
+                    @Override
+                    public boolean onPreDraw() {
+                        if (observer.isAlive()) {
+                            observer.removeOnPreDrawListener(this);
+                        }
+                        HookDiagnostics.info("row refresh recycler state pre-draw " + label + "="
+                                + recyclerState(recycler)
+                                + " content=" + sizeOf(contentView)
+                                + " row=" + sizeOf(messageRow));
+                        return true;
+                    }
+                };
+        observer.addOnPreDrawListener(listener);
     }
 
     private static String recyclerState(android.view.ViewParent recycler) {
