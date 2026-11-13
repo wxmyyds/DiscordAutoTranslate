@@ -54,15 +54,8 @@ final class RowRefresher {
                 return;
             }
             PENDING_ROW_REFRESH.remove(key);
-            boolean rowNotified = invalidateRow(lookup, messageId, view);
+            invalidateRow(lookup, messageId, view);
             requestLayoutChain(view);
-            if (!rowNotified) {
-                // Adapter/holder lookup is version-dependent. A failed lookup must not
-                // leave a shorter replacement text at the old measured height.
-                HookDiagnostics.infoOnce("rowRefresh.directRelayoutFallback",
-                        "row adapter refresh unavailable; applying direct content relayout");
-                scheduleRelayoutAfterLayout(view);
-            }
         });
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
@@ -203,14 +196,17 @@ final class RowRefresher {
             }
             Object contentAdapter = Reflect.call(
                     findInheritedMethod(contentRecycler.getClass(), "getAdapter", 0), contentRecycler);
-            android.view.ViewParent rowRecycler = findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS);
-            if (contentAdapter == null || rowRecycler == null) {
-                reportRowRefreshFailure(contentAdapter == null ? "contentAdapter" : "chatListAncestor");
+            View messageRow = findAncestorView(view, MESSAGE_VIEW_CLASS);
+            android.view.ViewParent rowRecycler = messageRow == null
+                    ? null : findRecyclerView(messageRow);
+            if (contentAdapter == null || rowRecycler == null || messageRow == null) {
+                reportRowRefreshFailure(contentAdapter == null ? "contentAdapter"
+                        : messageRow == null ? "messageRow" : "outerRecycler");
                 return false;
             }
             Object rowAdapter = Reflect.call(
                     findInheritedMethod(rowRecycler.getClass(), "getAdapter", 0), rowRecycler);
-            Object rowHolder = findContainingViewHolder(rowRecycler, view);
+            Object rowHolder = findContainingViewHolder(rowRecycler, messageRow);
             if (rowAdapter == null || rowHolder == null) {
                 reportRowRefreshFailure(rowAdapter == null ? "rowAdapter" : "rowHolder");
                 return false;
@@ -269,11 +265,12 @@ final class RowRefresher {
             try {
                 notifyItemChanged.invoke(rowAdapter, notifyPosition);
                 HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
-                        "outer chat adapter notified; bindingPosition=" + bindingPosition
+                        "outer chat adapter notified; recyclerClass="
+                                + rowRecycler.getClass().getName()
+                                + " bindingPosition=" + bindingPosition
                                 + " absolutePosition=" + absolutePosition
                                 + " notifyPosition=" + notifyPosition);
-                // 不做同步重绑，避免直接重跑宿主绑定管线。
-                scheduleRelayoutAfterLayout(view);
+                requestLayoutChain(messageRow);
                 return true;
             } catch (Throwable t) {
                 reportRowRefreshFailure("notifyItemChangedInvocation");
@@ -308,13 +305,14 @@ final class RowRefresher {
                             v = parent instanceof View ? (View) parent : null;
                         }
                         requestLayoutChain(view);
-                        forceRelayoutAncestor(view, CHAT_LIST_VIEW_CLASS);
                         relayoutContentSelf(view);
                         relayoutNamedAncestor(view, MESSAGE_ACCESSORIES_VIEW_CLASS);
                         relayoutNamedAncestor(view, MESSAGE_VIEW_CLASS);
                         view.invalidate();
                         dispatchRecyclerLayout(findRecyclerView(view));
-                        dispatchRecyclerLayout(findAncestorByClassName(view, CHAT_LIST_VIEW_CLASS));
+                        View messageRow = findAncestorView(view, MESSAGE_VIEW_CLASS);
+                        dispatchRecyclerLayout(messageRow == null
+                                ? null : findRecyclerView(messageRow));
                     } catch (Throwable ignored) {
                         // 布局派发失败可忽略。
                     }
@@ -373,19 +371,6 @@ final class RowRefresher {
         return null;
     }
 
-    /** Finds an ancestor RecyclerView by its concrete host class name. */
-    @Nullable
-    private static android.view.ViewParent findAncestorByClassName(View view, String className) {
-        android.view.ViewParent parent = view.getParent();
-        for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent != null; depth++) {
-            if (Reflect.isInstanceOfName(parent, className)) {
-                return parent;
-            }
-            parent = parent.getParent();
-        }
-        return null;
-    }
-
     /**
      * 对视图及其父链请求重新布局。
      *
@@ -405,28 +390,6 @@ final class RowRefresher {
      *
      * <p>深度上有界（{@link #RELAYOUT_MAX_DEPTH}），避免无界传播。</p>
      */
-    /** Requests a relayout on the specified ancestor. */
-    private static boolean forceRelayoutAncestor(@Nullable View view, String className) {
-        if (view == null) {
-            return false;
-        }
-        try {
-            android.view.ViewParent parent = view.getParent();
-            for (int depth = 0; depth < RELAYOUT_MAX_DEPTH && parent instanceof View; depth++) {
-                View parentView = (View) parent;
-                if (Reflect.isInstanceOfName(parentView, className)) {
-                    parentView.forceLayout();
-                    parentView.requestLayout();
-                    return true;
-                }
-                parent = parent.getParent();
-            }
-        } catch (Throwable ignored) {
-            // 已尽力向上查找，失败按 false 处理。
-        }
-        return false;
-    }
-
     /**
      * 让内容视图按自身当前文本重新测量并布局，不依赖父级 RecyclerView。
      *
@@ -565,8 +528,6 @@ final class RowRefresher {
 
     private static final String MESSAGE_ACCESSORIES_VIEW_CLASS =
             "com.discord.chat.presentation.message.MessageAccessoriesView";
-    private static final String CHAT_LIST_VIEW_CLASS =
-            "com.discord.chat.presentation.list.ChatListView";
     private static final String MESSAGE_VIEW_CLASS =
             "com.discord.chat.presentation.message.MessageView";
 

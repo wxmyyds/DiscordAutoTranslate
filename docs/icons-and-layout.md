@@ -29,19 +29,14 @@
 2. 旧 `RerenderRegistry.rerender` 把「绑定未知」当作「已复用」永久删除目标，长列表滚动（LRU 512）后旧条目被淘汰，消息不再刷新；
 3. 宿主刷新单行只走 `notifyItemChanged`，且 `MessageContentViewHolder.bind` 有内容相等早退，正文渲染与文本转换不再执行。
 
-352017 使用 profile 中声明的静态正文渲染方法；其重渲染参数由配置提供。
+352017 使用 profile 中声明的静态正文渲染方法；其重渲染参数由配置提供。其外层列表由 `ChatListViewManager.createViewInstance` 创建为混淆类 `f9.g0`，不是 `com.discord.chat.presentation.list.ChatListView`。因此刷新时应从 `MessageView` 向上查找其最近的外层 RecyclerView，而不能依赖未实际存在的类名。
 
-修复：
+修复路径：
 
 - `HookBridge.requestRerender` 统一投递到主线程消息队列，把执行移出宿主布局遍历；
   执行前用 `RerenderRegistry.stillBound(expected, actual)` 再校验一次视图绑定，
   仅确认绑定到其他消息才拒绝执行。
-- 重渲染成功后：`forceLayout()` + `requestLayout()` + `invalidate()`，并从正文
-  视图沿父链传播布局请求；适配器通知成功时再强制重测正文及外层行。
-- 若无法解析版本对应的 RecyclerView/holder/adapter 链，执行直接内容视图重测作为
-  fallback，避免只更新文本却保留旧高度；诊断日志只记录是否进入该 fallback。
+- 重渲染后沿真实视图层级找到 `MessageView` 所在的外层 RecyclerView，取得对应 holder 与 adapter，并通知该行刷新；不以对子视图执行 `UNSPECIFIED` 测量和手动 `layout()` 代替 RecyclerView 的行测量。
 - AndroidX RecyclerView/ViewGroup 的公共继承 API 用 `Class.getMethod` 查找；Android
   运行时的 `getDeclaredMethods()` 可能不列出父类 Framework 方法，不能拿它们做这类 API 查找。
-- 对承载该消息的 `RecyclerView` 调用 `notifyItemChanged(bindingAdapterPosition)`
-  （宿主自身刷新单行的方式）；因渲染漏斗运行在宿主布局过程内，投递到下一轮
-  消息队列，并按消息 ID 同一帧去重，避免重入布局抛异常。
+- 行刷新通知延迟到主线程布局遍历结束后执行，并按消息 ID 同一帧去重，避免重入布局抛异常。
