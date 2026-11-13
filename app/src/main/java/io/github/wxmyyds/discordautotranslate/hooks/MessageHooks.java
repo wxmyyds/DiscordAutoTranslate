@@ -339,25 +339,6 @@ public final class MessageHooks {
         installedHookIds.add("message.reply");
     }
 
-    /** 后置：登记回复引用的重渲染目标，使译文完成后引用内也能更新。 */
-    private static void replyPost(XposedInterface.Chain chain, Method replyBind,
-                                  JSONObject spec) {
-        Object preview = chain.getThisObject();
-        if (preview == null) {
-            return;
-        }
-        View replyText = replyTextViewOf(preview, spec);
-        if (replyText == null) {
-            return;
-        }
-        String messageId = HookBridge.get().messageIdOf(replyText);
-        if (messageId == null) {
-            return;
-        }
-        RerenderRegistry.register(messageId, replyText, preview,
-                replyBind, chain.getArgs().toArray());
-    }
-
     /** 前置：从配置指定的引用消息参数或消息模型中登记消息 ID 与正文身份映射。 */
     private static void replyPre(XposedInterface.Chain chain, JSONObject spec) {
         Object message = referencedMessage(chain, spec);
