@@ -37,8 +37,9 @@
   执行前用 `RerenderRegistry.stillBound(expected, actual)` 再校验一次视图绑定，
   仅确认绑定到其他消息才拒绝执行。
 - 重渲染成功后：`forceLayout()` + `requestLayout()` + `invalidate()`，并从正文
-  视图沿父链向上刷新最多 3 层（行高由父容器测量决定，只对 TextView
-  requestLayout 不足以重测）。
+  视图沿父链传播布局请求；适配器通知成功时再强制重测正文及外层行。
+- 若无法解析版本对应的 RecyclerView/holder/adapter 链，执行直接内容视图重测作为
+  fallback，避免只更新文本却保留旧高度；诊断日志只记录是否进入该 fallback。
 - 对承载该消息的 `RecyclerView` 调用 `notifyItemChanged(bindingAdapterPosition)`
   （宿主自身刷新单行的方式）；因渲染漏斗运行在宿主布局过程内，投递到下一轮
   消息队列，并按消息 ID 同一帧去重，避免重入布局抛异常。

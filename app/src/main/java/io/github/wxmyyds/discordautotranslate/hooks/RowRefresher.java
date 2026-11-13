@@ -54,8 +54,15 @@ final class RowRefresher {
                 return;
             }
             PENDING_ROW_REFRESH.remove(key);
-            invalidateRow(lookup, messageId, view);
+            boolean rowNotified = invalidateRow(lookup, messageId, view);
             requestLayoutChain(view);
+            if (!rowNotified) {
+                // Adapter/holder lookup is version-dependent. A failed lookup must not
+                // leave a shorter replacement text at the old measured height.
+                HookDiagnostics.infoOnce("rowRefresh.directRelayoutFallback",
+                        "row adapter refresh unavailable; applying direct content relayout");
+                scheduleRelayoutAfterLayout(view);
+            }
         });
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
