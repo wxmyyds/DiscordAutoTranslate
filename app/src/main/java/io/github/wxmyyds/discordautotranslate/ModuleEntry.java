@@ -60,11 +60,20 @@ public class ModuleEntry extends XposedModule {
     private volatile boolean bootstrapInstalled;
     private volatile HookConfiguration hookConfiguration;
 
+    private void diagnosticInfo(String message) {
+        android.util.Log.i("DiscordAutoTranslate", message);
+        try {
+            log(android.util.Log.INFO, "DiscordAutoTranslate", message);
+        } catch (Throwable ignored) {
+            // The framework log is supplemental; Android log remains available.
+        }
+    }
+
     // ------------------------------------------------------------ 生命周期
 
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
-        android.util.Log.i("DiscordAutoTranslate", "onModuleLoaded lifecycle callback received");
+        diagnosticInfo("onModuleLoaded lifecycle callback received");
         ModuleResources.attach(this);
         // 目标进程才需要初始化；其他进程立即停止接收回调，减少无谓开销。
         if (param.isSystemServer()) {
@@ -77,7 +86,7 @@ public class ModuleEntry extends XposedModule {
         if (!TARGET_PACKAGE.equals(param.getPackageName())) {
             return;
         }
-        android.util.Log.i("DiscordAutoTranslate", "onPackageReady received for Discord");
+        diagnosticInfo("onPackageReady received for Discord");
         if (installed || bootstrapInstalled) {
             // 防止重复注册启动钩子。
             return;
@@ -194,8 +203,7 @@ public class ModuleEntry extends XposedModule {
                             if (contextObject instanceof Context) {
                                 Context context = (Context) contextObject;
                                 if (TARGET_PACKAGE.equals(context.getPackageName())) {
-                                    android.util.Log.i("DiscordAutoTranslate",
-                                            "Application.attach reached for Discord");
+                                    diagnosticInfo("Application.attach reached for Discord");
                                     installForApplication(context, context.getClassLoader());
                                 }
                             }
@@ -207,7 +215,7 @@ public class ModuleEntry extends XposedModule {
                     });
             hooks.add(handle);
             bootstrapInstalled = true;
-            android.util.Log.i("DiscordAutoTranslate", "Application.attach bootstrap hook installed");
+            diagnosticInfo("Application.attach bootstrap hook installed");
         } catch (Throwable t) {
             android.util.Log.e("DiscordAutoTranslate", "failed to install app bootstrap hook", t);
             installed = false;
@@ -222,8 +230,7 @@ public class ModuleEntry extends XposedModule {
             PackageInfo packageInfo = context.getPackageManager().getPackageInfo(
                     TARGET_PACKAGE, 0);
             int versionCode = packageInfo.versionCode;
-            android.util.Log.i("DiscordAutoTranslate", "selecting hook profile for versionCode="
-                    + versionCode);
+            diagnosticInfo("selecting hook profile for versionCode=" + versionCode);
             HookConfiguration config = HookConfigurationLoader.load(context, versionCode);
             if (config == null) {
                 android.util.Log.w("DiscordAutoTranslate",
@@ -265,8 +272,8 @@ public class ModuleEntry extends XposedModule {
         hooks.addAll(created);
         hooks.addAll(EmbedHooks.install(this, cl, config));
         hooks.addAll(PollHooks.install(this, cl, config));
-        android.util.Log.i("DiscordAutoTranslate", "installed hook profile versionCode="
-                + config.versionCode() + " requiredHookIds=" + installedMessageHookIds);
+        diagnosticInfo("installed hook profile versionCode=" + config.versionCode()
+                + " requiredHookIds=" + installedMessageHookIds);
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
