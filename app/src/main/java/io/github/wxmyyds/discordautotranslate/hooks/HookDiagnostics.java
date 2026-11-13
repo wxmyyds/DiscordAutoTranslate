@@ -14,6 +14,11 @@ public final class HookDiagnostics {
     private HookDiagnostics() {
     }
 
+    public static void info(String message) {
+        Log.i("DiscordAutoTranslate", message);
+        ModuleResources.logDiagnostic(Log.INFO, message);
+    }
+
     public static void infoOnce(String key, String message) {
         if (REPORTED.add(key)) {
             Log.i("DiscordAutoTranslate", message);

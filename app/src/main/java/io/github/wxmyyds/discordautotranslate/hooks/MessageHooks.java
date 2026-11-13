@@ -265,8 +265,13 @@ public final class MessageHooks {
                                 Object replacement = StructurableTextFactory
                                         .forTranslation(source, translated);
                                 if (replacement != null) {
-                                renderArgs[contentArgument] = replacement;
+                                    HookDiagnostics.info("message translation replacement applied"
+                                            + " sourceClass=" + source.getClass().getName()
+                                            + " replacementClass=" + replacement.getClass().getName());
+                                    renderArgs[contentArgument] = replacement;
                                 } else {
+                                    HookDiagnostics.info("message translation replacement rejected"
+                                            + " sourceClass=" + source.getClass().getName());
                                     HookBridge.get().onTranslationRenderRejected(
                                             messageId, translated);
                                 }

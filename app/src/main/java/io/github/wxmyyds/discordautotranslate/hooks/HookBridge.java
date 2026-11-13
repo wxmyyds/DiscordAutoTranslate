@@ -497,8 +497,12 @@ public final class HookBridge {
     /** 翻译结果回写（主线程）。 */
     private void onTranslateResult(String id, boolean accepted,
                                    @Nullable String translated, @Nullable Throwable error) {
+        HookDiagnostics.info("translation result received accepted=" + accepted
+                + " translatedPresent=" + (translated != null && !translated.isEmpty())
+                + " errorClass=" + (error == null ? "none" : error.getClass().getSimpleName()));
         StateStore.Entry cur = StateStore.get().peek(id);
         if (cur == null) {
+            HookDiagnostics.info("translation result ignored reason=missingState");
             return;
         }
         if (!accepted) {
