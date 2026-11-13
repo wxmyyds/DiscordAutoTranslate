@@ -709,7 +709,6 @@ final class RowRefresher {
         }
     }
 
-    private static final int RELAYOUT_MAX_DEPTH = 32;
     /**
      * 父链传播的最大深度。
      *
