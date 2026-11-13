@@ -436,10 +436,7 @@ public final class PollHooks {
         if (node == null) {
             return null;
         }
-        HookConfiguration configuration = HookConfiguration.activeConfiguration();
-        String prefix = configuration == null ? null
-                : configuration.string("members", "copyMethodPrefix");
-        Method copy = findPrefixMethod(node.getClass(), prefix, 1);
+        Method copy = findPrefixMethod(node.getClass(), "copy", 1);
         if (copy == null) {
             return null;
         }
@@ -463,8 +460,7 @@ public final class PollHooks {
 
     /** 按名字前缀查找方法（参数个数下限、排除 {@code $} 合成方法）。 */
     @Nullable
-    private static Method findPrefixMethod(Class<?> cls, @Nullable String prefix, int minParams) {
-        if (prefix == null || prefix.isEmpty()) return null;
+    private static Method findPrefixMethod(Class<?> cls, String prefix, int minParams) {
         for (Method m : cls.getDeclaredMethods()) {
             if (!m.getName().startsWith(prefix) || m.getName().contains("$")) {
                 continue;
@@ -481,11 +477,7 @@ public final class PollHooks {
     /** 取第 n 个组件（componentN）。 */
     @Nullable
     private static Object callComponent(Object node, int n) {
-        HookConfiguration configuration = HookConfiguration.activeConfiguration();
-        String prefix = configuration == null ? null
-                : configuration.string("members", "componentMethodPrefix");
-        if (prefix == null || prefix.isEmpty()) return null;
-        String expectedName = prefix + n;
+        String expectedName = "component" + n;
         for (Method method : node.getClass().getDeclaredMethods()) {
             if (method.getParameterCount() == 0 && method.getName().equals(expectedName)) {
                 method.setAccessible(true);

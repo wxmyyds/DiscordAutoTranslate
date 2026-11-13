@@ -105,10 +105,6 @@
       "reason": "352017 poll binding target has not been verified."
     }
   },
-  "members": {
-    "copyMethodPrefix": "copy",
-    "componentMethodPrefix": "component"
-  },
   "types": {
     "StructurableText": "l8.h",
     "PrimitiveStructurableText": "l8.e",

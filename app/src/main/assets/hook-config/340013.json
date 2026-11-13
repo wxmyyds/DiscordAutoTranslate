@@ -119,8 +119,6 @@
     }
   },
   "members": {
-    "copyMethodPrefix": "copy",
-    "componentMethodPrefix": "component",
     "embedHolderViewField": "itemView",
     "embedMessageIdGetter": "getMessageId",
     "embedGetter": "getEmbed",
