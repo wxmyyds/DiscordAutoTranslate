@@ -74,6 +74,18 @@ public class HookConfigurationTest {
     }
 
     @Test
+    public void configuredAccessorDoesNotFallThroughToField() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
+                + "\"hooks\":{},\"types\":{\"TextContentNode\":\""
+                + FieldOnlyFixture.class.getName() + "\"},\"accessors\":{"
+                + "\"TextContentNode\":{\"getContent\":\"missingGetter\"}},\"fields\":{"
+                + "\"TextContentNode\":{\"getContent\":\"a\"}}}";
+        HookConfiguration.activate(HookConfiguration.parse(json, 352017));
+
+        assertNull(Reflect.callString(new FieldOnlyFixture(), "getContent"));
+    }
+
+    @Test
     public void rejectsWrongVersionAndDisabledHook() throws Exception {
         String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
                 + "\"requiredHooks\":[\"reply\"],\"hooks\":{\"reply\":{\"enabled\":false}}}";

@@ -144,35 +144,53 @@ public final class Reflect {
         }
     }
 
-    /** Invoke a getter or read the configured backing field for version-obfuscated models. */
+    /** Invoke the profile-selected accessor or read the profile-selected field; never try both. */
     @Nullable
     public static Object callMember(@Nullable Object target, String memberName) {
         if (target == null) {
             return null;
         }
-        Method getter = findMethod(target.getClass(), memberName, 0);
-        if (getter != null) {
-            return call(getter, target);
-        }
         HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        if (configuration == null) {
+            return call(findMethod(target.getClass(), memberName, 0), target);
+        }
         String semanticType = HookConfiguration.semanticTypeName(target.getClass());
-        String configuredField = configuration == null
-                ? null : configuration.fieldName(semanticType, memberName);
-        return configuredField == null ? null : getField(target, configuredField);
+        String accessor = configuredAccessor(configuration, semanticType, memberName);
+        if (accessor != null) {
+            return call(findMethod(target.getClass(), accessor, 0), target);
+        }
+        String field = configuration.fieldName(semanticType, memberName);
+        return field == null ? null : getField(target, field);
     }
 
-    /** 安全读取 String getter；目标版本混淆 getter 时回退到内容字段。 */
+    /** Read the profile-selected String accessor or field without runtime path switching. */
     @Nullable
     public static String callString(@Nullable Object target, String namePrefix) {
         if (target == null) {
             return null;
         }
-        Method m = findStringGetter(target.getClass(), namePrefix);
-        Object value = call(m, target);
-        if (!(value instanceof String)) {
-            value = callMember(target, namePrefix);
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        if (configuration == null) {
+            Object value = call(findStringGetter(target.getClass(), namePrefix), target);
+            return value instanceof String ? (String) value : null;
         }
+        String semanticType = HookConfiguration.semanticTypeName(target.getClass());
+        String accessor = configuredAccessor(configuration, semanticType, namePrefix);
+        if (accessor != null) {
+            Object value = call(findStringGetter(target.getClass(), accessor), target);
+            return value instanceof String ? (String) value : null;
+        }
+        String field = configuration.fieldName(semanticType, namePrefix);
+        Object value = field == null ? null : getField(target, field);
         return value instanceof String ? (String) value : null;
+    }
+
+    @Nullable
+    private static String configuredAccessor(HookConfiguration configuration,
+                                            String semanticType, String accessor) {
+        String mapped = configuration.accessorName(semanticType, accessor);
+        return mapped != null && !mapped.isEmpty()
+                ? mapped : configuration.string("members", accessor);
     }
 
 
