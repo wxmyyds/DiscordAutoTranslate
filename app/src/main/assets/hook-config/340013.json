@@ -164,9 +164,7 @@
     "RecyclerView": {
       "isComputingLayout": "isComputingLayout",
       "consumePendingUpdates": "consumePendingUpdateOperations",
-      "dispatchLayout": "dispatchLayout",
       "getAdapter": "getAdapter",
-      "findContainingViewHolder": "findContainingViewHolder",
       "getChildCount": "getChildCount",
       "getChildAt": "getChildAt"
     }

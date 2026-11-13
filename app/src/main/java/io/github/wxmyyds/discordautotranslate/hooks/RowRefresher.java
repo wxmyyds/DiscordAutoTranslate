@@ -56,7 +56,6 @@ final class RowRefresher {
             }
             PENDING_ROW_REFRESH.remove(key);
             invalidateRow(lookup, messageId, view);
-            requestLayoutChain(view);
         });
         if (!posted) {
             PENDING_ROW_REFRESH.remove(key);
@@ -68,16 +67,9 @@ final class RowRefresher {
     private static final java.util.Set<String> PENDING_ROW_REFRESH =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
-    /** Resolve content ownership through configured holder fields or the item-view hierarchy. */
+    /** A content view belongs to the attached item whose configured itemView contains it. */
     private static boolean ownsContentView(Object holder, View view) {
-        HookConfiguration config = HookConfiguration.activeConfiguration();
-        if (config == null) return false;
-        for (String semanticType : new String[]{"MessageContentViewHolder", "EmbedViewHolder",
-                "PostPreviewEmbedViewHolder", "PollViewHolder"}) {
-            String fieldName = config.fieldName(semanticType, "contentView");
-            if (fieldName != null && Reflect.getField(holder, fieldName) == view) return true;
-        }
-        String itemViewField = config.fieldName("RecyclerViewViewHolder", "itemView");
+        String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
         Object itemView = itemViewField == null ? null : Reflect.getField(holder, itemViewField);
         return itemView instanceof View && isDescendantOrSelf(view, (View) itemView);
     }
@@ -92,40 +84,25 @@ final class RowRefresher {
         }
     }
 
-    /** Resolve a holder through RecyclerView's API, then inspect attached rows if it misses. */
+    /** Locate the attached item that owns the content view and read its holder from LayoutParams. */
     @Nullable
     private static Object findContainingViewHolder(android.view.ViewParent recycler, View view) {
-        Method findContaining = recyclerAccessor(recycler, "findContainingViewHolder", View.class);
-        Object holder = Reflect.call(findContaining, recycler, view);
-        if (holder != null) {
-            HookDiagnostics.infoOnce("rowRefresh.holderResolvedByRecyclerApi",
-                    "content holder resolved by RecyclerView containment API");
-            return holder;
-        }
-
         Method childCountMethod = recyclerAccessor(recycler, "getChildCount");
         Method childAtMethod = recyclerAccessor(recycler, "getChildAt", int.class);
         Object countValue = Reflect.call(childCountMethod, recycler);
         if (!(countValue instanceof Integer) || childAtMethod == null) {
-            reportRowRefreshFailure("attachedChildScanMethods");
+            reportRowRefreshFailure("contentChildren");
             return null;
         }
         int count = (Integer) countValue;
         for (int i = 0; i < count; i++) {
-            Object childObject = Reflect.call(childAtMethod, recycler, i);
-            if (!(childObject instanceof View)) continue;
-            View itemView = (View) childObject;
-            if (!isDescendantOrSelf(view, itemView)) continue;
-            Object childHolder = holderFromItemView(itemView);
-            String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
-            if (childHolder != null && itemViewField != null
-                    && Reflect.getField(childHolder, itemViewField) == itemView) {
-                HookDiagnostics.infoOnce("rowRefresh.holderResolvedByAttachedChild",
-                        "content holder resolved by attached RecyclerView child");
-                return childHolder;
+            Object child = Reflect.call(childAtMethod, recycler, i);
+            if (!(child instanceof View) || !isDescendantOrSelf(view, (View) child)) {
+                continue;
             }
+            return holderFromItemView((View) child);
         }
-        reportRowRefreshFailure("attachedChildScanNoMatch");
+        reportRowRefreshFailure("contentItemView");
         return null;
     }
 
@@ -344,48 +321,6 @@ final class RowRefresher {
                 : parent == null ? "missing" : parent.getClass().getSimpleName();
     }
 
-    /**
-     * 把一次强制重新测量推到当前帧布局结束之后。
-     *
-     * <p>{@code View.post()} defers the request until the current host layout pass ends.</p>
-     */
-    private static void scheduleRelayoutAfterLayout(@Nullable final View view) {
-        if (view == null) {
-            return;
-        }
-        try {
-            view.post(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        if (!view.isAttachedToWindow()) {
-                            return;
-                        }
-                        // 布局已结束，此时 requestLayout 不会被丢弃。
-                        for (View v = view; v != null; ) {
-                            v.forceLayout();
-                            android.view.ViewParent parent = v.getParent();
-                            v = parent instanceof View ? (View) parent : null;
-                        }
-                        requestLayoutChain(view);
-                        relayoutContentSelf(view);
-                        relayoutNamedAncestor(view, configuredType("MessageAccessoriesView"));
-                        relayoutNamedAncestor(view, configuredType("MessageView"));
-                        view.invalidate();
-                        dispatchRecyclerLayout(findRecyclerView(view));
-                        View messageRow = findAncestorView(view, configuredType("MessageView"));
-                        dispatchRecyclerLayout(messageRow == null
-                                ? null : findRecyclerView(messageRow));
-                    } catch (Throwable ignored) {
-                        // 布局派发失败可忽略。
-                    }
-                }
-            });
-        } catch (Throwable ignored) {
-            // 投递重渲染失败不影响宿主。
-        }
-    }
-
     private static boolean notifyAdapterItemChanged(Object adapter, int position) {
         String observableField = configuredField("RecyclerViewAdapter", "observable");
         String notifyName = configuredAccessor("RecyclerViewAdapterObservable", "notifyItemChanged");
@@ -528,83 +463,6 @@ final class RowRefresher {
      *
      * <p>深度上有界（{@link #RELAYOUT_MAX_DEPTH}），避免无界传播。</p>
      */
-    /**
-     * 让内容视图按自身当前文本重新测量并布局，不依赖父级 RecyclerView。
-     *
-     * <p>Use the current measured width and an {@link View.MeasureSpec#UNSPECIFIED}
-     * height so the new text can determine the content view's required height.</p>
-     *
-     * <p>只改这个子视图自身的尺寸，不改任何数据或文本内容。</p>
-     */
-    private static void relayoutContentSelf(@Nullable View view) {
-        if (view == null || !view.isAttachedToWindow()) {
-            return;
-        }
-        try {
-            int width = view.getWidth();
-            if (width <= 0) {
-                width = view.getMeasuredWidth();
-            }
-            if (width <= 0) {
-                return;
-            }
-            int widthSpec = View.MeasureSpec.makeMeasureSpec(
-                    width, View.MeasureSpec.EXACTLY);
-            int heightSpec = View.MeasureSpec.makeMeasureSpec(
-                    0, View.MeasureSpec.UNSPECIFIED);
-            view.forceLayout();
-            view.measure(widthSpec, heightSpec);
-            int newHeight = view.getMeasuredHeight();
-            int oldHeight = view.getHeight();
-            if (newHeight > 0 && newHeight != oldHeight) {
-                view.layout(view.getLeft(), view.getTop(),
-                        view.getLeft() + width, view.getTop() + newHeight);
-            }
-            // 父级（内层 RecyclerView）自身高度也需跟着收缩，否则空白还在。
-            android.view.ViewParent parent = view.getParent();
-            if (parent instanceof View) {
-                View parentView = (View) parent;
-                parentView.forceLayout();
-                parentView.requestLayout();
-            }
-        } catch (Throwable ignored) {
-            // 布局请求失败可忽略。
-        }
-    }
-
-    /** Re-measure a known message container after its content child has shrunk. */
-    private static void relayoutNamedAncestor(@Nullable View view, String className) {
-        View target = findAncestorView(view, className);
-        if (target == null || !target.isAttachedToWindow()) {
-            return;
-        }
-        try {
-            int width = target.getWidth();
-            if (width <= 0) {
-                width = target.getMeasuredWidth();
-            }
-            if (width <= 0) {
-                return;
-            }
-            int oldHeight = target.getHeight();
-            target.forceLayout();
-            target.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-            int newHeight = target.getMeasuredHeight();
-            if (newHeight > 0 && newHeight != oldHeight) {
-                target.layout(target.getLeft(), target.getTop(),
-                        target.getLeft() + width, target.getTop() + newHeight);
-            }
-            HookDiagnostics.infoOnce("rowRefresh.containerRelayout." + className,
-                    "message container remeasured class=" + className
-                            + " oldHeight=" + oldHeight + " newHeight=" + newHeight);
-        } catch (Throwable t) {
-            HookDiagnostics.infoOnce("rowRefresh.containerRelayoutFailed." + className,
-                    "message container remeasure failed class=" + className
-                            + " error=" + t.getClass().getSimpleName());
-        }
-    }
-
     @Nullable
     private static View findAncestorView(@Nullable View view, String className) {
         if (view == null || className == null || className.isEmpty()) return null;
@@ -652,25 +510,6 @@ final class RowRefresher {
             HookDiagnostics.info("RecyclerView consume pending updates failed error="
                     + t.getClass().getSimpleName());
             return false;
-        }
-    }
-
-    private static void dispatchRecyclerLayout(@Nullable android.view.ViewParent recycler) {
-        if (recycler == null) return;
-        try {
-            String suppressedField = configuredField("RecyclerView", "layoutSuppressed");
-            String interceptField = configuredField("RecyclerView", "interceptRequestLayoutDepth");
-            Object suppressed = suppressedField == null ? null : Reflect.getField(recycler, suppressedField);
-            Object interceptDepth = interceptField == null ? null : Reflect.getField(recycler, interceptField);
-            Method computingMethod = recyclerAccessor(recycler, "isComputingLayout");
-            Object computing = computingMethod == null ? null : Reflect.call(computingMethod, recycler);
-            if (!Boolean.FALSE.equals(suppressed)
-                    || !(interceptDepth instanceof Integer)
-                    || ((Integer) interceptDepth) != 0 || Boolean.TRUE.equals(computing)) return;
-            Method dispatchLayout = recyclerAccessor(recycler, "dispatchLayout");
-            if (dispatchLayout != null) dispatchLayout.invoke(recycler);
-        } catch (Throwable ignored) {
-            // 派发布局失败可忽略。
         }
     }
 

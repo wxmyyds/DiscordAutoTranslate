@@ -163,9 +163,7 @@
     "RecyclerView": {
       "isComputingLayout": "R",
       "consumePendingUpdates": "o",
-      "dispatchLayout": "r",
       "getAdapter": "getAdapter",
-      "findContainingViewHolder": "findContainingViewHolder",
       "getChildCount": "getChildCount",
       "getChildAt": "getChildAt"
     }
