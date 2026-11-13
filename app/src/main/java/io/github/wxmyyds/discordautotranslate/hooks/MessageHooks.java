@@ -135,34 +135,29 @@ public final class MessageHooks {
         String referencedClass = spec.optString("loadedClass", null);
         String messageField = spec.optString("messageField", null);
         String idGetter = spec.optString("messageIdGetter", null);
-        String contentGetter = spec.optString("contentGetter", null);
+        String contentField = spec.optString("contentField", null);
         if (referencedAccessor == null || referencedClass == null || messageField == null
-                || idGetter == null || contentGetter == null) {
+                || idGetter == null || contentField == null) {
             return;
         }
         Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(),
                 referencedAccessor, 0), model);
         if (!Reflect.isInstanceOfName(referenced, referencedClass)) {
-            HookDiagnostics.infoOnce("message.bind.replyMapping.missing",
-                    "message.bind referenced content mapping unavailable");
             return;
         }
         Object message = Reflect.getField(referenced, messageField);
         if (message == null) {
-            HookDiagnostics.infoOnce("message.bind.replyMapping.missing",
-                    "message.bind referenced content mapping unavailable");
             return;
         }
         String messageId = Reflect.callString(message, idGetter);
-        Object content = Reflect.call(Reflect.findMethodExact(message.getClass(),
-                contentGetter, 0), message);
+        Object content = Reflect.getField(referenced, contentField);
         boolean mapped = messageId != null && HookBridge.looksLikeSnowflake(messageId)
                 && content != null;
         if (mapped) {
             HookBridge.get().rememberContent(messageId, content);
         }
         HookDiagnostics.infoOnce("message.bind.replyMapping." + mapped,
-                "message.bind referenced content mapped=" + mapped
+                "message.bind referenced preview content mapped=" + mapped
                         + " contentClass=" + (content == null ? "null" : content.getClass().getName()));
     }
 
