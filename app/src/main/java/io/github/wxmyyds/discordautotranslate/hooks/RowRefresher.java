@@ -249,6 +249,8 @@ final class RowRefresher {
             HookDiagnostics.info("row refresh started contentHeight=" + view.getHeight()
                     + " contentMeasured=" + view.getMeasuredHeight()
                     + " attached=" + view.isAttachedToWindow());
+            HookDiagnostics.info("row refresh recycler state before notify content="
+                    + recyclerState(contentRecycler) + " outer=" + recyclerState(rowRecycler));
             boolean contentNotified = contentPosition >= 0
                     && notifyAdapterItemChanged(contentAdapter, contentPosition);
             if (contentPosition >= 0 && !contentNotified) {
@@ -262,6 +264,8 @@ final class RowRefresher {
             HookDiagnostics.info("row refresh adapters notified content=" + contentNotified
                     + " contentPosition=" + contentPosition
                     + " rowPosition=" + notifyPosition);
+            postRecyclerState(contentRecycler, "content");
+            postRecyclerState(rowRecycler, "outer");
             messageRow.post(() -> HookDiagnostics.info("row refresh after layout"
                     + " content=" + sizeOf(view)
                     + " accessories=" + sizeOf(findAncestorView(view, MESSAGE_ACCESSORIES_VIEW_CLASS))
@@ -278,6 +282,34 @@ final class RowRefresher {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    private static void postRecyclerState(android.view.ViewParent recycler, String label) {
+        if (!(recycler instanceof View)) {
+            return;
+        }
+        View recyclerView = (View) recycler;
+        recyclerView.postOnAnimation(() -> HookDiagnostics.info(
+                "row refresh recycler state next frame " + label + "="
+                        + recyclerState(recycler)));
+    }
+
+    private static String recyclerState(android.view.ViewParent recycler) {
+        if (!(recycler instanceof View)) {
+            return recycler == null ? "missing" : recycler.getClass().getName();
+        }
+        View view = (View) recycler;
+        return view.getClass().getSimpleName()
+                + "{attached=" + view.isAttachedToWindow()
+                + ",layoutRequested=" + view.isLayoutRequested()
+                + ",height=" + view.getHeight()
+                + ",measured=" + view.getMeasuredHeight()
+                + ",P=" + Reflect.getField(recycler, "P")
+                + ",Q=" + Reflect.getField(recycler, "Q")
+                + ",R=" + Reflect.getField(recycler, "R")
+                + ",S=" + Reflect.getField(recycler, "S")
+                + ",T=" + Reflect.getField(recycler, "T")
+                + ",U=" + Reflect.getField(recycler, "U") + "}";
     }
 
     private static String sizeOf(@Nullable View view) {
