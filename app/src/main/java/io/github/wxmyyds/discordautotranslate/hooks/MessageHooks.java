@@ -72,8 +72,9 @@ public final class MessageHooks {
                 .intercept(chain -> {
                     try {
                         bindPre(chain, spec);
-                    } catch (Throwable ignored) {
-                        // 关联失败只影响本条消息的翻译，不影响宿主。
+                    } catch (Throwable t) {
+                        HookDiagnostics.warnOnce("message.bind.exception", "message.bind processing failed with "
+                                + t.getClass().getName());
                     }
                     return chain.proceed();
                 }));
@@ -93,10 +94,14 @@ public final class MessageHooks {
         String idGetter = spec.optString("messageIdGetter", "getMessageId");
         String contentGetter = spec.optString("contentGetter", "getContent");
         String messageId = Reflect.callString(model, idGetter);
-        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
+        Object content = Reflect.call(Reflect.findMethod(model.getClass(), contentGetter, 0), model);
+        boolean validMessageId = messageId != null && HookBridge.looksLikeSnowflake(messageId);
+        HookDiagnostics.infoOnce("message.bind", "message.bind invoked idValid="
+                + validMessageId + " contentClass="
+                + (content == null ? "null" : content.getClass().getName()));
+        if (!validMessageId) {
             return;
         }
-        Object content = Reflect.call(Reflect.findMethod(model.getClass(), contentGetter, 0), model);
         HookBridge.get().rememberContent(messageId, content);
 
         String viewField = spec.optString("contentViewField", null);
@@ -147,6 +152,10 @@ public final class MessageHooks {
                             if (messageId == null) {
                                 messageId = HookBridge.get().resolveMessageId(content);
                             }
+                            HookDiagnostics.infoOnce("message.render", "message.render invoked host="
+                                    + (view != null) + " idResolved=" + (messageId != null)
+                                    + " contentClass="
+                                    + (content == null ? "null" : content.getClass().getName()));
                             if (messageId != null) {
                                 HookBridge.get().bindView(view, messageId);
                                 RerenderRegistry.register(messageId, view,
@@ -156,8 +165,9 @@ public final class MessageHooks {
                                 }
                             }
                         }
-                    } catch (Throwable ignored) {
-                        // 任何异常都不影响原始渲染。
+                    } catch (Throwable t) {
+                        HookDiagnostics.warnOnce("message.render.exception", "message.render processing failed with "
+                                + t.getClass().getName());
                     }
                     try {
                         return chain.proceed();
@@ -195,6 +205,11 @@ public final class MessageHooks {
                 .intercept(chain -> {
                     Object source = safeArg(chain, contentArgument);
                     Object[] renderArgs = chain.getArgs().toArray();
+                    HookDiagnostics.infoOnce("message.textConversion", "message.textConversion invoked"
+                            + " idResolved="
+                            + (HookBridge.get().resolveMessageId(source) != null)
+                            + " sourceClass="
+                            + (source == null ? "null" : source.getClass().getName()));
                     try {
                         String messageId = HookBridge.get().resolveMessageId(source);
                         if (messageId != null) {
@@ -222,6 +237,9 @@ public final class MessageHooks {
                             }
                         }
                     } catch (Throwable t) {
+                        HookDiagnostics.warnOnce("message.textConversion.exception",
+                                "message.textConversion processing failed with "
+                                        + t.getClass().getName());
                         renderArgs[contentArgument] = source;
                     }
 

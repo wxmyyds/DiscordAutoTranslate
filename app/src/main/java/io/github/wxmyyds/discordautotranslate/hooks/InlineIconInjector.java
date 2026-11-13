@@ -88,10 +88,14 @@ public final class InlineIconInjector {
         try {
             View host = CURRENT_HOST.get();
             if (host == null) {
+                HookDiagnostics.warnOnce("icon.noHost", "icon injection skipped: no active render host");
                 return rendered; // 回复引用等无宿主路径：不注入
             }
             Context context = rawContext instanceof Context ? (Context) rawContext : null;
             if (!(rendered instanceof SpannableStringBuilder) || context == null) {
+                HookDiagnostics.warnOnce("icon.invalidResult", "icon injection skipped: invalid result/context"
+                        + " renderedClass=" + (rendered == null ? "null" : rendered.getClass().getName())
+                        + " contextValid=" + (context != null));
                 return rendered;
             }
             String messageId = HookBridge.get().resolveMessageId(structurable);
@@ -105,20 +109,24 @@ public final class InlineIconInjector {
                 iconAllowed = messageId != null;
             }
             if (!iconAllowed) {
+                HookDiagnostics.warnOnce("icon.noMessageIdentity", "icon injection skipped: message identity not resolved");
                 return rendered;
             }
             StateStore.Entry entry = StateStore.get().peek(messageId);
             if (entry == null) {
+                HookDiagnostics.warnOnce("icon.noState", "icon injection skipped: no translation state exists");
                 return rendered; // 尚无状态（还没触发过翻译流程）：不注入
             }
             // 未翻译（IDLE）不显示图标：既符合「待翻译不显示」的要求，
             // 也使非英文消息、纯表情消息自然不出图标。
             if (entry.status == StateStore.Status.IDLE) {
+                HookDiagnostics.infoOnce("icon.idle", "icon injection skipped: translation state is IDLE");
                 return rendered;
             }
             // 需求：纯图片 / 纯表情等无可翻译正文的消息不注入。
             TextExtractor.Result ex = TextExtractor.extract(structurable);
             if (ex == null || ex.textNodeCount == 0) {
+                HookDiagnostics.infoOnce("icon.noTextNodes", "icon injection skipped: no extractable text nodes");
                 return rendered;
             }
 
@@ -134,6 +142,7 @@ public final class InlineIconInjector {
                     tinted, context.getResources().getDisplayMetrics().density,
                     entry.status, messageId);
             if (icon == null) {
+                HookDiagnostics.warnOnce("icon.spanCreation", "icon injection skipped: icon span creation failed");
                 return rendered;
             }
 
@@ -155,9 +164,12 @@ public final class InlineIconInjector {
             }
             // 启动/续接旋转动画（仅翻译中状态）。
             icon.bindHost(host);
+            HookDiagnostics.infoOnce("icon.injected", "translation icon injected successfully");
 
             return ssb;
         } catch (Throwable t) {
+            HookDiagnostics.warnOnce("icon.exception", "icon injection failed with "
+                    + t.getClass().getName());
             return rendered;
         }
     }

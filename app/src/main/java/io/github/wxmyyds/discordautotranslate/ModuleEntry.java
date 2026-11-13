@@ -258,6 +258,8 @@ public class ModuleEntry extends XposedModule {
         hooks.addAll(created);
         hooks.addAll(EmbedHooks.install(this, cl, config));
         hooks.addAll(PollHooks.install(this, cl, config));
+        android.util.Log.i("DiscordAutoTranslate", "installed hook profile versionCode="
+                + config.versionCode() + " requiredHookIds=" + installedMessageHookIds);
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */

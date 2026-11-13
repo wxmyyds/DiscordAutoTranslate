@@ -394,6 +394,8 @@ public final class HookBridge {
         }
         TextExtractor.Result ex = TextExtractor.extract(structurableText);
         if (ex == null || ex.text.trim().isEmpty()) {
+            HookDiagnostics.warnOnce("translation.noText", "translation skipped: extracted text is empty"
+                    + " structurableClass=" + structurableText.getClass().getName());
             return;
         }
 
@@ -410,6 +412,7 @@ public final class HookBridge {
         }
 
         if (!cfg.enabled) {
+            HookDiagnostics.warnOnce("translation.disabled", "translation skipped: auto-translate is disabled");
             // 总开关关闭：不发起新翻译，保留已有译文（需求 §2.7）。
             return;
         }
@@ -434,6 +437,8 @@ public final class HookBridge {
         }
 
         if (!cfg.isUsable()) {
+            HookDiagnostics.warnOnce("translation.config", "translation API configuration is unusable"
+                    + " configErrorPresent=" + (cfg.configError != null));
             entry.status = StateStore.Status.FAILED;
             entry.lastError = cfg.configError != null ? cfg.configError : "API 未配置";
             RerenderRegistry.rerender(messageId);
@@ -444,9 +449,14 @@ public final class HookBridge {
                 ex.text, ex.textNodeCount, ex.opaqueNodeCount, ex.codeHeavy,
                 cfg.targetLang);
         if (!v.shouldTranslate) {
+            HookDiagnostics.infoOnce("translation.languageSkip", "translation skipped by language detector"
+                    + " reason=" + v.reason + " textNodes=" + ex.textNodeCount
+                    + " opaqueNodes=" + ex.opaqueNodeCount);
             return;
         }
 
+        HookDiagnostics.infoOnce("translation.started", "translation request started"
+                + " textNodes=" + ex.textNodeCount + " segments=" + ex.segmentCount);
         entry.status = StateStore.Status.TRANSLATING;
         // 立即重渲染，让「翻译中」旋转图标显示出来。
         RerenderRegistry.rerender(messageId);
