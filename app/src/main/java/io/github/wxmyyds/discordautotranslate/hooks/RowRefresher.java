@@ -348,7 +348,6 @@ final class RowRefresher {
         String field = configuredField("RecyclerView", key);
         return field == null ? null : Reflect.getField(recycler, field);
     }
-    }
 
     private static String sizeOf(@Nullable View view) {
         return view == null ? "missing" : view.getClass().getSimpleName()
