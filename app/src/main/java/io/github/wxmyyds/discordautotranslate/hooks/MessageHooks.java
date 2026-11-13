@@ -145,6 +145,7 @@ public final class MessageHooks {
         boolean isStatic = java.lang.reflect.Modifier.isStatic(render.getModifiers());
         int viewArgument = spec.optInt("viewArgument", -1);
         int contentArgument = spec.optInt("contentArgument", -1);
+        int messageIdArgument = spec.optInt("messageIdArgument", -1);
 
         out.add(module.hook(render)
                 .setId("dat.messageRender")
@@ -162,21 +163,29 @@ public final class MessageHooks {
 
                             String directMessageId = HookBridge.get().directMessageIdOf(view);
                             String contentMessageId = HookBridge.get().resolveMessageId(content);
-                            String messageId = directMessageId != null ? directMessageId
+                            Object configuredId = safeArg(chain, messageIdArgument);
+                            String configuredMessageId = configuredId instanceof String
+                                    && HookBridge.looksLikeSnowflake((String) configuredId)
+                                    ? (String) configuredId : null;
+                            String messageId = configuredMessageId != null ? configuredMessageId
+                                    : directMessageId != null ? directMessageId
                                     : HookBridge.get().messageIdOf(view);
                             if (messageId == null) {
                                 messageId = contentMessageId;
                             }
+                            String idSource = configuredMessageId != null ? "argument"
+                                    : directMessageId != null ? "view"
+                                    : contentMessageId != null ? "content" : "ancestor";
                             HookDiagnostics.infoOnce("message.render", "message.render invoked host="
                                     + (view != null) + " idResolved=" + (messageId != null)
-                                    + " idSource=" + (directMessageId != null ? "view"
-                                    : contentMessageId != null ? "content" : "ancestor")
+                                    + " idSource=" + idSource
                                     + " contentClass="
                                     + (content == null ? "null" : content.getClass().getName()));
                             if (messageId != null) {
-                                // Do not pin a child to an inherited ID; recycled rows update
-                                // their own mapping and may render different child contents.
-                                if (directMessageId != null || contentMessageId != null) {
+                                // Do not pin a child to an inherited ID unless the configured
+                                // render call itself provides the authoritative message ID.
+                                if (configuredMessageId != null || directMessageId != null
+                                        || contentMessageId != null) {
                                     HookBridge.get().bindView(view, messageId);
                                 }
                                 RerenderRegistry.register(messageId, view,
