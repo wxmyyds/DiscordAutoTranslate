@@ -130,7 +130,10 @@ public final class TextExtractor {
     @Nullable
     public static String nodeEmojiText(Object node) {
         String name = HookConfiguration.semanticTypeName(node.getClass());
-        if (name.endsWith("UnicodeEmojiContentNode")) {
+        if (name == null) {
+            return null;
+        }
+        if (name.equals("UnicodeEmojiContentNode")) {
             String s = Reflect.callString(node, "getContent");
             if (s == null || s.isEmpty()) {
                 // 部分版本把字符放在 surrogate 字段。
@@ -138,7 +141,7 @@ public final class TextExtractor {
             }
             return s == null || s.isEmpty() ? null : s;
         }
-        if (name.endsWith("CustomEmojiContentNode")) {
+        if (name.equals("CustomEmojiContentNode")) {
             // 使用宿主提供的 alt 原值；可能已含 :name: 等格式，不自行改写。
             String alt = Reflect.callString(node, "getAlt");
             return alt == null || alt.isEmpty() ? null : alt;
@@ -178,9 +181,11 @@ public final class TextExtractor {
             return null;
         }
         String cls = HookConfiguration.semanticTypeName(structurableText.getClass());
+        if (cls == null) {
+            return null;
+        }
 
-
-        if (cls.endsWith("PrimitiveStructurableText")) {
+        if ("PrimitiveStructurableText".equals(cls)) {
             String s = Reflect.callString(structurableText, "getContent");
             if (s == null) {
                 return EMPTY;
@@ -190,7 +195,7 @@ public final class TextExtractor {
             return new Result(s, s.isEmpty() ? 0 : 1, s.isEmpty() ? 0 : 1, 0, false);
         }
 
-        if (cls.endsWith("AnnotatedStructurableText")) {
+        if ("AnnotatedStructurableText".equals(cls)) {
             Object list = Reflect.callMember(structurableText, "getContent");
             if (!(list instanceof List)) {
                 return EMPTY;
@@ -211,7 +216,10 @@ public final class TextExtractor {
      * 提取与重建必须共享此边界：提及/频道/emoji 即使带有 content 子列表，
      * 也不能将其显示名称当成正文或译文的存放位置。
      */
-    public static boolean isTextContainer(String simpleName) {
+    public static boolean isTextContainer(@Nullable String simpleName) {
+        if (simpleName == null) {
+            return false;
+        }
         switch (simpleName) {
             case "ParagraphContentNode":
             case "BlockQuoteContentNode":
@@ -236,7 +244,10 @@ public final class TextExtractor {
      * 精确落回样式节点，实测斜体/加粗不再丢失）。块级容器（段落/
      * 标题/引用）不在此列：它们各自成段，段落对齐已能保真。
      */
-    public static boolean isInlineStyleContainer(String simpleName) {
+    public static boolean isInlineStyleContainer(@Nullable String simpleName) {
+        if (simpleName == null) {
+            return false;
+        }
         switch (simpleName) {
             case "StrongContentNode":
             case "EmphasisContentNode":

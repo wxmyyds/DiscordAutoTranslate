@@ -99,7 +99,7 @@ public final class MessageHooks {
             return;
         }
         String messageId = Reflect.callString(model, idGetter);
-        Object content = Reflect.call(Reflect.findMethod(model.getClass(), contentGetter, 0), model);
+        Object content = Reflect.call(Reflect.findMethodExact(model.getClass(), contentGetter, 0), model);
         boolean validMessageId = messageId != null && HookBridge.looksLikeSnowflake(messageId);
         HookDiagnostics.infoOnce("message.bind", "message.bind invoked idValid="
                 + validMessageId + " contentClass="
@@ -371,7 +371,7 @@ public final class MessageHooks {
                 || !Reflect.isInstanceOfName(referenced, referencedClass)) {
             return;
         }
-        Object message = Reflect.call(Reflect.findMethod(referenced.getClass(),
+        Object message = Reflect.call(Reflect.findMethodExact(referenced.getClass(),
                 referencedGetter, 0), referenced);
         if (message == null) {
             return;
@@ -380,7 +380,7 @@ public final class MessageHooks {
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
-        Object content = Reflect.call(Reflect.findMethod(message.getClass(),
+        Object content = Reflect.call(Reflect.findMethodExact(message.getClass(),
                 contentGetter, 0), message);
         HookBridge.get().rememberContent(messageId, content);
 

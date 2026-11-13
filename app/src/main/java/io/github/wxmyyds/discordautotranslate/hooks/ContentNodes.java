@@ -300,7 +300,8 @@ public final class ContentNodes {
         Class<?> cls = node.getClass();
         HookConfiguration configuration = HookConfiguration.activeConfiguration();
         String semanticType = HookConfiguration.semanticTypeName(cls);
-        if (configuration != null && configuration.allowsConstructorRebuild(semanticType)) {
+        if (configuration != null && semanticType != null
+                && configuration.allowsConstructorRebuild(semanticType)) {
             return constructWithReplacedChildren(node, newChildren);
         }
         Method copy = findCopyMethod(cls);
@@ -438,7 +439,7 @@ public final class ContentNodes {
     /** 取 Kotlin data class 的第 n 个字段（componentN 从 1 开始）。 */
     @Nullable
     private static Object component(Object node, int n) {
-        Method m = Reflect.findMethod(node.getClass(), "component" + n, 0);
+        Method m = Reflect.findMethodExact(node.getClass(), "component" + n, 0);
         return Reflect.call(m, node);
     }
 

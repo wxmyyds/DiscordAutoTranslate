@@ -35,6 +35,12 @@ public class HookConfigurationTest {
         private final String a = "from-field";
     }
 
+    public static final class UnmappedAccessorFixture {
+        public String getContent() {
+            return "not-configured";
+        }
+    }
+
     @After
     public void clearActiveProfile() {
         HookConfiguration.activate(null);
@@ -83,6 +89,29 @@ public class HookConfigurationTest {
         HookConfiguration.activate(HookConfiguration.parse(json, 352017));
 
         assertNull(Reflect.callString(new FieldOnlyFixture(), "getContent"));
+    }
+
+    @Test
+    public void unmappedRuntimeTypesAndMembersDoNotUseImplicitNames() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
+                + "\"hooks\":{},\"types\":{}}";
+        HookConfiguration.activate(HookConfiguration.parse(json, 352017));
+
+        assertNull(HookConfiguration.semanticTypeName(UnmappedAccessorFixture.class));
+        assertNull(Reflect.callString(new UnmappedAccessorFixture(), "getContent"));
+        assertNull(Reflect.findMethod(UnmappedAccessorFixture.class, "getContent", 0));
+    }
+
+    @Test
+    public void profileTypeMappingsRequireExactClassNames() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":340013,"
+                + "\"hooks\":{},\"types\":{\"TextContentNode\":\""
+                + UnmappedAccessorFixture.class.getName() + "\"}}";
+        HookConfiguration.activate(HookConfiguration.parse(json, 340013));
+
+        assertEquals("TextContentNode",
+                HookConfiguration.semanticTypeName(UnmappedAccessorFixture.class));
+        assertNull(HookConfiguration.semanticTypeName(FieldOnlyFixture.class));
     }
 
     @Test

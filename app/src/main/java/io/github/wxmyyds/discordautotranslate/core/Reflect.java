@@ -33,19 +33,29 @@ public final class Reflect {
     }
 
     /**
-     * 按“名称前缀 + 参数个数”查找方法。
+     * Find a method by a name/prefix mapped through the active profile.
      *
-     * @param requiredFirstParams 需要与形参类型可赋值匹配的前若干个参数类型（从头开始比较）
+     * @param requiredFirstParams types that must be assignable for the leading parameters
      */
     @Nullable
-    public static Method findMethod(Class<?> c, String namePrefix, int paramCount,
+    public static Method findMethod(Class<?> c, String semanticAccessor, int paramCount,
                                     Class<?>... requiredFirstParams) {
         if (c == null) {
             return null;
         }
-        String configuredPrefix = accessorName(c, namePrefix);
+        String configuredPrefix = accessorName(c, semanticAccessor);
+        return findMethodExact(c, configuredPrefix, paramCount, requiredFirstParams);
+    }
+
+    /** Find a method by an exact name/prefix supplied explicitly by profile data. */
+    @Nullable
+    public static Method findMethodExact(Class<?> c, @Nullable String namePrefix, int paramCount,
+                                         Class<?>... requiredFirstParams) {
+        if (c == null || namePrefix == null || namePrefix.isEmpty()) {
+            return null;
+        }
         for (Method m : c.getDeclaredMethods()) {
-            if (!m.getName().startsWith(configuredPrefix)) {
+            if (!m.getName().startsWith(namePrefix)) {
                 continue;
             }
             Class<?>[] ps = m.getParameterTypes();
@@ -68,16 +78,22 @@ public final class Reflect {
         return null;
     }
 
-    /** 查找无参、返回 String 的方法（名称前缀匹配），用于读取 Kotlin 值类 getter。 */
+    /** Find a no-argument String getter by its profile-selected name/prefix. */
     @Nullable
     public static Method findStringGetter(Class<?> c, String namePrefix) {
-        if (c == null) {
+        String configuredPrefix = accessorName(c, namePrefix);
+        return findStringGetterExact(c, configuredPrefix);
+    }
+
+    @Nullable
+    private static Method findStringGetterExact(@Nullable Class<?> c,
+                                                 @Nullable String namePrefix) {
+        if (c == null || namePrefix == null || namePrefix.isEmpty()) {
             return null;
         }
-        String configuredPrefix = accessorName(c, namePrefix);
         for (Method m : c.getDeclaredMethods()) {
             if (m.getParameterTypes().length == 0
-                    && m.getName().startsWith(configuredPrefix)
+                    && m.getName().startsWith(namePrefix)
                     && m.getReturnType() == String.class) {
                 m.setAccessible(true);
                 return m;
@@ -86,7 +102,6 @@ public final class Reflect {
         return null;
     }
 
-    /** 读取字段（含父类链），失败返回 null。 */
     @Nullable
     public static Object getField(@Nullable Object target, String fieldName) {
         if (target == null) {
@@ -94,9 +109,8 @@ public final class Reflect {
         }
         Class<?> c = target.getClass();
         while (c != null) {
-            String configuredName = fieldName(c, fieldName);
             try {
-                Field f = c.getDeclaredField(configuredName);
+                Field f = c.getDeclaredField(fieldName);
                 f.setAccessible(true);
                 return f.get(target);
             } catch (NoSuchFieldException e) {
@@ -106,29 +120,6 @@ public final class Reflect {
             }
         }
         return null;
-    }
-
-    private static String fieldName(Class<?> type, String memberName) {
-        HookConfiguration configuration = HookConfiguration.activeConfiguration();
-        if (configuration == null) {
-            return memberName;
-        }
-        String semanticType = HookConfiguration.semanticTypeName(type);
-        String configured = configuration.fieldName(semanticType, memberName);
-        return configured == null || configured.isEmpty() ? memberName : configured;
-    }
-
-    private static String accessorName(Class<?> type, String accessor) {
-        HookConfiguration configuration = HookConfiguration.activeConfiguration();
-        if (configuration == null) {
-            return accessor;
-        }
-        String semanticType = HookConfiguration.semanticTypeName(type);
-        String configured = configuration.accessorName(semanticType, accessor);
-        if (configured == null || configured.isEmpty()) {
-            configured = configuration.string("members", accessor);
-        }
-        return configured == null || configured.isEmpty() ? accessor : configured;
     }
 
     /** 安全调用方法。 */
@@ -152,14 +143,15 @@ public final class Reflect {
         }
         HookConfiguration configuration = HookConfiguration.activeConfiguration();
         if (configuration == null) {
-            return call(findMethod(target.getClass(), memberName, 0), target);
+            return null;
         }
         String semanticType = HookConfiguration.semanticTypeName(target.getClass());
         String accessor = configuredAccessor(configuration, semanticType, memberName);
         if (accessor != null) {
-            return call(findMethod(target.getClass(), accessor, 0), target);
+            return call(findMethodExact(target.getClass(), accessor, 0), target);
         }
-        String field = configuration.fieldName(semanticType, memberName);
+        String field = semanticType == null ? null
+                : configuration.fieldName(semanticType, memberName);
         return field == null ? null : getField(target, field);
     }
 
@@ -171,26 +163,37 @@ public final class Reflect {
         }
         HookConfiguration configuration = HookConfiguration.activeConfiguration();
         if (configuration == null) {
-            Object value = call(findStringGetter(target.getClass(), namePrefix), target);
-            return value instanceof String ? (String) value : null;
+            return null;
         }
         String semanticType = HookConfiguration.semanticTypeName(target.getClass());
         String accessor = configuredAccessor(configuration, semanticType, namePrefix);
         if (accessor != null) {
-            Object value = call(findStringGetter(target.getClass(), accessor), target);
+            Object value = call(findStringGetterExact(target.getClass(), accessor), target);
             return value instanceof String ? (String) value : null;
         }
-        String field = configuration.fieldName(semanticType, namePrefix);
+        String field = semanticType == null ? null
+                : configuration.fieldName(semanticType, namePrefix);
         Object value = field == null ? null : getField(target, field);
         return value instanceof String ? (String) value : null;
     }
 
     @Nullable
+    private static String accessorName(Class<?> type, String accessor) {
+        HookConfiguration configuration = HookConfiguration.activeConfiguration();
+        return configuration == null ? null
+                : configuredAccessor(configuration,
+                        HookConfiguration.semanticTypeName(type), accessor);
+    }
+
+    @Nullable
     private static String configuredAccessor(HookConfiguration configuration,
                                             String semanticType, String accessor) {
-        String mapped = configuration.accessorName(semanticType, accessor);
-        return mapped != null && !mapped.isEmpty()
-                ? mapped : configuration.string("members", accessor);
+        String mapped = semanticType == null ? null
+                : configuration.accessorName(semanticType, accessor);
+        if (mapped == null || mapped.isEmpty()) {
+            mapped = configuration.string("members", accessor);
+        }
+        return mapped == null || mapped.isEmpty() ? null : mapped;
     }
 
 

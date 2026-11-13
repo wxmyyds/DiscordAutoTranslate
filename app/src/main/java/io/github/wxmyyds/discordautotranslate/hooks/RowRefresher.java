@@ -390,7 +390,7 @@ final class RowRefresher {
     private static Method findInheritedMethod(@Nullable Class<?> cls, String namePrefix,
                                               int paramCount, Class<?>... firstParams) {
         for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
-            Method m = Reflect.findMethod(c, namePrefix, paramCount, firstParams);
+            Method m = Reflect.findMethodExact(c, namePrefix, paramCount, firstParams);
             if (m != null) {
                 return m;
             }

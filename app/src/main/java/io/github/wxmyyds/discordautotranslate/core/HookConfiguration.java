@@ -78,20 +78,23 @@ public final class HookConfiguration {
         return configuration == null ? null : configuration.string("members", key);
     }
 
-    /** Returns the semantic model type name declared for a runtime class in the active profile. */
+    /** Returns a semantic type only when the active profile explicitly maps the runtime class. */
+    @Nullable
     public static String semanticTypeName(Class<?> runtimeType) {
         HookConfiguration configuration = active;
         JSONObject types = configuration == null ? null : configuration.root.optJSONObject("types");
-        if (types != null) {
-            Iterator<String> keys = types.keys();
-            while (keys.hasNext()) {
-                String semanticName = keys.next();
-                if (runtimeType.getName().equals(types.optString(semanticName))) {
-                    return semanticName;
-                }
+        if (types == null) {
+            return null;
+        }
+        Iterator<String> keys = types.keys();
+        while (keys.hasNext()) {
+            String semanticName = keys.next();
+            String configuredClass = types.optString(semanticName, "");
+            if (runtimeType.getName().equals(configuredClass)) {
+                return semanticName;
             }
         }
-        return runtimeType.getSimpleName();
+        return null;
     }
 
     @Nullable
@@ -108,7 +111,10 @@ public final class HookConfiguration {
         return typeAccessors == null ? null : typeAccessors.optString(accessor, null);
     }
 
-    public boolean allowsConstructorRebuild(String semanticType) {
+    public boolean allowsConstructorRebuild(@Nullable String semanticType) {
+        if (semanticType == null) {
+            return false;
+        }
         JSONArray types = root.optJSONArray("constructorFallbackTypes");
         if (types == null) {
             return false;

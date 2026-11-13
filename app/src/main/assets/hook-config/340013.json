@@ -154,6 +154,9 @@
     "getValue": "getValue"
   },
   "accessors": {
+    "Message": {
+      "getId": "getId-3Eiw7ao"
+    },
     "RecyclerViewViewHolder": {
       "getBindingAdapterPosition": "getBindingAdapterPosition",
       "getAbsoluteAdapterPosition": "getAbsoluteAdapterPosition"
@@ -190,6 +193,26 @@
     "StructurableText": "com.discord.chat.bridge.structurabletext.StructurableText",
     "PrimitiveStructurableText": "com.discord.chat.bridge.structurabletext.PrimitiveStructurableText",
     "AnnotatedStructurableText": "com.discord.chat.bridge.structurabletext.AnnotatedStructurableText",
+    "Message": "com.discord.chat.bridge.Message",
+    "TextContentNode": "com.discord.chat.bridge.contentnode.TextContentNode",
+    "StrongContentNode": "com.discord.chat.bridge.contentnode.StrongContentNode",
+    "LHeadingContentNode": "com.discord.chat.bridge.contentnode.LHeadingContentNode",
+    "StrikethroughContentNode": "com.discord.chat.bridge.contentnode.StrikethroughContentNode",
+    "InlineCodeContentNode": "com.discord.chat.bridge.contentnode.InlineCodeContentNode",
+    "CodeBlockContentNode": "com.discord.chat.bridge.contentnode.CodeBlockContentNode",
+    "SubtextContentNode": "com.discord.chat.bridge.contentnode.SubtextContentNode",
+    "LinkContentNode": "com.discord.chat.bridge.contentnode.LinkContentNode",
+    "BulletListContentNode": "com.discord.chat.bridge.contentnode.BulletListContentNode",
+    "HeadingContentNode": "com.discord.chat.bridge.contentnode.HeadingContentNode",
+    "SpoilerContentNode": "com.discord.chat.bridge.contentnode.SpoilerContentNode",
+    "UnicodeEmojiContentNode": "com.discord.chat.bridge.contentnode.UnicodeEmojiContentNode",
+    "CustomEmojiContentNode": "com.discord.chat.bridge.contentnode.CustomEmojiContentNode",
+    "ParagraphContentNode": "com.discord.chat.bridge.contentnode.ParagraphContentNode",
+    "EmphasisContentNode": "com.discord.chat.bridge.contentnode.EmphasisContentNode",
+    "BlockQuoteContentNode": "com.discord.chat.bridge.contentnode.BlockQuoteContentNode",
+    "UnderlineContentNode": "com.discord.chat.bridge.contentnode.UnderlineContentNode",
+    "NewLineContentNode": "com.discord.chat.bridge.contentnode.NewLineContentNode",
+    "LineBreakContentNode": "com.discord.chat.bridge.contentnode.LineBreakContentNode",
     "RecyclerView": "androidx.recyclerview.widget.RecyclerView",
     "RecyclerViewViewHolder": "androidx.recyclerview.widget.RecyclerView$ViewHolder",
     "RecyclerViewLayoutParams": "androidx.recyclerview.widget.RecyclerView$LayoutParams",

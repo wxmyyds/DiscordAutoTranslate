@@ -96,7 +96,7 @@ public final class EmbedHooks {
         if (messageId == null || !HookBridge.looksLikeSnowflake(messageId)) {
             return;
         }
-        Object embed = Reflect.call(Reflect.findMethod(
+        Object embed = Reflect.call(Reflect.findMethodExact(
                 accessory.getClass(), HookConfiguration.member("embedGetter"), 0), accessory);
         if (embed == null) {
             return;
@@ -132,7 +132,7 @@ public final class EmbedHooks {
     private static String registerEmbedText(@Nullable View view, String messageId,
                                             Object owner, String getter,
                                             Object holder, Method bind, Object[] args) {
-        Object text = Reflect.call(Reflect.findMethod(owner.getClass(), getter, 0), owner);
+        Object text = Reflect.call(Reflect.findMethodExact(owner.getClass(), getter, 0), owner);
         if (text == null) {
             return null;
         }
@@ -157,7 +157,7 @@ public final class EmbedHooks {
     private static String registerEmbedFields(@Nullable View view, String messageId,
                                               Object embed, Object holder, Method bind,
                                               Object[] args) {
-        Object fields = Reflect.call(Reflect.findMethod(
+        Object fields = Reflect.call(Reflect.findMethodExact(
                 embed.getClass(), HookConfiguration.member("embedFieldsGetter"), 0), embed);
         if (!(fields instanceof List)) {
             return null;
@@ -261,7 +261,7 @@ public final class EmbedHooks {
         RerenderRegistry.register(key, view, holder, bind, args);
         // 正文语义上等价于一条纯文本消息：走同一条翻译触发路径。
         HookBridge.get().onMessageBound(view, key, wrapped);
-        Object footer = Reflect.call(Reflect.findMethod(model.getClass(),
+        Object footer = Reflect.call(Reflect.findMethodExact(model.getClass(),
                 HookConfiguration.member("postPreviewFooterGetter"), 0), model);
         HookBridge.get().rememberIconOnlyContent(key, footer);
     }

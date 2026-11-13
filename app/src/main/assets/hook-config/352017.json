@@ -131,6 +131,7 @@
     "RecyclerViewAdapter": "k3.m0",
     "RecyclerViewAdapterObservable": "k3.n0",
     "MessageContentViewHolder": "ea.p0",
+    "Message": "com.discord.chat.bridge.Message",
     "RecyclerView": "androidx.recyclerview.widget.RecyclerView",
     "MessageAccessoriesView": "com.discord.chat.presentation.message.MessageAccessoriesView",
     "MessageView": "com.discord.chat.presentation.message.MessageView"
