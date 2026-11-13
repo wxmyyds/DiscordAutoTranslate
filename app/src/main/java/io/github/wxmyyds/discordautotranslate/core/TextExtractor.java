@@ -400,6 +400,13 @@ public final class TextExtractor {
             return;
         }
 
+        if (name == null) {
+            // An unmapped node is opaque; preserve spacing and continue extracting siblings.
+            counters[1]++;
+            out.append(' ');
+            return;
+        }
+
         switch (name) {
             case "TextContentNode": {
                 String s = Reflect.callString(node, "getContent");

@@ -110,6 +110,7 @@
     "PrimitiveStructurableText": "l8.e",
     "AnnotatedStructurableText": "l8.b",
     "TextContentNode": "j7.e5",
+    "UserOrRoleMentionContentNode": "j7.q5",
     "StrongContentNode": "j7.y4",
     "LHeadingContentNode": "j7.w0",
     "StrikethroughContentNode": "j7.v4",

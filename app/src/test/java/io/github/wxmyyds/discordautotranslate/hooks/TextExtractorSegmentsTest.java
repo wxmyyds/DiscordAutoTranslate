@@ -114,6 +114,14 @@ public class TextExtractorSegmentsTest {
         }
     }
 
+    public static final class UnknownContentNode {
+        private final List<Object> content;
+
+        public UnknownContentNode(List<Object> content) {
+            this.content = content;
+        }
+    }
+
     public static final class AnnotatedStructurableText {
         private final List<Object> content;
 
@@ -143,6 +151,18 @@ public class TextExtractorSegmentsTest {
     }
 
     // ---------------------------------------------------------------- 测试
+
+    @Test
+    public void unmappedNodeIsOpaqueAndDoesNotAbortSiblingExtraction() {
+        TextExtractor.Result result = TextExtractor.extract(new AnnotatedStructurableText(
+                list(new UnknownContentNode(list(new TextContentNode("hidden"))),
+                        new TextContentNode("visible English text"))));
+
+        assertNotNull(result);
+        assertTrue(result.text.contains("visible English text"));
+        assertFalse(result.text.contains("hidden"));
+        assertEquals(1, result.opaqueNodeCount);
+    }
 
     @Test
     public void singleTextNodeCountsOneSegment() {
