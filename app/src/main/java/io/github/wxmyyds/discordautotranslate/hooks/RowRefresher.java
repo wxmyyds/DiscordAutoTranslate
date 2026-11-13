@@ -4,6 +4,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
+import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 
 import java.lang.reflect.Method;
@@ -232,7 +233,9 @@ final class RowRefresher {
                 reportRowRefreshFailure("invalidRowPosition");
                 return false;
             }
-            invalidateMessageContentBindCache(contentHolder);
+            boolean bindCacheCleared = invalidateMessageContentBindCache(contentHolder);
+            HookDiagnostics.info("row refresh content bind cache cleared=" + bindCacheCleared
+                    + " holderClass=" + contentHolder.getClass().getName());
             // Notify both the nested content adapter and the outer row adapter. In the
             // minified host, adapter notifications are exposed through the adapter's
             // observable rather than a reflectable notifyItemChanged method.
@@ -359,19 +362,27 @@ final class RowRefresher {
     }
 
     private static boolean invalidateMessageContentBindCache(Object holder) {
+        HookConfiguration config = HookConfiguration.activeConfiguration();
+        if (config == null || !"MessageContentViewHolder".equals(
+                HookConfiguration.semanticTypeName(holder.getClass()))) {
+            return false;
+        }
+        String fieldName = config.fieldName("MessageContentViewHolder", "bindCache");
+        if (fieldName == null || fieldName.isEmpty()) {
+            return false;
+        }
         for (Class<?> cls = holder.getClass(); cls != null; cls = cls.getSuperclass()) {
             try {
-                java.lang.reflect.Field field = cls.getDeclaredField("lastMessageContent");
+                java.lang.reflect.Field field = cls.getDeclaredField(fieldName);
                 field.setAccessible(true);
                 field.set(holder, null);
                 return true;
             } catch (NoSuchFieldException ignored) {
-                // 继续沿父类查找：字段声明可能在基类上。
+                // 继续沿继承链查找字段声明。
             } catch (Throwable t) {
                 return false;
             }
         }
-        // 仅正文 holder 有该缓存；Embed holder 无 bind 早退缓存，找不到属正常。
         return false;
     }
 

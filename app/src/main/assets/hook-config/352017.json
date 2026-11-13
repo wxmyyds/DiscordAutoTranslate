@@ -97,7 +97,8 @@
     "RecyclerViewViewHolder": "k3.k1",
     "RecyclerViewLayoutParams": "k3.u0",
     "RecyclerViewAdapter": "k3.m0",
-    "RecyclerViewAdapterObservable": "k3.n0"
+    "RecyclerViewAdapterObservable": "k3.n0",
+    "MessageContentViewHolder": "ea.p0"
   },
   "constructorFallbackTypes": [
     "StrongContentNode",
@@ -136,6 +137,9 @@
     },
     "RecyclerViewAdapter": {
       "observable": "a"
+    },
+    "MessageContentViewHolder": {
+      "bindCache": "v"
     },
     "PrimitiveStructurableText": {
       "getContent": "a"
