@@ -92,11 +92,41 @@ final class RowRefresher {
         }
     }
 
-    /** Resolve the content holder exclusively through the profile-selected RecyclerView API. */
+    /** Resolve a holder through RecyclerView's API, then inspect attached rows if it misses. */
     @Nullable
     private static Object findContainingViewHolder(android.view.ViewParent recycler, View view) {
         Method findContaining = recyclerAccessor(recycler, "findContainingViewHolder", View.class);
-        return Reflect.call(findContaining, recycler, view);
+        Object holder = Reflect.call(findContaining, recycler, view);
+        if (holder != null) {
+            HookDiagnostics.infoOnce("rowRefresh.holderResolvedByRecyclerApi",
+                    "content holder resolved by RecyclerView containment API");
+            return holder;
+        }
+
+        Method childCountMethod = recyclerAccessor(recycler, "getChildCount");
+        Method childAtMethod = recyclerAccessor(recycler, "getChildAt", int.class);
+        Object countValue = Reflect.call(childCountMethod, recycler);
+        if (!(countValue instanceof Integer) || childAtMethod == null) {
+            reportRowRefreshFailure("attachedChildScanMethods");
+            return null;
+        }
+        int count = (Integer) countValue;
+        for (int i = 0; i < count; i++) {
+            Object childObject = Reflect.call(childAtMethod, recycler, i);
+            if (!(childObject instanceof View)) continue;
+            View itemView = (View) childObject;
+            if (!isDescendantOrSelf(view, itemView)) continue;
+            Object childHolder = holderFromItemView(itemView);
+            String itemViewField = configuredField("RecyclerViewViewHolder", "itemView");
+            if (childHolder != null && itemViewField != null
+                    && Reflect.getField(childHolder, itemViewField) == itemView) {
+                HookDiagnostics.infoOnce("rowRefresh.holderResolvedByAttachedChild",
+                        "content holder resolved by attached RecyclerView child");
+                return childHolder;
+            }
+        }
+        reportRowRefreshFailure("attachedChildScanNoMatch");
+        return null;
     }
 
     private static boolean isDescendantOrSelf(View candidate, View root) {

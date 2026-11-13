@@ -166,7 +166,9 @@
       "consumePendingUpdates": "consumePendingUpdateOperations",
       "dispatchLayout": "dispatchLayout",
       "getAdapter": "getAdapter",
-      "findContainingViewHolder": "findContainingViewHolder"
+      "findContainingViewHolder": "findContainingViewHolder",
+      "getChildCount": "getChildCount",
+      "getChildAt": "getChildAt"
     }
   },
   "fields": {
