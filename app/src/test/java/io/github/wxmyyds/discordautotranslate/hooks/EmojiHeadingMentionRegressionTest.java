@@ -36,6 +36,12 @@ import java.util.List;
  */
 public class EmojiHeadingMentionRegressionTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(ContentNodesTest.class, EmojiAnchorTest.class, OpaqueNodeTranslationTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     private static List<Object> list(Object... nodes) {
         return new ArrayList<>(Arrays.asList(nodes));
     }

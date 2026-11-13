@@ -18,6 +18,12 @@ import org.junit.Test;
  */
 public class EmbedStateKeyTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(ContentNodesTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     private static final String ROW = "123456789012345678";
 
     @Test

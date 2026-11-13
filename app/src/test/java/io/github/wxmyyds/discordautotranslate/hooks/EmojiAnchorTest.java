@@ -25,6 +25,12 @@ import java.util.List;
  */
 public class EmojiAnchorTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(EmojiAnchorTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     /** 文本 emoji 节点：与宿主同名的 getContent()。 */
     public static final class UnicodeEmojiContentNode {
         private final String content;

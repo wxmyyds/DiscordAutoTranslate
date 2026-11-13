@@ -23,6 +23,12 @@ import java.util.List;
  */
 public class TextExtractorSegmentsTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(TextExtractorSegmentsTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     // ---------------------------------------------------------------- 假节点模型
 
     public static final class TextContentNode {

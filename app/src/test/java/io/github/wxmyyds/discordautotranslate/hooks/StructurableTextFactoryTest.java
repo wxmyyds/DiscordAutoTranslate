@@ -31,6 +31,7 @@ public class StructurableTextFactoryTest {
 
     @Before
     public void installFakeHostConstructors() throws Exception {
+        ContentNodeTestProfile.activate(ContentNodesTest.class);
         StructurableTextFactory.reset();
         setConstructor("sAnnotatedCtor", AnnotatedStructurableText.class.getConstructor(List.class));
         setConstructor("sPrimitiveCtor", PrimitiveStructurableText.class.getConstructor(String.class));
@@ -39,6 +40,7 @@ public class StructurableTextFactoryTest {
     @After
     public void clearFakeHostConstructors() {
         StructurableTextFactory.reset();
+        ContentNodeTestProfile.clear();
     }
 
     private static void setConstructor(String name, Constructor<?> constructor) throws Exception {

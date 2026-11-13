@@ -115,6 +115,19 @@ public class HookConfigurationTest {
     }
 
     @Test
+    public void resolvesExplicitFullNameTypeAliases() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
+                + "\"hooks\":{},\"types\":{},\"typeAliases\":{\""
+                + UnmappedAccessorFixture.class.getName()
+                + "\":\"TextContentNode\"}}";
+        HookConfiguration.activate(HookConfiguration.parse(json, 352017));
+
+        assertEquals("TextContentNode",
+                HookConfiguration.semanticTypeName(UnmappedAccessorFixture.class));
+        assertNull(HookConfiguration.semanticTypeName(FieldOnlyFixture.class));
+    }
+
+    @Test
     public void rejectsWrongVersionAndDisabledHook() throws Exception {
         String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
                 + "\"requiredHooks\":[\"reply\"],\"hooks\":{\"reply\":{\"enabled\":false}}}";

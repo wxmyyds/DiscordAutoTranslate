@@ -27,6 +27,12 @@ import java.util.List;
 /** 提及/频道虽有 content 子列表，也不是正文的译文位置。 */
 public class OpaqueNodeTranslationTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(OpaqueNodeTranslationTest.class, ContentNodesTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     // 实际宿主的这些类型使用 copy-<suffix>；这里不提供名为 copy 的方法，
     // 模拟旧 findCopyMethod 无法处理的情况。实现不应尝试复制它们。
     public static final class UserOrRoleMentionContentNode {

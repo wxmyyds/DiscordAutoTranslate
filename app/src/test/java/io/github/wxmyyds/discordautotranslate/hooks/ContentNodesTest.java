@@ -29,6 +29,12 @@ import java.util.List;
  */
 public class ContentNodesTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(ContentNodesTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     // ---------------------------------------------------------------- 假节点模型
     // 类名必须与 Discord 一致，ContentNodes 依赖 getSimpleName()。
 

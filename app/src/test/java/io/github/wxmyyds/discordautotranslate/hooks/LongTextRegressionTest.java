@@ -42,6 +42,12 @@ import java.util.List;
  */
 public class LongTextRegressionTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(ContentNodesTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     private static final String[] TITLES = {
             "# FREE CODEX CRACK 🔥 2026 🔥 [REAL] [WORKING] [GPT 6 ASTRA] [UNLIMITED USAGE]",
             "# FREE ANTIGRAVITY CRACK 🔥 2026 🔥 [REAL] [WORKING] [GEMINI 4 ARGON] [UNLIMITED USAGE]",

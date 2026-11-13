@@ -28,6 +28,12 @@ import java.util.List;
  */
 public class BulletListAlignmentTest {
 
+    @org.junit.Before
+    public void activateFixtureProfile() { ContentNodeTestProfile.activate(ContentNodesTest.class); }
+
+    @org.junit.After
+    public void clearFixtureProfile() { ContentNodeTestProfile.clear(); }
+
     private static final String URL = "https://codex-relay.codes/register?aff=QlIz";
 
     private static final String[] BULLETS = {

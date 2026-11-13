@@ -83,18 +83,19 @@ public final class HookConfiguration {
     public static String semanticTypeName(Class<?> runtimeType) {
         HookConfiguration configuration = active;
         JSONObject types = configuration == null ? null : configuration.root.optJSONObject("types");
-        if (types == null) {
-            return null;
-        }
-        Iterator<String> keys = types.keys();
-        while (keys.hasNext()) {
-            String semanticName = keys.next();
-            String configuredClass = types.optString(semanticName, "");
-            if (runtimeType.getName().equals(configuredClass)) {
-                return semanticName;
+        if (types != null) {
+            Iterator<String> keys = types.keys();
+            while (keys.hasNext()) {
+                String semanticName = keys.next();
+                String configuredClass = types.optString(semanticName, "");
+                if (runtimeType.getName().equals(configuredClass)) {
+                    return semanticName;
+                }
             }
         }
-        return null;
+        JSONObject aliases = configuration == null ? null
+                : configuration.root.optJSONObject("typeAliases");
+        return aliases == null ? null : aliases.optString(runtimeType.getName(), null);
     }
 
     @Nullable
