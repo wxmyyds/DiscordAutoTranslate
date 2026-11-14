@@ -245,6 +245,14 @@ public final class HookBridge {
         return stateKey(rowMessageId, contentHashOf(rawText, config));
     }
 
+    @Nullable
+    public String cachedTranslationForText(@Nullable String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return null;
+        }
+        return TranslationCache.get().get(contentHashOf(text, config));
+    }
+
     /** Find an existing canonical translation for exactly the same referenced text. */
     @Nullable
     public StateStore.Entry existingMessageStateForText(String messageId, String text) {

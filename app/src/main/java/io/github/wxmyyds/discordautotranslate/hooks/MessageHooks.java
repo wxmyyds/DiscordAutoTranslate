@@ -444,7 +444,11 @@ public final class MessageHooks {
 
         StateStore.Entry entry = originalText == null
                 ? null : bridge.existingMessageStateForText(referencedId, originalText);
-        String status = entry == null ? "missing-or-different-source" : entry.status.name();
+        String cachedTranslation = originalText == null
+                ? null : bridge.cachedTranslationForText(originalText);
+        String status = entry == null
+                ? cachedTranslation == null ? "missing-or-different-source" : "cached"
+                : entry.status.name();
         if (entry != null && entry.status == StateStore.Status.TRANSLATING) {
             bridge.trackReplyPreviewState(referencedId, replyTrace);
         } else {
@@ -457,7 +461,7 @@ public final class MessageHooks {
                 + " requestSubmitted=false");
         if (preview instanceof TextView) {
             applyReplyPreviewTranslation((TextView) preview, referencedId, originalText,
-                    row, spec);
+                    cachedTranslation, row, spec);
         }
         return status;
     }
@@ -475,20 +479,28 @@ public final class MessageHooks {
 
     /** Apply the cited message's existing translation, never starting a request here. */
     private static void applyReplyPreviewTranslation(TextView view, String stateKey,
-                                                     @Nullable String sourceText, View row,
-                                                     JSONObject spec) {
+                                                     @Nullable String sourceText,
+                                                     @Nullable String cachedTranslation,
+                                                     View row, JSONObject spec) {
         StateStore.Entry entry = StateStore.get().peek(stateKey);
-        if (entry == null || entry.status != StateStore.Status.TRANSLATED
-                || entry.showingOriginal || entry.translatedText == null
-                || sourceText == null || !sourceText.equals(entry.originalText)) {
+        boolean sameSource = entry != null && sourceText != null
+                && sourceText.equals(entry.originalText);
+        String translated = null;
+        if (sameSource && entry.status == StateStore.Status.TRANSLATED
+                && !entry.showingOriginal) {
+            translated = entry.translatedText;
+        } else if (!sameSource) {
+            translated = cachedTranslation;
+        }
+        if (translated == null || translated.isEmpty()) {
             HookDiagnostics.info("replyPreview.apply trace="
                     + replyTraceFor(view) + " outcome=translation-unavailable"
                     + " state=" + (entry == null ? "missing" : entry.status.name())
-                    + " sourceMatches=" + (entry != null && sourceText != null
-                    && sourceText.equals(entry.originalText)));
+                    + " sourceMatches=" + sameSource
+                    + " cachedTranslationPresent=" + (cachedTranslation != null));
             return;
         }
-        SpannableStringBuilder styled = new SpannableStringBuilder(entry.translatedText);
+        SpannableStringBuilder styled = new SpannableStringBuilder(translated);
         view.setText(styled, TextView.BufferType.SPANNABLE);
         refreshReplyPreviewLayout(view, row, spec);
         HookDiagnostics.info("replyPreview.apply trace=" + replyTraceFor(view)
