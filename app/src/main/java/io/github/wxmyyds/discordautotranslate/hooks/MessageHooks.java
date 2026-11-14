@@ -151,13 +151,14 @@ public final class MessageHooks {
         }
         String messageId = Reflect.callString(message, idGetter);
         Object content = Reflect.getField(referenced, contentField);
-        boolean mapped = messageId != null && HookBridge.looksLikeSnowflake(messageId)
-                && content != null;
+        boolean validMessageId = messageId != null && HookBridge.looksLikeSnowflake(messageId);
+        boolean mapped = validMessageId && content != null;
         if (mapped) {
             HookBridge.get().rememberContent(messageId, content);
         }
         HookDiagnostics.infoOnce("message.bind.replyMapping." + mapped,
                 "message.bind referenced preview content mapped=" + mapped
+                        + " idValid=" + validMessageId
                         + " contentClass=" + (content == null ? "null" : content.getClass().getName()));
     }
 

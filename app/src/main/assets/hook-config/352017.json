@@ -56,7 +56,7 @@
         "accessor": "getReferencedMessage",
         "loadedClass": "c8.c",
         "messageField": "a",
-        "messageIdGetter": "getId-3Eiw7ao",
+        "messageIdGetter": "getId",
         "contentField": "b"
       }
     },
