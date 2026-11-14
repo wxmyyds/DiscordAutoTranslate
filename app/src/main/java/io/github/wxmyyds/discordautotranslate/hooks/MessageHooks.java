@@ -379,6 +379,16 @@ public final class MessageHooks {
                 + " bodyTextMatches=" + (canonical != null && modelBody != null
                 && modelBody.text.equals(canonical.originalText))
                 + " route=native-converter requestSubmitted=false");
+        HookDiagnostics.info("replyPreview.whitespace trace=" + replyTrace
+                + " canonical=" + TextWhitespaceStats.of(canonical == null ? null : canonical.originalText)
+                + " model=" + TextWhitespaceStats.of(modelBody == null ? null : modelBody.text)
+                + " translated=" + TextWhitespaceStats.of(canonical == null ? null : canonical.translatedText)
+                + " equalWithoutWhitespace=" + TextWhitespaceStats.equalWithoutWhitespace(
+                        canonical == null ? null : canonical.originalText,
+                        modelBody == null ? null : modelBody.text)
+                + " modelTypes=" + TextExtractor.typeSummary(replySource.messageContent)
+                + " canonicalTypes=" + (reused == null ? "unavailable"
+                : TextExtractor.typeSummary(reused.originalContent)));
         if (previewText instanceof TextView) {
             observeReplyPreviewLayout((TextView) previewText, row, spec, replyTrace);
         }
@@ -394,14 +404,20 @@ public final class MessageHooks {
         observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
             @Override
             public boolean onPreDraw() {
-                ViewTreeObserver current = textView.getViewTreeObserver();
-                if (current.isAlive()) {
-                    current.removeOnPreDrawListener(this);
-                }
                 Long currentTrace = REPLY_PREVIEW_TRACE_IDS.get(textView);
                 if (currentTrace == null || currentTrace != replyTrace || !textView.isShown()) {
+                    ViewTreeObserver current = textView.getViewTreeObserver();
+                    if (current.isAlive()) current.removeOnPreDrawListener(this);
                     return true;
                 }
+                Layout layout = textView.getLayout();
+                if (layout == null || layout.getLineCount() == 0 || textView.isLayoutRequested()) {
+                    // Discord's own layout listener may still be measuring the replaced
+                    // Drawee text. Observe the next ready frame without forcing layout.
+                    return true;
+                }
+                ViewTreeObserver current = textView.getViewTreeObserver();
+                if (current.isAlive()) current.removeOnPreDrawListener(this);
                 View username = replyUsernameView(row, spec);
                 View leading = replyLeadingViews(row, spec);
                 CharSequence text = textView.getText();
@@ -412,7 +428,6 @@ public final class MessageHooks {
                 for (LeadingMarginSpan margin : margins) {
                     firstMargin += margin.getLeadingMargin(true);
                 }
-                Layout layout = textView.getLayout();
                 int[] location = new int[2];
                 int[] nameLocation = new int[2];
                 textView.getLocationOnScreen(location);
@@ -424,10 +439,8 @@ public final class MessageHooks {
                         + " textLength=" + (text == null ? 0 : text.length())
                         + " marginSpanCount=" + margins.length
                         + " firstMargin=" + firstMargin
-                        + " firstLineLeft=" + (layout == null || layout.getLineCount() == 0
-                        ? -1 : layout.getLineLeft(0))
-                        + " firstLineRight=" + (layout == null || layout.getLineCount() == 0
-                        ? -1 : layout.getLineRight(0))
+                        + " firstLineLeft=" + layout.getLineLeft(0)
+                        + " firstLineRight=" + layout.getLineRight(0)
                         + " textX=" + location[0] + " textY=" + location[1]
                         + " textPaddingLeft=" + textView.getTotalPaddingLeft()
                         + " textWidth=" + textView.getWidth()
@@ -435,8 +448,15 @@ public final class MessageHooks {
                         + " textLines=" + textView.getLineCount()
                         + " maxLines=" + textView.getMaxLines()
                         + " ellipsize=" + textView.getEllipsize()
-                        + " lastLineEllipsisCount=" + (layout == null || layout.getLineCount() == 0
-                        ? -1 : layout.getEllipsisCount(layout.getLineCount() - 1))
+                        + " lastLineEllipsisCount=" + layout.getEllipsisCount(layout.getLineCount() - 1)
+                        + " firstLineStart=" + layout.getLineStart(0)
+                        + " firstLineEnd=" + layout.getLineEnd(0)
+                        + " firstLineWhitespace=" + TextWhitespaceStats.of(
+                                text.subSequence(layout.getLineStart(0),
+                                        Math.min(text.length(), layout.getLineEnd(0))))
+                        + " line0=" + lineGeometry(layout, 0)
+                        + " line1=" + lineGeometry(layout, 1)
+                        + " renderedWhitespace=" + TextWhitespaceStats.of(text)
                         + " usernameX=" + (username == null ? -1 : nameLocation[0])
                         + " usernameWidth=" + (username == null ? -1 : username.getWidth())
                         + " usernameVisibility=" + visibilityName(username)
@@ -444,6 +464,15 @@ public final class MessageHooks {
                 return true;
             }
         });
+    }
+
+    private static String lineGeometry(Layout layout, int line) {
+        if (line >= layout.getLineCount()) return "missing";
+        return "start=" + layout.getLineStart(line) + ",end=" + layout.getLineEnd(line)
+                + ",left=" + layout.getLineLeft(line) + ",right=" + layout.getLineRight(line)
+                + ",top=" + layout.getLineTop(line) + ",bottom=" + layout.getLineBottom(line)
+                + ",baseline=" + layout.getLineBaseline(line)
+                + ",ellipsis=" + layout.getEllipsisCount(line);
     }
 
     @Nullable

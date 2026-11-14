@@ -151,6 +151,47 @@ public class ReferencedMessageStateTest {
     }
 
     @Test
+    public void retryCannotRelabelOldBodyAfterNewModelRevisionArrives() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("Body text");
+        StateStore.Entry entry = canonical(original);
+        entry.status = StateStore.Status.FAILED;
+        entry.lastError = "retained";
+        bridge.rememberMessageRevision(ID, "revision-1");
+        bridge.rememberCanonicalContent(ID, original);
+        bridge.rememberMessageRevision(ID, "revision-2");
+        bridge.retry(ID);
+        assertEquals(StateStore.Status.FAILED, entry.status);
+        assertEquals("retained", entry.lastError);
+        assertNull(bridge.referencedTranslation(ID, "revision-2"));
+        assertNull(bridge.referencedTranslation(ID, "revision-1"));
+    }
+
+    @Test
+    public void retryRejectsUnknownSnapshotWhenRevisionBecomesKnown() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("Body text");
+        StateStore.Entry entry = canonical(original);
+        entry.status = StateStore.Status.FAILED;
+        bridge.rememberCanonicalContent(ID, original);
+        bridge.rememberMessageRevision(ID, null);
+        bridge.retry(ID);
+        assertEquals(StateStore.Status.FAILED, entry.status);
+        assertNull(bridge.referencedTranslation(ID, null));
+    }
+
+    @Test
+    public void retryRejectsStateHashThatNoLongerMatchesTheSnapshot() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("Body text");
+        StateStore.Entry entry = canonical(original);
+        bridge.rememberMessageRevision(ID, null);
+        bridge.rememberCanonicalContent(ID, original);
+        entry.contentHash = "new-content-hash";
+        entry.status = StateStore.Status.FAILED;
+        bridge.retry(ID);
+        assertEquals(StateStore.Status.FAILED, entry.status);
+        assertEquals("new-content-hash", entry.contentHash);
+    }
+
+    @Test
     public void consumerDoesNotOverrideToggleOrFailedAndInFlightStatus() {
         Object body = new ContentNodesTest.PrimitiveStructurableText("Original message");
         StateStore.Entry entry = canonical(body);

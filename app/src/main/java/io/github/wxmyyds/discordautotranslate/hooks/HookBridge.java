@@ -746,7 +746,14 @@ public final class HookBridge {
             return;
         }
         CanonicalContent original = rawContent.get(messageId);
-        if (original == null) {
+        MessageRevision current = messageRevisions.get(messageId);
+        boolean sameRevision = original != null && (original.revision == null
+                ? current == null
+                : current != null && java.util.Objects.equals(
+                        original.revision.editedTimestamp, current.editedTimestamp));
+        if (!sameRevision || existingReferencedMessageState(messageId, original.content) != e) {
+            // A new model may have bound before its body renderer. Do not relabel
+            // the previous body's retry with the latest model revision or reset state.
             return;
         }
         Object structurable = original.content;
