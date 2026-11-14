@@ -60,6 +60,10 @@
         "contentField": "b",
         "messageContentGetter": "getContent"
       },
+      "systemReferencedMessage": {
+        "class": "c8.i",
+        "contentField": "a"
+      },
       "replyPreviewField": "v",
       "replyPreviewBindingField": "P",
       "replyPreviewTextField": "H"

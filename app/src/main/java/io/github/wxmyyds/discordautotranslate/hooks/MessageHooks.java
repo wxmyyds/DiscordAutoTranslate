@@ -1,6 +1,10 @@
 package io.github.wxmyyds.discordautotranslate.hooks;
 
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.StyleSpan;
 import android.view.View;
+import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
@@ -220,6 +224,15 @@ public final class MessageHooks {
             return;
         }
 
+        if (bindArgs == null) {
+            bindArgs = chain.getArgs().toArray();
+        }
+        // SystemReferencedMessage(c8.i) carries plain String content and Discord draws
+        // it directly, bypassing kl.b.B0. Route that source through the same state engine.
+        if (bindSystemReferencedPreview(model, row, previewText, bind, bindArgs, spec)) {
+            return;
+        }
+
         // RecyclerView may reuse this preview for another referenced message.
         RerenderRegistry.unregister(previewText);
         ReferencedContent referenced = readReferencedContent(model,
@@ -246,6 +259,63 @@ public final class MessageHooks {
 
         // Unknown reference identity is not permission to associate the preview with its parent row.
         HookBridge.get().unbindView(previewText);
+    }
+
+    /** Handle the c8.i SystemReferencedMessage(String) branch that bypasses kl.b.B0. */
+    private static boolean bindSystemReferencedPreview(Object model, View row, View previewText,
+                                                       Method bind, Object[] bindArgs,
+                                                       JSONObject spec) {
+        JSONObject systemSpec = spec.optJSONObject("systemReferencedMessage");
+        JSONObject referenceSpec = spec.optJSONObject("referencedMessage");
+        String accessor = referenceSpec == null ? null : referenceSpec.optString("accessor", null);
+        String systemClass = systemSpec == null ? null : systemSpec.optString("class", null);
+        String contentField = systemSpec == null ? null : systemSpec.optString("contentField", null);
+        if (accessor == null || systemClass == null || contentField == null) {
+            return false;
+        }
+        Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(), accessor, 0), model);
+        if (!Reflect.isInstanceOfName(referenced, systemClass)) {
+            return false;
+        }
+
+        RerenderRegistry.unregister(previewText);
+        Object rawValue = Reflect.getField(referenced, contentField);
+        String rawText = rawValue instanceof String ? (String) rawValue : null;
+        String rowId = Reflect.callString(model, spec.optString("messageIdGetter", null));
+        String stateKey = rowId == null || !HookBridge.looksLikeSnowflake(rowId)
+                ? null : HookBridge.get().embedTextStateKey(rowId, rawText);
+        Object wrapped = rawText == null ? null : StructurableTextFactory.primitive(rawText);
+        if (stateKey == null || wrapped == null || !(previewText instanceof TextView)) {
+            HookBridge.get().unbindView(previewText);
+            HookDiagnostics.infoOnce("message.bind.systemReplyPreview.unavailable",
+                    "system reply preview source or render target unavailable");
+            return true;
+        }
+
+        HookBridge.get().bindView(previewText, stateKey);
+        RerenderRegistry.register(stateKey, previewText, row, bind, bindArgs);
+        HookBridge.get().rememberContent(stateKey, wrapped);
+        HookBridge.get().onMessageBound(previewText, stateKey, wrapped);
+        applySystemReferencedTranslation((TextView) previewText, stateKey);
+        HookDiagnostics.infoOnce("message.bind.systemReplyPreview.registered",
+                "system reply preview uses shared translation state");
+        return true;
+    }
+
+    /** c8.i is rendered as a styled String rather than through the StructurableText converter. */
+    private static void applySystemReferencedTranslation(TextView view, String stateKey) {
+        StateStore.Entry entry = StateStore.get().peek(stateKey);
+        if (entry == null || entry.status != StateStore.Status.TRANSLATED
+                || entry.showingOriginal || entry.translatedText == null) {
+            return;
+        }
+        SpannableStringBuilder styled = new SpannableStringBuilder(entry.translatedText);
+        if (styled.length() > 0) {
+            // af/g applies StyleSpan(2) to the entire original system-reference string.
+            styled.setSpan(new StyleSpan(2), 0, styled.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        view.setText(styled, TextView.BufferType.SPANNABLE);
     }
 
     @Nullable
