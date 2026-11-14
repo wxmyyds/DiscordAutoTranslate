@@ -1,8 +1,10 @@
 package io.github.wxmyyds.discordautotranslate.hooks;
 
+import android.text.Editable;
 import android.text.Layout;
 import android.text.Spanned;
 import android.text.style.LeadingMarginSpan;
+import android.text.style.ReplacementSpan;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.TextView;
@@ -660,6 +662,7 @@ public final class MessageHooks {
                     HookDiagnostics.infoOnce("message.textConversion.callers",
                             "message.textConversion Discord callers="
                                     + HookDiagnostics.discordCallers());
+                    boolean replyTranslationApplied = false;
                     try {
                         String messageId = resolvedMessageId;
                         if (messageId != null) {
@@ -686,6 +689,7 @@ public final class MessageHooks {
                                             + " sourceClass=" + original.getClass().getName()
                                             + " replacementClass=" + replacement.getClass().getName());
                                     renderArgs[contentArgument] = replacement;
+                                    replyTranslationApplied = replyConversion;
                                 } else {
                                     HookDiagnostics.info("message translation replacement rejected"
                                             + " sourceClass=" + source.getClass().getName());
@@ -699,10 +703,45 @@ public final class MessageHooks {
                                 "message.textConversion processing failed with "
                                         + t.getClass().getName());
                         renderArgs[contentArgument] = source;
+                        replyTranslationApplied = false;
                     }
 
                     // 宿主渲染只执行一次；图标注入失败时保留原始渲染结果。
                     Object rendered = chain.proceed(renderArgs);
+                    if (replyTranslationApplied) {
+                        // B0's native singleLine mode does not remove embedded LF or
+                        // NewLine nodes. Project only after canonical rich-text alignment,
+                        // before af.i adds LeadingMarginSpan(width, 0) and attaches it.
+                        // Keep oj.c itself and its Drawee attachment registries intact.
+                        Editable preview = (Editable) rendered;
+                        int lengthBefore = preview.length();
+                        int spansBefore = preview.getSpans(0, preview.length(), Object.class).length;
+                        ReplacementSpan[] attachments = preview.getSpans(
+                                0, preview.length(), ReplacementSpan.class);
+                        int[] attachmentStarts = new int[attachments.length];
+                        int[] attachmentEnds = new int[attachments.length];
+                        for (int i = 0; i < attachments.length; i++) {
+                            attachmentStarts[i] = preview.getSpanStart(attachments[i]);
+                            attachmentEnds[i] = preview.getSpanEnd(attachments[i]);
+                        }
+                        int flattened = ReplyTextProjection.flattenLineBreaks(preview,
+                                index -> preview.replace(index, index + 1, " "));
+                        boolean attachmentRangesUnchanged = true;
+                        for (int i = 0; i < attachments.length; i++) {
+                            attachmentRangesUnchanged &= attachmentStarts[i] == preview.getSpanStart(attachments[i])
+                                    && attachmentEnds[i] == preview.getSpanEnd(attachments[i]);
+                        }
+                        HookDiagnostics.info("replyPreview.projection route=reply-canonical"
+                                + " flattenedBreaks=" + flattened
+                                + " lengthUnchanged=" + (lengthBefore == preview.length())
+                                + " attachmentSpanCount=" + attachments.length
+                                + " attachmentRangesUnchanged=" + attachmentRangesUnchanged
+                                + " spansBefore=" + spansBefore
+                                + " spansAfter=" + preview.getSpans(0, preview.length(), Object.class).length
+                                + " marginSpansBeforeNativeCallback=" + preview.getSpans(
+                                        0, preview.length(), LeadingMarginSpan.class).length
+                                + " renderedWhitespace=" + TextWhitespaceStats.of(preview));
+                    }
                     try {
                         return InlineIconInjector.inject(source, rendered,
                                 safeArg(chain, contextArgument), cl);

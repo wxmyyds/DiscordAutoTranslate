@@ -83,10 +83,38 @@ public class StructurableTextFactoryTest {
             assertEquals(translated, TextExtractor.extract(replacement).text);
             // Full content goes to native B0/TextView; this layer never adds an ellipsis.
             assertTrue(TextExtractor.extract(replacement).text.length() > 250);
+            StringBuilder rendered = new StringBuilder(TextExtractor.extract(replacement).text);
+            ReplyTextProjection.flattenLineBreaks(rendered,
+                    index -> rendered.setCharAt(index, ' '));
+            assertEquals(translated.replace('\n', ' '), rendered.toString());
+            assertEquals(translated.length(), rendered.length());
+            assertEquals(translated, entry.translatedText);
+            assertEquals("line one\nline two", TextExtractor.extract(original).text);
+            assertEquals("line one line two", TextExtractor.extract(projected).text);
         } finally {
             bridge.reset();
             store.onNewGeneration();
         }
+    }
+
+    @Test
+    public void replyProjectionRunsAfterRichTextLineAlignmentNotBeforeIt() {
+        EmojiContentNode emoji = new EmojiContentNode("1");
+        ContentNodesTest.NewLineContentNode newline = new ContentNodesTest.NewLineContentNode();
+        AnnotatedStructurableText original = new AnnotatedStructurableText(list(
+                new TextContentNode("first"), newline, new TextContentNode("second"), emoji));
+        Object replacement = StructurableTextFactory.forTranslation(original, "第一\n第二");
+        assertNotNull(replacement);
+        List<?> nodes = ((AnnotatedStructurableText) replacement).getContent();
+        assertSame(newline, nodes.get(1));
+        assertSame(emoji, nodes.get(3));
+        assertEquals("第一", ((TextContentNode) nodes.get(0)).getContent());
+        assertEquals("第二", ((TextContentNode) nodes.get(2)).getContent());
+        StringBuilder rendered = new StringBuilder("第一\n第二\ufffc");
+        assertEquals(1, ReplyTextProjection.flattenLineBreaks(rendered,
+                index -> rendered.setCharAt(index, ' ')));
+        assertEquals("第一 第二\ufffc", rendered.toString());
+        assertEquals("first", ((TextContentNode) original.getContent().get(0)).getContent());
     }
 
     @Test
