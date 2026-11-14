@@ -16,10 +16,9 @@
   驱动，曾修复卡死），其他状态停止并归零。
 - **点击**：图标 span 由 `IconClickSpanFactory` 反射创建 Discord 自身的 `lh.d`，提供宿主 `zf.b` 标记接口及 `Function1` 点击回调；`zf/f` 只查询 `zf.b` 并将命中项强转为 `lh/d`。回调转交 `HookBridge.onIconClicked` 切换原文/译文或重试。
 - **注入范围**：只处理正常消息正文（文本节点数 > 0 且非 IDLE）；回复引用
-  内不注入；富 Embed 每卡片一个（主段优先）；帖子预览挂在 footer；
-  投票卡片挂在问题文本末尾。
+  内不注入；340013 富 Embed 每卡片一个（主段优先）。帖子预览与投票路径已移除。
 - 图标资源是模块自带（非 Discord 的），使用 `PackageManager.getResourcesForApplication`
-  解析一次模块资源；失败后该进程不再尝试其它资源 API，图标保持缺失。
+  解析一次模块资源；失败后不尝试其它资源 API。每次着色必须创建独立副本；ConstantState 缺失、复制或着色失败时记录异常并拒绝注入，不修改共享 drawable 或显示未着色替代品。
 
 ## 布局刷新（译文/切换后行高立即更新）
 

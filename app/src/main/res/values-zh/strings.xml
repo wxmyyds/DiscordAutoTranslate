@@ -11,6 +11,14 @@
     <string name="status_read_config_failed">读取设置失败（%1$s）。</string>
     <string name="status_service_died">LSPosed 已断开，无法保存设置。</string>
     <string name="status_invalid_config">设置无效，请检查后重试。</string>
+    <string name="status_invalid_saved_config">已保存的设置无效，未载入或修改。编辑、保存、检查、网络请求和同步均已禁用；请明确重置已保存的设置后重新配置。</string>
+    <string name="button_reset_saved_settings">重置已保存的设置</string>
+    <string name="confirm_reset_saved_settings">此操作永久删除全部已保存的配置：API URL、API 密钥、模型、目标语言、额外请求头、系统提示词、服务协议、流式开关、超时、并发数和自动翻译开关。LSPosed 可用时同步删除远程设置。重置后默认配置生效；只有确认后才会删除。是否继续？</string>
+    <string name="status_resetting">正在重置已保存的设置…</string>
+    <string name="status_reset_failed">重置未能持久保存，配置仍保持锁定。%1$s</string>
+    <string name="status_reset_saved_restart">全部已保存的设置已重置并同步到 LSPosed，默认配置已生效。请重启 Discord。</string>
+    <string name="status_reset_sync_pending">本机全部已保存的设置已重置，默认配置已在本机生效。LSPosed 暂不可用，重连后重试删除远程设置。</string>
+    <string name="status_reset_sync_failed">本机全部已保存的设置已重置，但同步删除 LSPosed 设置失败。远程设置可能仍生效，将在 LSPosed 重连后重试。</string>
     <string name="status_no_service">LSPosed 不可用，请启用模块并选择作用域。</string>
     <string name="status_service_disconnected">LSPosed 已断开，无法保存设置。</string>
     <string name="status_save_failed">保存失败（%1$s）。</string>

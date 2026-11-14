@@ -16,7 +16,7 @@ import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Creates the host-recognized icon click span using the active hook profile protocol. */
+/** Creates the host-recognized icon click span using the configured constructor protocol. */
 public final class IconClickSpanFactory {
     private static final Object INVALID_ARGUMENT = new Object();
 
@@ -32,17 +32,10 @@ public final class IconClickSpanFactory {
             return null;
         }
         try {
-            Object span;
-            switch (spec.optString("protocol", "")) {
-                case "constructorProxy":
-                    span = createByConstructor(hostCl, messageId, spec);
-                    break;
-                case "interfaceProxy":
-                    span = createByInterface(hostCl, messageId, spec);
-                    break;
-                default:
-                    span = null;
+            if (!"constructorProxy".equals(spec.optString("protocol", ""))) {
+                throw new IllegalArgumentException("Unsupported icon click protocol");
             }
+            Object span = createByConstructor(hostCl, messageId, spec);
             if (span == null) {
                 HookDiagnostics.warnOnce("icon.click.span-unavailable",
                         "icon click span unavailable: configured protocol could not be created");
@@ -104,51 +97,6 @@ public final class IconClickSpanFactory {
     }
 
     @Nullable
-    private static Object createByInterface(ClassLoader hostCl, String messageId,
-                                             JSONObject spec) throws Exception {
-        Class<?> iface = configuredClass(hostCl, spec.optString("interface", ""));
-        JSONObject handlers = spec.optJSONObject("methods");
-        if (iface == null || !iface.isInterface() || handlers == null) {
-            return null;
-        }
-        return Proxy.newProxyInstance(hostCl, new Class<?>[]{iface}, (proxy, method, args) -> {
-            JSONObject behavior = handlers.optJSONObject(method.getName());
-            return behavior == null ? objectMethod(proxy, method, args)
-                    : invokeConfiguredBehavior(hostCl, messageId, proxy, method, args, behavior);
-        });
-    }
-
-    @Nullable
-    private static Object invokeConfiguredBehavior(ClassLoader hostCl, String messageId,
-            Object proxy, Method method, Object[] args, JSONObject behavior) throws Exception {
-        switch (behavior.optString("action", "")) {
-            case "toggleTranslation":
-                HookDiagnostics.infoOnce("icon.click.callback-reached",
-                        "icon click callback reached configured host span handler");
-                HookBridge.get().onIconClicked(messageId);
-                return null;
-            case "returnFalse":
-                return false;
-            case "returnNull":
-                return null;
-            case "returnEnum":
-                Class<?> enumClass = configuredClass(hostCl, behavior.optString("enumClass", ""));
-                if (enumClass == null || !enumClass.isEnum()) {
-                    return null;
-                }
-                String enumValue = behavior.optString("enumValue", "");
-                for (Object value : enumClass.getEnumConstants()) {
-                    if (value instanceof Enum && enumValue.equals(((Enum<?>) value).name())) {
-                        return value;
-                    }
-                }
-                return null;
-            default:
-                return objectMethod(proxy, method, args);
-        }
-    }
-
-    @Nullable
     private static Object resolveArgument(ClassLoader hostCl, String messageId,
                                           @Nullable JSONObject argument) throws Exception {
         if (argument == null) {
@@ -157,23 +105,25 @@ public final class IconClickSpanFactory {
         switch (argument.optString("kind", "")) {
             case "null": return null;
             case "integer": return argument.optInt("value");
-            case "boolean": return argument.optBoolean("value");
-            case "string": return argument.optString("value", "");
             case "callback":
                 Class<?> callbackInterface = configuredClass(
                         hostCl, argument.optString("interface", ""));
                 String callbackMethod = argument.optString("method", "");
-                JSONObject behavior = new JSONObject().put(
-                        "action", argument.optString("action", ""));
                 if (callbackInterface == null || !callbackInterface.isInterface()
-                        || callbackMethod.isEmpty()) {
+                        || callbackMethod.isEmpty()
+                        || !"toggleTranslation".equals(argument.optString("action", ""))) {
                     return INVALID_ARGUMENT;
                 }
                 return Proxy.newProxyInstance(hostCl, new Class<?>[]{callbackInterface},
-                        (proxy, method, args) -> callbackMethod.equals(method.getName())
-                                ? invokeConfiguredBehavior(hostCl, messageId, proxy, method,
-                                        args, behavior)
-                                : objectMethod(proxy, method, args));
+                        (proxy, method, args) -> {
+                            if (!callbackMethod.equals(method.getName())) {
+                                return objectMethod(proxy, method, args);
+                            }
+                            HookDiagnostics.infoOnce("icon.click.callback-reached",
+                                    "icon click callback reached configured host span handler");
+                            HookBridge.get().onIconClicked(messageId);
+                            return null;
+                        });
             default: return INVALID_ARGUMENT;
         }
     }
@@ -236,7 +186,8 @@ public final class IconClickSpanFactory {
             case "hashCode": return System.identityHashCode(proxy);
             case "equals": return args != null && args.length == 1 && proxy == args[0];
             case "toString": return "ConfiguredIconClickSpan";
-            default: return null;
+            default: throw new UnsupportedOperationException(
+                    "Unconfigured icon click callback method: " + method.getName());
         }
     }
 }

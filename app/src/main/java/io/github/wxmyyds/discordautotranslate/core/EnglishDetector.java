@@ -25,13 +25,6 @@ public final class EnglishDetector {
     private EnglishDetector() {
     }
 
-    /** 与旧调用方兼容；默认目标语言为简体中文。 */
-    public static Verdict evaluate(@Nullable String rawText, int textNodeCount,
-                                   int opaqueNodeCount, boolean codeHeavy) {
-        return evaluate(rawText, textNodeCount, opaqueNodeCount, codeHeavy,
-                Config.DEF_TARGET_LANG);
-    }
-
     public static Verdict evaluate(@Nullable String rawText, int textNodeCount,
                                    int opaqueNodeCount, boolean codeHeavy,
                                    @Nullable String targetLanguage) {

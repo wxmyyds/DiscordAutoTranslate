@@ -16,7 +16,7 @@ import java.util.List;
  *       节点类型位于 {@code com.discord.chat.bridge.contentnode}。</li>
  * </ul>
  *
- * <p>本类只依赖“类名 + getter 名称前缀”，不做编译期依赖，因此对混淆和版本差异更耐受。</p>
+ * <p>宿主类型和读取成员均由活动版本 profile 显式选择并精确匹配，不猜测成员或切换访问路径。</p>
  */
 public final class TextExtractor {
 
@@ -134,11 +134,7 @@ public final class TextExtractor {
             return null;
         }
         if (name.equals("UnicodeEmojiContentNode")) {
-            String s = Reflect.callString(node, "getContent");
-            if (s == null || s.isEmpty()) {
-                // 部分版本把字符放在 surrogate 字段。
-                s = Reflect.callString(node, "getSurrogate");
-            }
+            String s = Reflect.callString(node, "getEmojiAnchor");
             return s == null || s.isEmpty() ? null : s;
         }
         if (name.equals("CustomEmojiContentNode")) {

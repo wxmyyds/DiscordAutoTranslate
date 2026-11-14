@@ -25,8 +25,7 @@ import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
  *   <li>必须有可翻译文本：{@code TextExtractor} 的 {@code textNodeCount > 0}。
  *       纯图片、纯表情、纯提及消息的文本节点数为 0，不注入。</li>
  *   <li>Embed 每卡片只挂一个图标：只有 {@code HookBridge.markEmbedIconKey}
- *       标记的主段（富 Embed 的描述/标题/首字段）允许注入；帖子预览的标题是
- *       String，图标经「仅图标」身份映射挂在 footer 上，不参与文本替换。</li>
+ *       标记的主段（富 Embed 的描述/标题/首字段）允许注入。</li>
  * </ol>
  *
  * <h3>宿主 View 的传递</h3>
@@ -102,12 +101,6 @@ public final class InlineIconInjector {
             boolean iconAllowed = messageId != null
                     && (!HookBridge.isEmbedKey(messageId)
                     || HookBridge.get().isEmbedIconKey(messageId));
-            if (messageId == null) {
-                // 帖子预览：图标承载在 footer 等另一段内容上（仅图标身份，
-                // 不参与文本替换）。
-                messageId = HookBridge.get().resolveIconOnlyKey(structurable);
-                iconAllowed = messageId != null;
-            }
             if (!iconAllowed) {
                 HookDiagnostics.warnOnce("icon.noMessageIdentity", "icon injection skipped: message identity not resolved");
                 return rendered;
@@ -140,7 +133,7 @@ public final class InlineIconInjector {
                     source, entry.status, entry.showingOriginal);
             InlineIconSpan icon = InlineIconSpan.create(
                     tinted, context.getResources().getDisplayMetrics().density,
-                    entry.status, messageId);
+                    entry.status);
             if (icon == null) {
                 HookDiagnostics.warnOnce("icon.spanCreation", "icon injection skipped: icon span creation failed");
                 return rendered;

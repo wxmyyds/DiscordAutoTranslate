@@ -1,14 +1,12 @@
 package io.github.wxmyyds.discordautotranslate.core;
 
-import android.content.Context;
-
 import androidx.annotation.Nullable;
 
 import org.json.JSONException;
 
 import java.io.BufferedReader;
-import java.io.FileNotFoundException;
-import java.io.IOException;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -21,28 +19,28 @@ public final class HookConfigurationLoader {
     }
 
     @Nullable
-    public static HookConfiguration load(Context context, int versionCode)
+    public static HookConfiguration load(String moduleApkPath, int versionCode)
             throws IOException, JSONException {
-        String path = CONFIG_DIRECTORY + versionCode + ".json";
-        InputStream input;
-        try {
-            input = ModuleResources.openAsset(context, path);
-        } catch (FileNotFoundException ignored) {
-            return null;
+        if (moduleApkPath == null || moduleApkPath.isEmpty()) {
+            throw new IOException("Module APK unavailable for hook profile loading");
         }
-        if (input == null) {
-            return null;
-        }
-        try (InputStream stream = input;
-             BufferedReader reader = new BufferedReader(
-                     new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-            StringBuilder json = new StringBuilder();
-            char[] buffer = new char[4096];
-            int read;
-            while ((read = reader.read(buffer)) != -1) {
-                json.append(buffer, 0, read);
+        String path = "assets/" + CONFIG_DIRECTORY + versionCode + ".json";
+        try (ZipFile apk = new ZipFile(moduleApkPath)) {
+            ZipEntry asset = apk.getEntry(path);
+            if (asset == null) {
+                return null;
             }
-            return HookConfiguration.parse(json.toString(), versionCode);
+            try (InputStream stream = apk.getInputStream(asset);
+                 BufferedReader reader = new BufferedReader(
+                         new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                StringBuilder json = new StringBuilder();
+                char[] buffer = new char[4096];
+                int read;
+                while ((read = reader.read(buffer)) != -1) {
+                    json.append(buffer, 0, read);
+                }
+                return HookConfiguration.parse(json.toString(), versionCode);
+            }
         }
     }
 }

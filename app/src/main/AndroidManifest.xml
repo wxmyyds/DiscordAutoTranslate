@@ -11,9 +11,7 @@
         android:description="@string/module_description"
         android:supportsRtl="true">
 
-        <!-- 设置入口：第一版采用独立设置 Activity（需求 §5.7 备用方案）。
-             原因见 docs/design-stage1.md：Discord 340.13 的设置界面由 RN/Hermes 渲染，
-             无法在不注入 JS bundle 的前提下插入设置项。 -->
+        <!-- 设置页只有独立 Activity 这一条入口；不注入 Discord 设置界面或 JS bundle。 -->
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="true"

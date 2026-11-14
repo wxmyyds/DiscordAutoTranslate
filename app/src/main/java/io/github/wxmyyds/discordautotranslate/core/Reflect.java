@@ -43,8 +43,8 @@ public final class Reflect {
         if (c == null) {
             return null;
         }
-        String configuredPrefix = accessorName(c, semanticAccessor);
-        return findMethodExact(c, configuredPrefix, paramCount, requiredFirstParams);
+        String configuredName = accessorName(c, semanticAccessor);
+        return findMethodExact(c, configuredName, paramCount, requiredFirstParams);
     }
 
     /** Find a method by an exact name supplied explicitly by profile data. */
@@ -78,22 +78,15 @@ public final class Reflect {
         return null;
     }
 
-    /** Find a no-argument String getter by its profile-selected exact name. */
+    /** Find a no-argument String getter by its exact configured name. */
     @Nullable
-    public static Method findStringGetter(Class<?> c, String namePrefix) {
-        String configuredPrefix = accessorName(c, namePrefix);
-        return findStringGetterExact(c, configuredPrefix);
-    }
-
-    @Nullable
-    private static Method findStringGetterExact(@Nullable Class<?> c,
-                                                 @Nullable String namePrefix) {
-        if (c == null || namePrefix == null || namePrefix.isEmpty()) {
+    private static Method findStringGetterExact(@Nullable Class<?> c, @Nullable String name) {
+        if (c == null || name == null || name.isEmpty()) {
             return null;
         }
         for (Method m : c.getDeclaredMethods()) {
             if (m.getParameterTypes().length == 0
-                    && m.getName().equals(namePrefix)
+                    && m.getName().equals(name)
                     && m.getReturnType() == String.class) {
                 m.setAccessible(true);
                 return m;
@@ -157,7 +150,7 @@ public final class Reflect {
 
     /** Read the profile-selected String accessor or field without runtime path switching. */
     @Nullable
-    public static String callString(@Nullable Object target, String namePrefix) {
+    public static String callString(@Nullable Object target, String memberName) {
         if (target == null) {
             return null;
         }
@@ -166,13 +159,13 @@ public final class Reflect {
             return null;
         }
         String semanticType = HookConfiguration.semanticTypeName(target.getClass());
-        String accessor = configuredAccessor(configuration, semanticType, namePrefix);
+        String accessor = configuredAccessor(configuration, semanticType, memberName);
         if (accessor != null) {
             Object value = call(findStringGetterExact(target.getClass(), accessor), target);
             return value instanceof String ? (String) value : null;
         }
         String field = semanticType == null ? null
-                : configuration.fieldName(semanticType, namePrefix);
+                : configuration.fieldName(semanticType, memberName);
         Object value = field == null ? null : getField(target, field);
         return value instanceof String ? (String) value : null;
     }

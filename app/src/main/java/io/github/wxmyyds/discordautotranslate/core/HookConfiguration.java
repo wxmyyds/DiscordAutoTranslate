@@ -40,6 +40,7 @@ public final class HookConfiguration {
             throw new JSONException("hook config is missing hooks");
         }
         validateHookSelectors(hooks);
+        validateNodeConstructors(root);
         return new HookConfiguration(versionCode, json, root);
     }
 
@@ -62,6 +63,94 @@ public final class HookConfiguration {
                 throw new JSONException("enabled hook has an incomplete target: " + id);
             }
         }
+    }
+
+    private static void validateNodeConstructors(JSONObject root) throws JSONException {
+        if (!root.has("nodeConstructors")) {
+            return;
+        }
+        JSONObject constructors = root.getJSONObject("nodeConstructors");
+        JSONObject types = root.optJSONObject("types");
+        Iterator<String> names = constructors.keys();
+        while (names.hasNext()) {
+            String semanticType = requireMetadataString(names.next(),
+                    "node constructor semantic type");
+            Object mappedType = types == null ? null : types.opt(semanticType);
+            boolean mapped = mappedType instanceof String && !((String) mappedType).trim().isEmpty()
+                    && mappedType.equals(((String) mappedType).trim());
+            JSONObject aliases = root.optJSONObject("typeAliases");
+            if (!mapped && aliases != null) {
+                Iterator<String> classNames = aliases.keys();
+                while (classNames.hasNext()) {
+                    String className = classNames.next();
+                    if (!className.trim().isEmpty() && className.equals(className.trim())
+                            && semanticType.equals(aliases.opt(className))) {
+                        mapped = true;
+                        break;
+                    }
+                }
+            }
+            if (!mapped) {
+                throw new JSONException("node constructor has no mapped type: " + semanticType);
+            }
+            JSONObject specification = constructors.getJSONObject(semanticType);
+            JSONArray parameterTypes = specification.getJSONArray("parameterTypes");
+            JSONArray arguments = specification.getJSONArray("arguments");
+            if (parameterTypes.length() != arguments.length()) {
+                throw new JSONException("node constructor argument count mismatch: " + semanticType);
+            }
+            int children = 0;
+            for (int i = 0; i < parameterTypes.length(); i++) {
+                String parameterType = requireMetadataString(parameterTypes.get(i),
+                        "node constructor parameter type: " + semanticType);
+                if (!parameterType.equals(parameterType.trim())
+                        || parameterType.indexOf('*') >= 0 || "void".equals(parameterType)) {
+                    throw new JSONException("node constructor needs an exact parameter type: "
+                            + semanticType);
+                }
+                JSONObject argument = arguments.getJSONObject(i);
+                String kind = requireMetadataString(argument.get("kind"),
+                        "node constructor argument kind: " + semanticType);
+                switch (kind) {
+                    case "children":
+                        children++;
+                        if (!"java.util.List".equals(parameterType)) {
+                            throw new JSONException("node constructor children must be java.util.List: "
+                                    + semanticType);
+                        }
+                        break;
+                    case "field":
+                        requireMetadataString(argument.get("name"),
+                                "node constructor field name: " + semanticType);
+                        break;
+                    case "integer":
+                        Object value = argument.get("value");
+                        if (!"int".equals(parameterType)
+                                || (!(value instanceof Integer) && !(value instanceof Long))
+                                || ((Number) value).longValue() < Integer.MIN_VALUE
+                                || ((Number) value).longValue() > Integer.MAX_VALUE) {
+                            throw new JSONException("node constructor integer must be an int: "
+                                    + semanticType);
+                        }
+                        break;
+                    default:
+                        throw new JSONException("unknown node constructor argument kind: " + kind);
+                }
+            }
+            if (children != 1) {
+                throw new JSONException("node constructor needs exactly one children argument: "
+                        + semanticType);
+            }
+        }
+    }
+
+    private static String requireMetadataString(Object value, String description)
+            throws JSONException {
+        if (!(value instanceof String) || ((String) value).trim().isEmpty()
+                || !value.equals(((String) value).trim())) {
+            throw new JSONException("missing or invalid " + description);
+        }
+        return (String) value;
     }
 
     public static void activate(HookConfiguration configuration) {
@@ -112,20 +201,11 @@ public final class HookConfiguration {
         return typeAccessors == null ? null : typeAccessors.optString(accessor, null);
     }
 
-    public boolean allowsConstructorRebuild(@Nullable String semanticType) {
-        if (semanticType == null) {
-            return false;
-        }
-        JSONArray types = root.optJSONArray("constructorFallbackTypes");
-        if (types == null) {
-            return false;
-        }
-        for (int i = 0; i < types.length(); i++) {
-            if (semanticType.equals(types.optString(i))) {
-                return true;
-            }
-        }
-        return false;
+    /** Exact constructor metadata for a semantic node type, or null for the copy strategy. */
+    @Nullable
+    public JSONObject nodeConstructor(String semanticType) {
+        JSONObject constructors = root.optJSONObject("nodeConstructors");
+        return constructors == null ? null : constructors.optJSONObject(semanticType);
     }
 
     @Nullable

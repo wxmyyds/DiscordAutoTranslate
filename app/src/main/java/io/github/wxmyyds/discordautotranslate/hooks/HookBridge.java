@@ -117,19 +117,8 @@ public final class HookBridge {
     /** 消息 ID → 最近承载它的视图（弱引用，避免消息状态反向固定 View）。 */
     private final Map<String, java.lang.ref.WeakReference<View>> lastView = boundedMap(512);
 
-    /** Reply-preview trace tokens keyed by internal translation state identity; IDs are never logged. */
-    private final Map<String, Long> replyPreviewTraceByState = boundedMap(512);
-
     /** 按引用身份反查消息 ID；Discord StructurableText 的 equals() 是按内容比较。 */
     private final IdentityMessageMap contentIdentityToMessageId = new IdentityMessageMap();
-
-    /**
-     * 仅用于图标注入的内容身份映射（键 ← 内容实例）。
-     *
-     * <p>帖子预览标题是普通 String，不经过正文文本转换；图标挂在其支持文本转换的 footer 上。
-     * footer 不能进入替换身份映射，否则译文会错误地写进 footer，因此单独记录图标身份。
-     */
-    private final IdentityMessageMap iconOnlyContentToKey = new IdentityMessageMap();
 
     /** 允许注入行内图标的 Embed 状态键：每张卡片只标一段，避免逐段各挂一个图标。 */
     private final java.util.Set<String> embedIconKeys =
@@ -225,9 +214,7 @@ public final class HookBridge {
         messageRevisions.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
-        iconOnlyContentToKey.clear();
         embedIconKeys.clear();
-        replyPreviewTraceByState.clear();
     }
 
     private static <K, V> Map<K, V> boundedMap(int maxEntries) {
@@ -293,21 +280,6 @@ public final class HookBridge {
     }
 
     /**
-     * 按裸文本生成 Embed 状态键（用于不经 StructurableText 渲染的文本，
-     * 例如原生帖子预览的标题）。
-     *
-     * <p>与 {@link #embedStateKey} 的约定：同一段纯文本两者生成的键必须相等
-     * （登记侧与替换侧各用其一），单测锁定该不变量。</p>
-     */
-    @Nullable
-    public String embedTextStateKey(String rowMessageId, @Nullable String rawText) {
-        if (rawText == null || rawText.trim().isEmpty()) {
-            return null;
-        }
-        return stateKey(rowMessageId, contentHashOf(rawText, config));
-    }
-
-    /**
      * Read only the referenced message's canonical state. A preview is a projection,
      * not a second message body: its displayed string must never be used as a cache
      * key or to create/reset state. When the model supplies the complete body, reject
@@ -360,26 +332,6 @@ public final class HookBridge {
         return key != null && embedIconKeys.contains(key);
     }
 
-    /**
-     * 登记「仅用于图标」的内容身份：该内容实例反查出的键只驱动图标注入，
-     * 不参与正文文本转换的译文替换（仍通过 {@link #resolveMessageId} 关联原始内容）。
-     */
-    public void rememberIconOnlyContent(String key, @Nullable Object content) {
-        if (key == null || content == null) {
-            return;
-        }
-        iconOnlyContentToKey.put(content, key);
-    }
-
-    /** 反查仅图标身份映射；未登记返回 null。 */
-    @Nullable
-    public String resolveIconOnlyKey(@Nullable Object content) {
-        if (content == null) {
-            return null;
-        }
-        return iconOnlyContentToKey.get(content);
-    }
-
     private static String stateKey(String rowMessageId, String contentHash) {
         return rowMessageId + EMBED_KEY_PREFIX + contentHash;
     }
@@ -390,35 +342,11 @@ public final class HookBridge {
         return Scheduler.contentHash(hashInput, cfg.version());
     }
 
-    /** 裸文本的内容哈希：与 PrimitiveStructurableText 提取出的纯文本同口径。 */
-    private static String contentHashOf(String rawText, Config.Snapshot cfg) {
-        return Scheduler.contentHash(rawText, cfg.version());
-    }
-
     // ---------------------------------------------------------------- 渲染拦截
 
     /** 当前是否处于“重渲染”调用中。 */
     public boolean isRerendering() {
         return Boolean.TRUE.equals(RERENDERING.get());
-    }
-
-    /**
-     * 记录“内容对象 → 消息 ID”身份映射。
-     *
-     * <p>正文替换统一在版本配置选择的文本转换入口完成；重渲染使用
-     * {@link #requestRerender} 的实参，不再在此保存。
-     *
-     * @return 始终返回传入的同一数组
-     */
-    public Object[] interceptRender(View contentView, Object[] args,
-                                    @Nullable Object structurableText) {
-        if (contentView != null && args != null && structurableText != null) {
-            String id = viewToMessageId.get(contentView);
-            if (id != null) {
-                rememberContent(id, structurableText);
-            }
-        }
-        return args;
     }
 
     /**
@@ -490,6 +418,8 @@ public final class HookBridge {
         try {
             method.invoke(invocationTarget, args);
         } catch (Throwable t) {
+            HookDiagnostics.warnOnce("rerender.invoke.failed", "rerender invocation failed error="
+                    + t.getClass().getSimpleName());
             return;
         } finally {
             RERENDERING.remove();
@@ -616,35 +546,12 @@ public final class HookBridge {
                         onTranslateResult(id, accepted, translated, error));
     }
 
-    public void trackReplyPreviewState(String stateKey, long trace) {
-        if (stateKey != null && trace > 0) {
-            replyPreviewTraceByState.put(stateKey, trace);
-        }
-    }
-
-    public void clearReplyPreviewState(String stateKey, long trace) {
-        if (stateKey == null || trace <= 0) {
-            return;
-        }
-        synchronized (replyPreviewTraceByState) {
-            Long current = replyPreviewTraceByState.get(stateKey);
-            if (current != null && current == trace) {
-                replyPreviewTraceByState.remove(stateKey);
-            }
-        }
-    }
-
     /** 按 profile 决定的统一翻译结果回写。 */
     private void onTranslateResult(String id, boolean accepted,
                                    @Nullable String translated, @Nullable Throwable error) {
-        Long replyTrace;
-        synchronized (replyPreviewTraceByState) {
-            replyTrace = replyPreviewTraceByState.remove(id);
-        }
         HookDiagnostics.info("translation result received accepted=" + accepted
                 + " translatedPresent=" + (translated != null && !translated.isEmpty())
-                + " errorClass=" + (error == null ? "none" : error.getClass().getSimpleName())
-                + (replyTrace == null ? "" : " replyPreviewTrace=" + replyTrace));
+                + " errorClass=" + (error == null ? "none" : error.getClass().getSimpleName()));
         StateStore.Entry cur = StateStore.get().peek(id);
         if (cur == null) {
             HookDiagnostics.info("translation result ignored reason=missingState");

@@ -8,7 +8,6 @@ import org.json.JSONObject;
 
 import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
-import io.github.wxmyyds.discordautotranslate.core.StateStore;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -18,7 +17,7 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 /**
- * 配置启用时安装富 Embed 与原生帖子预览的翻译逻辑。
+ * 配置启用时安装富 Embed 的翻译逻辑。
  * 目标方法、参数位置和成员名来自版本 profile；文本内容复用统一的翻译与转换管线。
  */
 public final class EmbedHooks {
@@ -35,10 +34,8 @@ public final class EmbedHooks {
      */
     public static List<XposedInterface.HookHandle> install(XposedModule module, ClassLoader cl,
                                                             HookConfiguration config) {
-        List<XposedInterface.HookHandle> handles = new ArrayList<>(3);
+        List<XposedInterface.HookHandle> handles = new ArrayList<>(1);
         installRichEmbedBindHook(module, cl, config, handles);
-        installPostPreviewBindHook(module, cl, config, handles);
-        installPostPreviewRenderHook(module, cl, config, handles);
         return handles;
     }
 
@@ -67,8 +64,9 @@ public final class EmbedHooks {
                         if (!HookBridge.get().isRerendering()) {
                             try {
                                 richEmbedPre(chain, bind, spec);
-                            } catch (Throwable ignored) {
-                                // 预处理失败不影响宿主绑定。
+                            } catch (Throwable t) {
+                                HookDiagnostics.warnOnce("embed.bind.failed", "embed binding failed error="
+                                        + t.getClass().getSimpleName());
                             }
                         }
                         return chain.proceed();
@@ -105,20 +103,13 @@ public final class EmbedHooks {
                 HookConfiguration.member("embedHolderViewField")));
         Object holder = chain.getThisObject();
         Object[] args = chain.getArgs().toArray();
-        // 图标主段优先取描述（正文主体），缺描述时回落标题、再回落首个字段。
-        String primary = registerEmbedText(view, messageId, embed,
-                HookConfiguration.member("embedDescriptionGetter"),
-                holder, bind, args);
-        if (primary == null) {
-            primary = registerEmbedText(view, messageId, embed,
-                    HookConfiguration.member("embedTitleGetter"),
-                    holder, bind, args);
-        }
-        if (primary == null) {
-            primary = registerEmbedFields(view, messageId, embed, holder, bind, args);
-        } else {
-            registerEmbedFields(view, messageId, embed, holder, bind, args);
-        }
+        // 登记所有实际存在的段，图标只标记首个有文本的段（描述、标题、字段）。
+        String description = registerEmbedText(view, messageId, embed,
+                HookConfiguration.member("embedDescriptionGetter"), holder, bind, args);
+        String title = registerEmbedText(view, messageId, embed,
+                HookConfiguration.member("embedTitleGetter"), holder, bind, args);
+        String firstField = registerEmbedFields(view, messageId, embed, holder, bind, args);
+        String primary = description != null ? description : title != null ? title : firstField;
         if (primary != null) {
             HookBridge.get().markEmbedIconKey(primary);
         }
@@ -151,7 +142,7 @@ public final class EmbedHooks {
 
     /** Embed 字段：name 与 value 均为 StructurableText，同为用户可见内容。
      *
-     * @return 首个成功登记的字段状态键（用作图标主段回落）
+     * @return 首个有正文的字段状态键（每张卡片选择一个图标承载段）
      */
     @Nullable
     private static String registerEmbedFields(@Nullable View view, String messageId,
@@ -165,8 +156,11 @@ public final class EmbedHooks {
         String first = null;
         int count = 0;
         for (Object field : (List<?>) fields) {
-            if (field == null || ++count > MAX_FIELDS) {
-                break;
+            if (field == null) {
+                continue;
+            }
+            if (++count > MAX_FIELDS) {
+                throw new IllegalArgumentException("Embed field count exceeds host limit");
             }
             String nameKey = registerEmbedText(view, messageId, field,
                     HookConfiguration.member("embedFieldNameGetter"),
@@ -182,142 +176,6 @@ public final class EmbedHooks {
             }
         }
         return first;
-    }
-
-    // ---------------------------------------------------------- 原生帖子预览（X 等）
-
-    private static void installPostPreviewBindHook(XposedModule module, ClassLoader cl,
-                                                   HookConfiguration config,
-                                                   List<XposedInterface.HookHandle> out) {
-        if (!config.isEnabled("embed.postPreviewBind")) {
-            return;
-        }
-        Method bind = config.findMethod("embed.postPreviewBind", cl);
-        JSONObject spec = config.hook("embed.postPreviewBind");
-        if (bind == null || spec == null) {
-            return;
-        }
-        out.add(module.hook(bind)
-                .setId("dat.postPreviewBind")
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(chain -> {
-                    // 同富 Embed：宿主在调用链内传递，供 footer 上的行内图标使用。
-                    InlineIconInjector.enterHost(
-                            asView(Reflect.getField(chain.getThisObject(),
-                                    HookConfiguration.member("postPreviewHolderViewField"))));
-                    try {
-                        if (!HookBridge.get().isRerendering()) {
-                            try {
-                                postPreviewPre(chain, bind, spec);
-                            } catch (Throwable ignored) {
-                                // 预处理失败不影响宿主绑定。
-                            }
-                        }
-                        return chain.proceed();
-                    } finally {
-                        InlineIconInjector.exitHost();
-                    }
-                }));
-    }
-
-    /**
-     * 帖子预览绑定前置。标题是普通 String，不走正文文本转换，因此：
-     * <ol>
-     *   <li>用 {@link StructurableTextFactory#primitive} 把标题包成
-     *       PrimitiveStructurableText，才能进入现有翻译管线；</li>
-     *   <li>译文替换由 {@code setPostPreviewEmbed} 的参数替换 Hook 完成
-     *       （不走身份映射）；</li>
-     *   <li>图标挂在 footer（卡片内支持 StructurableText 转换的字段）上：
-     *       仅图标身份映射，footer 文本本身不被替换。</li>
-     * </ol>
-     */
-    private static void postPreviewPre(XposedInterface.Chain chain, Method bind,
-                                       JSONObject spec) {
-        int modelArgument = spec.optInt("modelArgument", -1);
-        Object model = modelArgument < 0 || modelArgument >= chain.getArgs().size()
-                ? null : chain.getArg(modelArgument);
-        if (model == null) {
-            return;
-        }
-        String messageId = Reflect.callString(model,
-                HookConfiguration.member("postPreviewMessageIdGetter"));
-        String title = Reflect.callString(model,
-                HookConfiguration.member("postPreviewTitleGetter"));
-        if (messageId == null || !HookBridge.looksLikeSnowflake(messageId) || title == null) {
-            return;
-        }
-        String key = HookBridge.get().embedTextStateKey(messageId, title);
-        Object wrapped = StructurableTextFactory.primitive(title);
-        if (key == null || wrapped == null) {
-            return; // 空标题，或目标版本缺少 PrimitiveStructurableText 构造能力
-        }
-        View view = asView(Reflect.getField(chain.getThisObject(),
-                HookConfiguration.member("postPreviewHolderViewField")));
-        Object holder = chain.getThisObject();
-        Object[] args = chain.getArgs().toArray();
-        if (view != null) {
-            HookBridge.get().bindView(view, key);
-        }
-        RerenderRegistry.register(key, view, holder, bind, args);
-        // 正文语义上等价于一条纯文本消息：走同一条翻译触发路径。
-        HookBridge.get().onMessageBound(view, key, wrapped);
-        Object footer = Reflect.call(Reflect.findMethodExact(model.getClass(),
-                HookConfiguration.member("postPreviewFooterGetter"), 0), model);
-        HookBridge.get().rememberIconOnlyContent(key, footer);
-    }
-
-    private static void installPostPreviewRenderHook(XposedModule module, ClassLoader cl,
-                                                  HookConfiguration config,
-                                                  List<XposedInterface.HookHandle> out) {
-        if (!config.isEnabled("embed.postPreviewRender")) {
-            return;
-        }
-        Method set = config.findMethod("embed.postPreviewRender", cl);
-        JSONObject spec = config.hook("embed.postPreviewRender");
-        if (set == null || spec == null) {
-            return;
-        }
-        out.add(module.hook(set)
-                .setId("dat.postPreviewRender")
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(chain -> {
-                    Object[] renderArgs = chain.getArgs().toArray();
-                    try {
-                        substitutePostPreviewTitle(renderArgs, spec);
-                    } catch (Throwable ignored) {
-                        // 替换失败保留宿主原标题。
-                    }
-                    return chain.proceed(renderArgs);
-                }));
-    }
-
-    /**
-     * 参数替换：{@code setPostPreviewEmbed(messageId, title, …)} 的
-     * 第 0 参是消息 ID、第 1 参是标题（均已在 smali 中核对）。
-     * 标题译文就绪时替换之；未就绪时保持原文（译文完成后经重渲染再次进入这里）。
-     */
-    private static void substitutePostPreviewTitle(Object[] renderArgs, JSONObject spec) {
-        int messageIdIndex = spec.optInt("messageIdArgument", -1);
-        int titleIndex = spec.optInt("titleArgument", -1);
-        if (messageIdIndex < 0 || titleIndex < 0
-                || messageIdIndex >= renderArgs.length || titleIndex >= renderArgs.length
-                || !(renderArgs[messageIdIndex] instanceof String)) {
-            return;
-        }
-        Object titleArg = renderArgs[titleIndex];
-        if (!(titleArg instanceof String)) {
-            return;
-        }
-        String key = HookBridge.get().embedTextStateKey(
-                (String) renderArgs[messageIdIndex], (String) titleArg);
-        if (key == null) {
-            return;
-        }
-        StateStore.Entry e = StateStore.get().peek(key);
-        if (e != null && e.status == StateStore.Status.TRANSLATED
-                && !e.showingOriginal && e.translatedText != null) {
-            renderArgs[titleIndex] = e.translatedText;
-        }
     }
 
     // ------------------------------------------------------------------ 工具

@@ -63,14 +63,17 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          set -e
+          set -euo pipefail
           SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMGR" ]; then
-            SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort | tail -n 1)
-          fi
+          test -x "$SDKMGR" || { echo "::error::Required sdkmanager is missing"; exit 1; }
           echo "sdkmanager: $SDKMGR"
-          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          set +e
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -e
+          test "$LICENSE_STATUS" -eq 0 || { echo "::error::SDK license acceptance failed"; exit 1; }
           "$SDKMGR" "platforms;android-37.0" "build-tools;36.0.0"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       # Resolve versions from tags. Each release stores versionName/versionCode in a
       # commit referenced only by its tag; main stays unchanged, no release branches.
@@ -94,12 +97,18 @@ jobs:
               | grep -oP 'versionCode\s+\K[0-9]+' || true
           }
 
-          git fetch --tags --force origin >/dev/null 2>&1 || true
+          git fetch --tags --force origin
 
           # Latest stable LSPosed tag, sorted by versionCode prefix, excluding rc tags.
           # LSPosed tag 形如 {versionCode}-{versionName}，用 versionCode 前缀排序最可靠。
-          LATEST_STABLE_TAG=$(git tag --list --sort=-v:refname \
-            | grep -E '^[0-9]+-[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          ALL_TAGS=$(git tag --list --sort=-v:refname)
+          LATEST_STABLE_TAG=""
+          for T in $ALL_TAGS; do
+            if [[ "$T" =~ ^[0-9]+-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              LATEST_STABLE_TAG="$T"
+              break
+            fi
+          done
 
           if [[ -n "$LATEST_STABLE_TAG" ]]; then
             BASE_REF="$LATEST_STABLE_TAG"
@@ -117,9 +126,9 @@ jobs:
           fi
           echo "基线版本：$STABLE_VERSION（versionCode $CODE）"
 
-          # Scan recent prerelease tags and use the highest versionCode to keep it increasing globally.
+          # Scan every release tag; never cap the versionCode high-water mark.
           HIGH_WATER="$CODE"
-          for T in $(git tag --list --sort=-v:refname '*rc*' | head -20); do
+          for T in $ALL_TAGS; do
             C="${T%%-*}"
             if [[ "$C" =~ ^[0-9]+$ ]] && (( C > HIGH_WATER )); then HIGH_WATER="$C"; fi
           done
@@ -137,8 +146,8 @@ jobs:
               echo "::error::正式版版本号格式错误：$INPUT（需 X.Y.Z，例如 1.0.1）"
               exit 1
             }
-            if [[ -n "$LATEST_STABLE_TAG" ]] && ! printf '%s\n%s\n' "$STABLE_VERSION" "$INPUT" \
-              | sort -V | tail -1 | grep -Fxq "$INPUT"; then
+            if [[ -n "$LATEST_STABLE_TAG" ]] && { [[ "$INPUT" == "$STABLE_VERSION" ]] || ! printf '%s\n%s\n' "$STABLE_VERSION" "$INPUT" \
+              | sort -V | tail -1 | grep -Fxq "$INPUT"; }; then
               echo "::error::新版本 $INPUT 不高于最近正式版 $STABLE_VERSION，拒绝发布"
               exit 1
             fi
@@ -180,6 +189,7 @@ jobs:
           echo "已写入 versionName=$VERSION, versionCode=$NEW_CODE"
           git diff -- app/build.gradle
 
+          echo "previousStableTag=$LATEST_STABLE_TAG" >> "$GITHUB_OUTPUT"
           echo "sourceSha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "sourceRef=$SOURCE_REF" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -198,38 +208,35 @@ jobs:
             exit 1
           fi
 
-      - name: Run unit tests
-        run: gradle --no-daemon testDebugUnitTest
-
-      # 所有发布版本都必须签名。密钥库保存在 Secrets 中；缺失时直接失败，避免发布无法安装的未签名 APK。
+      # 所有发布版本都必须签名。测试和打包配置使用同一份 Actions 注入的签名。
       - name: Materialize release keystore
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           set -euo pipefail
-          if [ -z "${KEYSTORE_BASE64:-}" ]; then
-            echo "::error::仓库缺少 Secret KEYSTORE_BASE64，无法签名发布"
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "::error::Required signing secrets are missing"
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/keystore"
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore/release.jks"
           chmod 600 "$RUNNER_TEMP/keystore/release.jks"
-          echo "密钥库已就绪：$RUNNER_TEMP/keystore/release.jks"
-
-      # 生成 properties 供 build.gradle 的 KEYSTORE_PROPERTIES 读取（PKCS12 要求 store 与 key 口令一致）。
-      - name: Assemble release APK
-        shell: bash
-        env:
-          KEYSTORE_PROPERTIES: ${{ runner.temp }}/keystore/keystore.properties
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: |
-          set -euo pipefail
           printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
             "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEYSTORE_PASSWORD" \
-            > "$KEYSTORE_PROPERTIES"
-          chmod 600 "$KEYSTORE_PROPERTIES"
+            > "$RUNNER_TEMP/keystore/keystore.properties"
+          chmod 600 "$RUNNER_TEMP/keystore/keystore.properties"
+          echo "KEYSTORE_PROPERTIES=$RUNNER_TEMP/keystore/keystore.properties" >> "$GITHUB_ENV"
+
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Assemble release APK
+        shell: bash
+        run: |
+          set -euo pipefail
           gradle --no-daemon assembleRelease --stacktrace
           # AGP names signed APKs app-release.apk; require the signed file.
           test -f app/build/outputs/apk/release/app-release.apk \
@@ -240,8 +247,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          APKSIGNER=$(ls -d "$SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$APKSIGNER" || { echo "::error::Required apksigner is missing"; exit 1; }
           echo "使用 $APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
 
@@ -257,6 +264,7 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
           SOURCE_REF: ${{ steps.resolve.outputs.sourceRef }}
           SOURCE_SHA: ${{ steps.resolve.outputs.sourceSha }}
+          PREVIOUS_STABLE_TAG: ${{ steps.resolve.outputs.previousStableTag }}
           LSPOSED_REPO_TOKEN: ${{ secrets.LSPOSED_REPO_TOKEN }}
         run: |
           set -euo pipefail
@@ -275,16 +283,9 @@ jobs:
           echo "已推送 tag $TAG"
 
           if [[ "$MODE" == "stable" ]]; then
-            # Previous stable tag, used to build the changelog range.
-            # LSPosed tags are stored in detached commit history, so `git describe --tags`
-            # from the tag commit's parent cannot find the previous release. Instead we
-            # compute the previous versionCode and match its `{code}-{version}` tag.
-            if [[ "$VERSION_CODE" -eq 1 ]]; then
-              PREV="2-1.0.0"
-            else
-              PREVCODE=$((VERSION_CODE - 1))
-              PREV=$(git tag --list | grep -E "^${PREVCODE}-" | head -1 || true)
-            fi
+            # The previous stable tag was selected before creating this release.
+            # Prerelease codes may occur between two stable versions.
+            PREV="$PREVIOUS_STABLE_TAG"
             RANGE="${PREV:+$PREV..}HEAD"
             echo "变更范围：$RANGE（上一个正式版：${PREV:-无}）"
             LOG=$(git log "$RANGE" --no-merges --pretty=format:'%s' 2>/dev/null \

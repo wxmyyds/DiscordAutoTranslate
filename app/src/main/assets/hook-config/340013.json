@@ -38,6 +38,7 @@
         },
         "selection": "mostParameters"
       },
+      "identitySource": "boundView",
       "viewSource": "this",
       "contentArgument": 1
     },
@@ -65,41 +66,6 @@
         }
       },
       "accessoryArgument": 1
-    },
-    "embed.postPreviewBind": {
-      "target": {
-        "class": "com.discord.chat.presentation.message.viewholder.PostPreviewEmbedViewHolder",
-        "name": "bind",
-        "static": false,
-        "parameterCount": 3,
-        "parameterTypes": {
-          "0": "com.discord.chat.bridge.postpreviewembed.PostPreviewEmbed"
-        }
-      }
-    },
-    "embed.postPreviewRender": {
-      "target": {
-        "class": "com.discord.chat.presentation.message.view.PostPreviewEmbedView",
-        "namePrefix": "setPostPreviewEmbed",
-        "static": false,
-        "parameterCount": 16,
-        "parameterTypes": {
-          "0": "java.lang.String"
-        }
-      },
-      "messageIdArgument": 0,
-      "titleArgument": 1
-    },
-    "poll.bind": {
-      "target": {
-        "class": "com.discord.chat.presentation.message.viewholder.PollViewHolder",
-        "name": "bind",
-        "static": false,
-        "parameterCount": 4,
-        "parameterTypes": {
-          "0": "com.discord.chat.presentation.message.messagepart.PollMessageAccessory"
-        }
-      }
     }
   },
   "members": {
@@ -111,26 +77,13 @@
     "embedFieldsGetter": "getFields",
     "embedFieldNameGetter": "getName",
     "embedFieldValueGetter": "getValue",
-    "postPreviewHolderViewField": "itemView",
-    "postPreviewMessageIdGetter": "getMessageId",
-    "postPreviewTitleGetter": "getTitle",
-    "postPreviewFooterGetter": "getFooter",
-    "pollHolderViewField": "itemView",
-    "pollBindingField": "binding",
-    "pollQuestionTextField": "questionText",
-    "pollMessageIdGetter": "getMessageId",
+
     "getMessageId": "getMessageId",
-    "getData": "getData",
-    "getQuestion": "getQuestion",
-    "getAnswers": "getAnswers",
-    "getAnswer": "getAnswer",
-    "getPollMedia": "getPollMedia",
-    "getText": "getText",
+
     "getContent": "getContent",
     "getItems": "getItems",
-    "getSurrogate": "getSurrogate",
+    "getEmojiAnchor": "getSurrogate",
     "getAlt": "getAlt",
-    "getFooter": "getFooter",
     "getDescription": "getDescription",
     "getTitle": "getTitle",
     "getFields": "getFields",

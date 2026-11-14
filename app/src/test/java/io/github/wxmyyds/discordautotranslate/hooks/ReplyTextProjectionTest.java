@@ -24,7 +24,8 @@ public class ReplyTextProjectionTest {
         for (int i = 0; i < original.length(); i++) {
             if (!offsets.contains(i)) assertEquals(original.charAt(i), rendered.charAt(i));
         }
-        assertEquals(0, TextWhitespaceStats.of(rendered).lineBreaks);
+        assertFalse(rendered.chars().anyMatch(c ->
+                c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029'));
     }
 
     @Test

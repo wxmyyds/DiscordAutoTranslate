@@ -178,21 +178,48 @@ public class HookConfigurationTest {
     }
 
     @Test
-    public void readsIconClickProtocolFromProfileWithoutVersionBranch() throws Exception {
+    public void readsConstructorIconClickConfigurationFromProfile() throws Exception {
         String json = "{\"schemaVersion\":1,\"versionCode\":352017,\"hooks\":{},"
-                + "\"iconClick\":{\"enabled\":true,\"protocol\":\"interfaceProxy\","
-                + "\"interface\":\"example.Clickable\",\"methods\":{"
-                + "\"onClick\":{\"action\":\"toggleTranslation\"},"
-                + "\"getPriority\":{\"action\":\"returnEnum\","
-                + "\"enumClass\":\"example.Priority\",\"enumValue\":\"HIGH\"}}}}";
+                + "\"iconClick\":{\"enabled\":true,\"protocol\":\"constructorProxy\","
+                + "\"spanClass\":\"lh.d\","
+                + "\"requiredSuperclass\":\"android.text.style.ClickableSpan\","
+                + "\"interfaces\":[\"zf.b\"],\"constructor\":{\"parameterTypes\":["
+                + "\"java.lang.Integer\",\"java.lang.Integer\",\"java.lang.Integer\","
+                + "\"java.lang.Boolean\",\"kotlin.jvm.functions.Function1\","
+                + "\"kotlin.jvm.functions.Function1\",\"int\"],\"arguments\":["
+                + "{\"kind\":\"null\"},{\"kind\":\"null\"},{\"kind\":\"null\"},"
+                + "{\"kind\":\"null\"},{\"kind\":\"null\"},"
+                + "{\"kind\":\"callback\",\"interface\":\"kotlin.jvm.functions.Function1\","
+                + "\"method\":\"invoke\",\"action\":\"toggleTranslation\"},"
+                + "{\"kind\":\"integer\",\"value\":255}]}}}";
         HookConfiguration config = HookConfiguration.parse(json, 352017);
         org.json.JSONObject iconClick = config.iconClickConfiguration();
 
+        // Configuration parsing only; this does not instantiate a host span.
         assertNotNull(iconClick);
         assertTrue(iconClick.optBoolean("enabled"));
-        assertEquals("interfaceProxy", iconClick.optString("protocol"));
-        assertEquals("toggleTranslation",
-                iconClick.getJSONObject("methods").getJSONObject("onClick").optString("action"));
+        assertEquals("constructorProxy", iconClick.optString("protocol"));
+        assertEquals("lh.d", iconClick.getString("spanClass"));
+        assertEquals("android.text.style.ClickableSpan",
+                iconClick.getString("requiredSuperclass"));
+        assertEquals("zf.b", iconClick.getJSONArray("interfaces").getString(0));
+        org.json.JSONObject constructor = iconClick.getJSONObject("constructor");
+        org.json.JSONArray parameterTypes = constructor.getJSONArray("parameterTypes");
+        org.json.JSONArray arguments = constructor.getJSONArray("arguments");
+        assertEquals(7, parameterTypes.length());
+        assertEquals(7, arguments.length());
+        for (int i = 0; i < 5; i++) {
+            assertEquals("null", arguments.getJSONObject(i).getString("kind"));
+        }
+        assertEquals("kotlin.jvm.functions.Function1", parameterTypes.getString(5));
+        org.json.JSONObject callback = arguments.getJSONObject(5);
+        assertEquals("callback", callback.getString("kind"));
+        assertEquals("kotlin.jvm.functions.Function1", callback.getString("interface"));
+        assertEquals("invoke", callback.getString("method"));
+        assertEquals("toggleTranslation", callback.getString("action"));
+        assertEquals("int", parameterTypes.getString(6));
+        assertEquals("integer", arguments.getJSONObject(6).getString("kind"));
+        assertEquals(255, arguments.getJSONObject(6).getInt("value"));
     }
 
     @Test

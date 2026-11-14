@@ -19,7 +19,6 @@ import io.github.wxmyyds.discordautotranslate.core.TranslationCache;
 import io.github.wxmyyds.discordautotranslate.hooks.EmbedHooks;
 import io.github.wxmyyds.discordautotranslate.hooks.HookBridge;
 import io.github.wxmyyds.discordautotranslate.hooks.InlineIconSpan;
-import io.github.wxmyyds.discordautotranslate.hooks.PollHooks;
 import io.github.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import io.github.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
 import io.github.wxmyyds.discordautotranslate.hooks.MessageHooks;
@@ -104,7 +103,6 @@ public class ModuleEntry extends XposedModule {
             Bundle state = new Bundle();
             if (hookConfiguration != null) {
                 state.putInt("hookVersionCode", hookConfiguration.versionCode());
-                state.putString("hookConfigJson", hookConfiguration.rawJson());
             }
             param.setSavedInstanceState(state);
             release();
@@ -155,12 +153,15 @@ public class ModuleEntry extends XposedModule {
         if (savedState instanceof Bundle) {
             Bundle bundle = (Bundle) savedState;
             restoredVersionCode = bundle.getInt("hookVersionCode", -1);
-            String json = bundle.getString("hookConfigJson");
-            if (restoredVersionCode >= 0 && json != null) {
+            if (restoredVersionCode >= 0) {
                 try {
-                    restored = HookConfiguration.parse(json, restoredVersionCode);
-                } catch (Throwable ignored) {
-                    restored = null;
+                    // Reload from the new APK, never reactivate the old generation's
+                    // serialized profile after selectors/constructor metadata changed.
+                    restored = HookConfigurationLoader.load(
+                            getModuleApplicationInfo().sourceDir, restoredVersionCode);
+                } catch (Throwable t) {
+                    diagnosticInfo("hot reload profile restoration failed error="
+                            + t.getClass().getSimpleName());
                 }
             }
         }
@@ -175,11 +176,13 @@ public class ModuleEntry extends XposedModule {
             try {
                 install(recovered, restored);
                 installed = true;
-            } catch (Throwable ignored) {
+            } catch (Throwable t) {
                 installed = false;
+                diagnosticInfo("hot reload hook installation failed error="
+                        + t.getClass().getSimpleName() + "; restart Discord required");
             }
         } else {
-            installBootstrapHook();
+            diagnosticInfo("hot reload restoration unavailable; restart Discord required");
         }
     }
 
@@ -231,7 +234,8 @@ public class ModuleEntry extends XposedModule {
                     TARGET_PACKAGE, 0);
             int versionCode = packageInfo.versionCode;
             diagnosticInfo("selecting hook profile for versionCode=" + versionCode);
-            HookConfiguration config = HookConfigurationLoader.load(context, versionCode);
+            HookConfiguration config = HookConfigurationLoader.load(
+                    getModuleApplicationInfo().sourceDir, versionCode);
             if (config == null) {
                 android.util.Log.w("DiscordAutoTranslate",
                         "no hook profile for Discord versionCode=" + versionCode);
@@ -271,14 +275,13 @@ public class ModuleEntry extends XposedModule {
         }
         hooks.addAll(created);
         hooks.addAll(EmbedHooks.install(this, cl, config));
-        hooks.addAll(PollHooks.install(this, cl, config));
         diagnosticInfo("installed hook profile versionCode=" + config.versionCode()
                 + " requiredHookIds=" + installedMessageHookIds);
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
     @Nullable
-    private static ClassLoader classLoaderFromOldHooks(
+    private ClassLoader classLoaderFromOldHooks(
             @NonNull List<XposedInterface.HookHandle> oldHandles) {
         for (XposedInterface.HookHandle handle : oldHandles) {
             try {
@@ -288,8 +291,9 @@ public class ModuleEntry extends XposedModule {
                 if (loader != null) {
                     return loader;
                 }
-            } catch (Throwable ignored) {
-                // 反推失败按 null 处理，走下一次 onPackageReady 的正常路径。
+            } catch (Throwable t) {
+                diagnosticInfo("hot reload class loader inspection failed error="
+                        + t.getClass().getSimpleName());
             }
         }
         return null;
@@ -312,6 +316,7 @@ public class ModuleEntry extends XposedModule {
         TranslationCache.reset();
         RerenderRegistry.clear();
         StructurableTextFactory.reset();
+        InlineIconSpan.resetAll();
         ModuleResources.reset();
         installed = false;
         bootstrapInstalled = false;

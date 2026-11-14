@@ -106,8 +106,6 @@ public final class InlineIconSpan extends ImageSpan {
     private final int leadingGapPx;
     private final int trailingGapPx;
 
-    /** 图标所属消息，仅用于诊断日志。 */
-    private final String messageId;
     /** 是否处于翻译中（决定要不要转动）。构造后不再变化：状态变化会重建 span。 */
     private final boolean spinning;
 
@@ -154,8 +152,7 @@ public final class InlineIconSpan extends ImageSpan {
                 }
             };
 
-    private InlineIconSpan(Drawable drawable, float density, StateStore.Status status,
-                           String messageId) {
+    private InlineIconSpan(Drawable drawable, float density, StateStore.Status status) {
         super(drawable);
         this.iconPx = InlineIconGeometry.dpToPx(ICON_DP, density);
         this.leadingGapPx = InlineIconGeometry.dpToPxAllowZero(LEADING_GAP_DP, density);
@@ -164,7 +161,6 @@ public final class InlineIconSpan extends ImageSpan {
                 leadingGapPx, iconPx,
                 InlineIconGeometry.dpToPx(MIN_TAP_DP, density),
                 InlineIconGeometry.dpToPxAllowZero(1, density));
-        this.messageId = messageId;
         this.spinning = status == StateStore.Status.TRANSLATING;
     }
 
@@ -174,15 +170,14 @@ public final class InlineIconSpan extends ImageSpan {
      * @param icon      已按状态着色、且已独立复制的 Drawable
      * @param density   屏幕密度
      * @param status    当前翻译状态（配色已体现在 icon 上）
-     * @param messageId 所属消息 ID
      */
     @Nullable
     static InlineIconSpan create(@Nullable Drawable icon, float density,
-                                StateStore.Status status, String messageId) {
+                                StateStore.Status status) {
         if (icon == null || status == null) {
             return null;
         }
-        return new InlineIconSpan(icon, density, status, messageId);
+        return new InlineIconSpan(icon, density, status);
     }
 
     /** 按状态给 Drawable 着色，并返回独立副本（模块缓存的 Drawable 会被多处复用）。 */
@@ -195,9 +190,16 @@ public final class InlineIconSpan extends ImageSpan {
         Drawable copy;
         try {
             Drawable.ConstantState cs = source.getConstantState();
-            copy = cs != null ? cs.newDrawable().mutate() : source.mutate();
+            if (cs == null) {
+                HookDiagnostics.warnOnce("icon.constantState.missing",
+                        "icon duplication rejected: ConstantState missing");
+                return null;
+            }
+            copy = cs.newDrawable().mutate();
         } catch (Throwable t) {
-            copy = source;
+            HookDiagnostics.warnOnce("icon.copy.failed", "icon duplication failed error="
+                    + t.getClass().getSimpleName());
+            return null;
         }
         int color;
         switch (status) {
@@ -214,8 +216,10 @@ public final class InlineIconSpan extends ImageSpan {
         }
         try {
             copy.setTint(color);
-        } catch (Throwable ignored) {
-            // 个别 Drawable 不支持 tint；不着色也比不显示好。
+        } catch (Throwable t) {
+            HookDiagnostics.warnOnce("icon.tint.failed", "icon tint failed error="
+                    + t.getClass().getSimpleName());
+            return null;
         }
         return copy;
     }
@@ -418,8 +422,4 @@ public final class InlineIconSpan extends ImageSpan {
         }
     }
 
-    /** 该 span 占用的水平宽度（含前后间距）。 */
-    int widthPx() {
-        return InlineIconGeometry.spanWidth(leadingGapPx, iconPx, trailingGapPx);
-    }
 }

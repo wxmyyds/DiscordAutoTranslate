@@ -167,7 +167,8 @@ public class OpaqueNodeTranslationTest {
             assertEquals(0, extracted.textNodeCount);
             assertTrue(extracted.text.trim().isEmpty());
             assertFalse(EnglishDetector.evaluate(extracted.text, extracted.textNodeCount,
-                    extracted.opaqueNodeCount, extracted.codeHeavy).shouldTranslate);
+                    extracted.opaqueNodeCount, extracted.codeHeavy,
+                    io.github.wxmyyds.discordautotranslate.core.Config.DEF_TARGET_LANG).shouldTranslate);
             assertNull(ContentNodes.replaceText(nodes, "不应写入名称"));
         }
     }
@@ -200,7 +201,8 @@ public class OpaqueNodeTranslationTest {
             assertEquals(2, result.textNodeCount);
             assertEquals(1, result.opaqueNodeCount);
             assertTrue(EnglishDetector.evaluate(result.text, result.textNodeCount,
-                    result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+                    result.opaqueNodeCount, result.codeHeavy,
+                    io.github.wxmyyds.discordautotranslate.core.Config.DEF_TARGET_LANG).shouldTranslate);
         }
     }
 
@@ -244,7 +246,8 @@ public class OpaqueNodeTranslationTest {
         assertNotNull(result);
         assertEquals(" ok ", result.text);
         assertFalse(EnglishDetector.evaluate(result.text, result.textNodeCount,
-                result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+                result.opaqueNodeCount, result.codeHeavy,
+                io.github.wxmyyds.discordautotranslate.core.Config.DEF_TARGET_LANG).shouldTranslate);
     }
 
     @Test

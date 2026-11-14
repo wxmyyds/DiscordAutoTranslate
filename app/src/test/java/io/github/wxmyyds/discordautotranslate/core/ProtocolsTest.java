@@ -106,6 +106,29 @@ public class ProtocolsTest {
         assertFalse("没有 OpenAI 系的 instructions 字段", json.has("instructions"));
     }
 
+    @Test
+    public void blankSystemPromptIsRejectedForEveryProtocol() {
+        for (String protocol : new String[]{Config.PROTOCOL_OPENAI_COMPATIBLE,
+                Config.PROTOCOL_OPENAI_RESPONSES, Config.PROTOCOL_ANTHROPIC_MESSAGES}) {
+            for (String prompt : new String[]{null, "", " \n\t "}) {
+                try {
+                    Protocols.requestBody(protocol, "hello", prompt, "model", false);
+                    fail("expected CONFIG error for blank prompt: " + protocol);
+                } catch (TranslationException e) {
+                    assertEquals(TranslationException.Kind.CONFIG, e.kind());
+                }
+            }
+        }
+    }
+
+    @Test
+    public void configuredPromptIsTrimmedAndWrapperRuleIsAppended() throws Exception {
+        JSONObject body = new JSONObject(Protocols.requestBody(
+                Config.PROTOCOL_OPENAI_COMPATIBLE, "hello", "  prompt \n", "model", false));
+        assertEquals("prompt\n\n" + Protocols.WRAPPER_RULE,
+                body.getJSONArray("messages").getJSONObject(0).getString("content"));
+    }
+
     // ------------------------------------------------------------ 流式响应提取
 
     /** 流式帧按 delta 累积成完整译文；role/空帧与注释行不得混入。 */
@@ -417,9 +440,113 @@ public class ProtocolsTest {
         assertParseError("[1,2]");
     }
 
+    @Test
+    public void compatibleNonStreamingContentMustBeAnActualString() {
+        for (String value : new String[]{"42", "true", "false", "{}", "[]", "null"}) {
+            assertParseError(Config.PROTOCOL_OPENAI_COMPATIBLE,
+                    "{\"choices\":[{\"message\":{\"content\":" + value + "}}]}", false);
+        }
+        assertParseError(Config.PROTOCOL_OPENAI_COMPATIBLE,
+                "{\"choices\":[{\"message\":{}}]}", false);
+    }
+
+    @Test
+    public void compatibleStreamingContentRejectsPresentWrongTypes() {
+        for (String value : new String[]{"42", "true", "false", "{}", "[]"}) {
+            String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"前段\"}}]}\n"
+                    + "data: {\"choices\":[{\"delta\":{\"content\":" + value + "}}]}\n"
+                    + "data: {\"choices\":[{\"delta\":{\"content\":\"后段\"}}]}\n"
+                    + "data: [DONE]\n";
+            assertParseError(Config.PROTOCOL_OPENAI_COMPATIBLE, sse, true);
+        }
+    }
+
+    @Test
+    public void absentAndNullNonTextDeltasAreSkipped() throws Exception {
+        String chat = "data: {\"choices\":[{}]}\n"
+                + "data: {\"choices\":[{\"delta\":null}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":null}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n"
+                + "data: [DONE]\n";
+        assertEquals("你好", Protocols.extractTranslation(
+                Config.PROTOCOL_OPENAI_COMPATIBLE, chat, true));
+        String anthropic = "data: {\"type\":\"content_block_delta\","
+                + "\"delta\":{\"type\":\"thinking_delta\",\"text\":null}}\n"
+                + "data: {\"type\":\"content_block_delta\","
+                + "\"delta\":{\"type\":\"signature_delta\",\"signature\":\"x\"}}\n"
+                + "data: {\"type\":\"content_block_delta\","
+                + "\"delta\":{\"type\":\"text_delta\",\"text\":\"\"}}\n"
+                + "data: {\"type\":\"content_block_delta\","
+                + "\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n"
+                + "data: {\"type\":\"message_stop\"}\n";
+        assertEquals("你好", Protocols.extractTranslation(
+                Config.PROTOCOL_ANTHROPIC_MESSAGES, anthropic, true));
+    }
+
+    @Test
+    public void anthropicTextBlocksAndTextDeltasMustBeActualStrings() {
+        for (String value : new String[]{"42", "true", "false", "{}", "[]", "null"}) {
+            assertParseError(Config.PROTOCOL_ANTHROPIC_MESSAGES,
+                    "{\"content\":[{\"type\":\"text\",\"text\":\"前段\"},"
+                            + "{\"type\":\"text\",\"text\":" + value + "},"
+                            + "{\"type\":\"text\",\"text\":\"后段\"}]}", false);
+            assertParseError(Config.PROTOCOL_ANTHROPIC_MESSAGES,
+                    "data: {\"type\":\"content_block_delta\","
+                            + "\"delta\":{\"type\":\"text_delta\",\"text\":" + value + "}}\n"
+                            + "data: {\"type\":\"message_stop\"}\n", true);
+        }
+        assertParseError(Config.PROTOCOL_ANTHROPIC_MESSAGES,
+                "{\"content\":[{\"type\":\"text\"}]}", false);
+        assertParseError(Config.PROTOCOL_ANTHROPIC_MESSAGES,
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\"}}\n"
+                        + "data: {\"type\":\"message_stop\"}\n", true);
+    }
+
+    @Test
+    public void responsesSelectedTextMustBeAnActualStringWithoutSkippingInvalidCandidate() {
+        for (String value : new String[]{"42", "true", "false", "{}", "[]", "null"}) {
+            assertParseError(Config.PROTOCOL_OPENAI_RESPONSES,
+                    "{\"output\":[{\"type\":\"message\",\"content\":["
+                            + "{\"type\":\"output_text\",\"text\":" + value + "},"
+                            + "{\"type\":\"output_text\",\"text\":\"后段\"}]}]}", false);
+        }
+        assertParseError(Config.PROTOCOL_OPENAI_RESPONSES,
+                "{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\"}]}]}",
+                false);
+    }
+
+    @Test
+    public void responsesMultipartIterationSkipsOnlyNonTextParts() throws Exception {
+        String body = "{\"output\":[{\"type\":\"reasoning\"},"
+                + "{\"type\":\"message\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"x\"}]},"
+                + "{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"你好\"}]}]}";
+        assertEquals("你好", Protocols.extractTranslation(
+                Config.PROTOCOL_OPENAI_RESPONSES, body, false));
+    }
+
+    @Test
+    public void nonStreamingProtocolsRejectTrailingDocumentsAndAcceptWhitespace() throws Exception {
+        String[] protocols = {Config.PROTOCOL_OPENAI_COMPATIBLE,
+                Config.PROTOCOL_OPENAI_RESPONSES, Config.PROTOCOL_ANTHROPIC_MESSAGES};
+        String[] bodies = {"{\"choices\":[{\"message\":{\"content\":\"你好\"}}]}",
+                "{\"output\":[{\"type\":\"message\",\"content\":["
+                        + "{\"type\":\"output_text\",\"text\":\"你好\"}]}]}",
+                "{\"content\":[{\"type\":\"text\",\"text\":\"你好\"}]}"};
+        for (int i = 0; i < protocols.length; i++) {
+            assertEquals("你好", Protocols.extractTranslation(protocols[i], bodies[i] + " \n", false));
+            assertParseError(protocols[i], bodies[i] + " garbage", false);
+            assertParseError(protocols[i], bodies[i] + " {}", false);
+        }
+    }
+
     private static void assertParseError(String body) {
+        assertParseError(Config.PROTOCOL_OPENAI_RESPONSES, body, false);
+    }
+
+    private static void assertParseError(String protocol, String body, boolean streaming) {
         try {
-            extractByFixtureMode(Config.PROTOCOL_OPENAI_RESPONSES, body);
+            Protocols.extractTranslation(protocol, body, streaming);
             fail("应抛出 TranslationException: " + body);
         } catch (TranslationException e) {
             assertEquals(TranslationException.Kind.PARSE, e.kind());

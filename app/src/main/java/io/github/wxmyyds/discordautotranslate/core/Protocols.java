@@ -94,11 +94,8 @@ public final class Protocols {
             throw new TranslationException(TranslationException.Kind.CONFIG,
                     "模型或系统提示词未配置");
         }
-        String safeText = text;
-        String safePrompt = systemPrompt;
-        String wrapped = WRAPPER_OPEN + safeText + WRAPPER_CLOSE;
-        String prompt = (safePrompt.trim().isEmpty() ? "" : safePrompt.trim() + "\n\n")
-                + WRAPPER_RULE;
+        String wrapped = WRAPPER_OPEN + text + WRAPPER_CLOSE;
+        String prompt = systemPrompt.trim() + "\n\n" + WRAPPER_RULE;
         try {
             JSONObject body = new JSONObject();
             body.put("model", model);
@@ -275,7 +272,8 @@ public final class Protocols {
                 if (delta == null || delta.isNull("content")) {
                     continue;
                 }
-                String piece = delta.optString("content", "");
+                String piece = JsonPath.requireString(delta.opt("content"),
+                        "choices.0.delta.content");
                 if (!piece.isEmpty()) {
                     out.append(piece);
                 }
@@ -325,7 +323,7 @@ public final class Protocols {
             if (block == null || !"text".equals(block.optString("type"))) {
                 continue;
             }
-            out.append(block.optString("text"));
+            out.append(JsonPath.requireString(block.opt("text"), "content." + i + ".text"));
         }
         Object stop = json.opt("stop_reason");
         if ("max_tokens".equals(stop == null ? null : stop.toString())) {
@@ -372,12 +370,11 @@ public final class Protocols {
                     sawMessageStop = true;
                 } else if ("content_block_delta".equals(type)) {
                     JSONObject delta = frame.optJSONObject("delta");
-                    // text 帧外的增量（thinking_delta 等）没有 text 字段，
-                    // 整体跳过，不能让 Android org.json 把 NULL 转成 "null"。
-                    if (delta == null || delta.isNull("text")) {
+                    // 仅 text_delta 携带译文；thinking/signature 等非文本增量跳过。
+                    if (delta == null || !"text_delta".equals(delta.opt("type"))) {
                         continue;
                     }
-                    String piece = delta.optString("text", "");
+                    String piece = JsonPath.requireString(delta.opt("text"), "delta.text");
                     if (!piece.isEmpty()) {
                         out.append(piece);
                     }
@@ -441,8 +438,8 @@ public final class Protocols {
                 if (part == null || !"output_text".equals(part.optString("type"))) {
                     continue;
                 }
-                String text = part.optString("text");
-                return text;
+                return JsonPath.requireString(part.opt("text"),
+                        "output." + i + ".content." + j + ".text");
             }
         }
         throw new TranslationException(TranslationException.Kind.PARSE,

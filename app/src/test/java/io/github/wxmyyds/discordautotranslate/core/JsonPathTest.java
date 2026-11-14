@@ -43,15 +43,15 @@ public class JsonPathTest {
     }
 
     @Test
-    public void nonStringValueIsStringified() throws Exception {
-        // 便于用户发现路径指到了结构体而不是文本
-        String v = JsonPath.extractString("{\"a\":{\"b\":1}}", "a");
-        assertTrue(v.contains("\"b\""));
+    public void nonStringValuesAreParseErrors() {
+        for (String value : new String[]{"42", "true", "false", "{}", "[]", "null"}) {
+            assertResponseParseError("{\"a\":" + value + "}");
+        }
     }
 
     @Test
-    public void numberValueIsStringified() throws Exception {
-        assertEquals("42", JsonPath.extractString("{\"a\":42}", "a"));
+    public void emptyStringIsReturnedWithoutCoercion() throws Exception {
+        assertEquals("", JsonPath.extractString("{\"a\":\"\"}", "a"));
     }
 
     @Test
@@ -145,28 +145,20 @@ public class JsonPathTest {
     }
 
     @Test
-    public void validateJsonAcceptsAndRejects() throws Exception {
-        JsonPath.validateJson("{\"a\":[1,2]}", "x");
-        JsonPath.validateJson("{\"a\":1}   ", "x");
-        assertInvalidJson("{\"a\":1}garbage");
-        assertInvalidJson("{\"a\":1} {\"b\":2}");
-        assertInvalidJson("{oops");
-    }
-
-    private static void assertInvalidJson(String json) {
-        try {
-            JsonPath.validateJson(json, "x");
-            fail("expected CONFIG error for: " + json);
-        } catch (TranslationException e) {
-            assertEquals(TranslationException.Kind.CONFIG, e.kind());
-        }
+    public void responseParserAcceptsTrailingWhitespace() throws Exception {
+        assertEquals("ok", JsonPath.extractString("{\"a\":\"ok\"} \n\t", "a"));
     }
 
     @Test
-    public void responseParserRejectsTrailingGarbage() {
+    public void responseParserRejectsTrailingContent() {
+        assertResponseParseError("{\"a\":\"ok\"}garbage");
+        assertResponseParseError("{\"a\":\"ok\"} {\"b\":2}");
+    }
+
+    private static void assertResponseParseError(String json) {
         try {
-            JsonPath.extractString("{\"a\":\"ok\"}garbage", "a");
-            fail("expected PARSE error");
+            JsonPath.extractString(json, "a");
+            fail("expected PARSE error for: " + json);
         } catch (TranslationException e) {
             assertEquals(TranslationException.Kind.PARSE, e.kind());
         }

@@ -23,9 +23,8 @@ Actions）：
 
 工作流行为：
 
-- 未配置 `KEYSTORE_BASE64` 时输出 `configured=false`，**跳过签名**，
-  Debug 构建使用 AGP 默认调试签名，构建仍通过；
-- 配置后 Release 与 Debug 均使用该 keystore 签名，构建末尾
+- `KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS` 任一缺失时明确失败，不生成未签名 APK 或自动使用调试证书；
+- Release 与 Debug 均使用同一 keystore 签名，构建末尾
   **Verify APK signature** 步骤用 `apksigner verify --print-certs` 校验；
 - keystore 在工作流内解码到 `$RUNNER_TEMP/keystore/`，仅存活于本次运行，
   不落地仓库、不进日志。
@@ -53,8 +52,7 @@ Token 仅由发布工作流读取，用于创建或更新目标仓库 Release；
 ## build.gradle 读取方式
 
 `app/build.gradle` 只从环境变量 `KEYSTORE_PROPERTIES` 指向的 properties
-文件读取签名参数（密钥路径相对该文件所在目录解析）；未注入或文件不存在
-时不配置签名。GitHub Actions 由工作流设置该环境变量，本地不使用。
+文件读取签名参数（密钥路径相对该文件所在目录解析）。环境变量、properties 必需键或 keystore 文件缺失时，配置阶段直接失败。Actions 在单元测试和打包之前注入并设置该环境变量，本地不使用。该操作需要通过 GitHub Actions 执行。
 
 ## 已生成的密钥信息（2026-10-30）
 

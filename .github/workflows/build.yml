@@ -53,37 +53,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools，
-      # 这里直接复用，避免 android-actions/setup-android 在较新镜像上
-      # 执行已移除的 `sdkmanager tools` 而失败。
-      #
-      # 注意：API 37 起平台包名带次版本号，实际包为 `platforms;android-37.0`，
-      # 不存在 `platforms;android-37`。
+      # 固定使用 ubuntu-24.04 预装的 SDK 工具；缺失时明确失败。
+      # API 37 平台包名为 platforms;android-37.0。
       - name: Install required SDK packages
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          set -e
-
-          # 若镜像未预装 cmdline-tools，则先下载官方 cmdline-tools 作为兜底。
-          if [ ! -d "$ANDROID_HOME/cmdline-tools" ]; then
-            echo "cmdline-tools not present, downloading"
-            mkdir -p "$ANDROID_HOME/cmdline-tools"
-            curl -fsSL -o /tmp/cmdline-tools.zip \
-              https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
-            (cd /tmp && rm -rf cmdline-tools && mkdir cmdline-tools \
-              && cd cmdline-tools && python3 -c "import zipfile;zipfile.ZipFile('/tmp/cmdline-tools.zip').extractall('.')")
-            mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
-          fi
-
+          set -euo pipefail
           SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMGR" ]; then
-            SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort | tail -n 1)
-          fi
+          test -x "$SDKMGR" || { echo "::error::Required sdkmanager is missing"; exit 1; }
           echo "sdkmanager: $SDKMGR"
-
-          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          # yes 在 sdkmanager 正常结束后会收到 SIGPIPE；单独检查 sdkmanager 状态。
+          set +e
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -e
+          test "$LICENSE_STATUS" -eq 0 || { echo "::error::SDK license acceptance failed"; exit 1; }
           "$SDKMGR" "platforms;android-37.0" "build-tools;36.0.0"
 
           echo "--- installed platforms ---"
@@ -97,23 +83,16 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      # 签名 keystore 由 GitHub Secrets 提供（base64），不进入仓库。
-      # 未配置 secrets 时跳过签名（Debug 构建依然可用 AGP 默认调试签名）。
+      # 构建和测试配置都要求同一正式签名；缺少 Secret 时明确失败。
       - name: Inject signing keystore
-        id: keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          set -e
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "No KEYSTORE_BASE64 secret; building unsigned."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
-            echo "KEYSTORE_PASSWORD/KEY_ALIAS secrets missing" >&2
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "::error::Required signing secrets are missing" >&2
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/keystore"
@@ -123,7 +102,7 @@ jobs:
             "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEYSTORE_PASSWORD" \
             > "$RUNNER_TEMP/keystore/keystore.properties"
           chmod 600 "$RUNNER_TEMP/keystore/keystore.properties"
-          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "KEYSTORE_PROPERTIES=$RUNNER_TEMP/keystore/keystore.properties" >> "$GITHUB_ENV"
 
       - name: Resolve requested build type
         id: cfg
@@ -145,8 +124,6 @@ jobs:
           echo "entry class: $(cat app/src/main/resources/META-INF/xposed/java_init.list)"
 
       - name: Assemble
-        env:
-          KEYSTORE_PROPERTIES: ${{ runner.temp }}/keystore/keystore.properties
         run: gradle --no-daemon assemble${{ steps.cfg.outputs.task }}
 
       # 阶段 2 起单元测试是必要验证项（模板转义、路径提取、调度去重/过期丢弃/重试）。
@@ -176,8 +153,8 @@ jobs:
           # 图标是模块自带资源，必须打包进 APK；缺失会导致运行期图标为空白。
           # 用 aapt2 dump resources 按名字确认编译后的资源表里确实存在这三项。
           echo "--- module drawables ---"
-          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1)
-          test -n "$AAPT" || { echo "aapt2 not found"; exit 1; }
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          test -x "$AAPT" || { echo "aapt2 not found"; exit 1; }
           RES=$($AAPT dump resources "$APK")
           for name in translate_24 progress_activity_24 error_24; do
             echo "$RES" | grep -q "drawable/$name" \
@@ -186,12 +163,11 @@ jobs:
           done
 
       - name: Verify APK signature
-        if: steps.keystore.outputs.configured == 'true'
         run: |
           set -e
           APK=$(find app/build/outputs/apk -name '*.apk' | head -n 1)
-          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | head -n 1)
-          test -n "$APKSIGNER" || { echo "apksigner not found"; exit 1; }
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$APKSIGNER" || { echo "apksigner not found"; exit 1; }
           "$APKSIGNER" verify --print-certs "$APK"
 
       - name: Upload APK

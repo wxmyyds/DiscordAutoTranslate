@@ -60,14 +60,11 @@
         "messageIdGetter": "getId",
         "contentField": "b",
         "messageContentGetter": "getContent",
-        "editedTimestampGetter": "getEditedTimestamp",
-        "hasAttachmentsOrEmbedsGetter": "hasAttachmentsOrEmbeds"
+        "editedTimestampGetter": "getEditedTimestamp"
       },
       "replyPreviewField": "v",
       "replyPreviewBindingField": "P",
-      "replyPreviewTextField": "H",
-      "replyPreviewUsernameField": "v",
-      "replyPreviewLeadingViewsField": "E"
+      "replyPreviewTextField": "H"
     },
     "message.render": {
       "target": {
@@ -81,6 +78,7 @@
           "2": "l8.h"
         }
       },
+      "identitySource": "argument",
       "viewArgument": 0,
       "contentArgument": 2,
       "messageIdArgument": 3
@@ -104,18 +102,6 @@
     "embed.bind": {
       "enabled": false,
       "reason": "352017 embed binding target has not been verified."
-    },
-    "embed.postPreviewBind": {
-      "enabled": false,
-      "reason": "352017 post-preview binding target has not been verified."
-    },
-    "embed.postPreviewRender": {
-      "enabled": false,
-      "reason": "352017 post-preview render target has not been verified."
-    },
-    "poll.bind": {
-      "enabled": false,
-      "reason": "352017 poll binding target has not been verified."
     }
   },
   "types": {
@@ -150,20 +136,273 @@
     "MessageAccessoriesView": "com.discord.chat.presentation.message.MessageAccessoriesView",
     "MessageView": "com.discord.chat.presentation.message.MessageView"
   },
-  "constructorFallbackTypes": [
-    "StrongContentNode",
-    "LHeadingContentNode",
-    "StrikethroughContentNode",
-    "SubtextContentNode",
-    "LinkContentNode",
-    "BulletListContentNode",
-    "HeadingContentNode",
-    "SpoilerContentNode",
-    "ParagraphContentNode",
-    "EmphasisContentNode",
-    "BlockQuoteContentNode",
-    "UnderlineContentNode"
-  ],
+  "nodeConstructors": {
+    "StrongContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "StrikethroughContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "SubtextContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "ParagraphContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "EmphasisContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "BlockQuoteContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "UnderlineContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "LHeadingContentNode": {
+      "parameterTypes": [
+        "int",
+        "int",
+        "java.lang.String",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 7
+        },
+        {
+          "kind": "field",
+          "name": "a"
+        },
+        {
+          "kind": "field",
+          "name": "b"
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "LinkContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List",
+        "j7.x3",
+        "java.lang.Integer",
+        "e8.c",
+        "java.lang.Integer",
+        "java.lang.Boolean",
+        "java.lang.Integer",
+        "java.lang.Boolean",
+        "java.lang.String",
+        "boolean"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 1023
+        },
+        {
+          "kind": "children"
+        },
+        {
+          "kind": "field",
+          "name": "b"
+        },
+        {
+          "kind": "field",
+          "name": "c"
+        },
+        {
+          "kind": "field",
+          "name": "d"
+        },
+        {
+          "kind": "field",
+          "name": "e"
+        },
+        {
+          "kind": "field",
+          "name": "f"
+        },
+        {
+          "kind": "field",
+          "name": "g"
+        },
+        {
+          "kind": "field",
+          "name": "h"
+        },
+        {
+          "kind": "field",
+          "name": "i"
+        },
+        {
+          "kind": "field",
+          "name": "j"
+        }
+      ]
+    },
+    "BulletListContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.lang.Long",
+        "boolean",
+        "java.util.List"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 7
+        },
+        {
+          "kind": "field",
+          "name": "a"
+        },
+        {
+          "kind": "field",
+          "name": "b"
+        },
+        {
+          "kind": "children"
+        }
+      ]
+    },
+    "HeadingContentNode": {
+      "parameterTypes": [
+        "java.util.List",
+        "int",
+        "int"
+      ],
+      "arguments": [
+        {
+          "kind": "children"
+        },
+        {
+          "kind": "integer",
+          "value": 3
+        },
+        {
+          "kind": "field",
+          "name": "a"
+        }
+      ]
+    },
+    "SpoilerContentNode": {
+      "parameterTypes": [
+        "int",
+        "java.util.List",
+        "java.lang.Integer",
+        "java.lang.String",
+        "java.lang.String"
+      ],
+      "arguments": [
+        {
+          "kind": "integer",
+          "value": 15
+        },
+        {
+          "kind": "children"
+        },
+        {
+          "kind": "field",
+          "name": "b"
+        },
+        {
+          "kind": "field",
+          "name": "c"
+        },
+        {
+          "kind": "field",
+          "name": "d"
+        }
+      ]
+    }
+  },
   "accessors": {
     "Message": {
       "getId": "getId-3Eiw7ao"
@@ -197,13 +436,7 @@
     },
     "RecyclerView": {
       "layoutSuppressed": "U",
-      "interceptRequestLayoutDepth": "S",
-      "stateP": "P",
-      "stateQ": "Q",
-      "stateR": "R",
-      "stateS": "S",
-      "stateT": "T",
-      "stateU": "U"
+      "interceptRequestLayoutDepth": "S"
     },
     "MessageContentViewHolder": {
       "bindCache": "v"
@@ -242,8 +475,7 @@
       "getContent": "a"
     },
     "UnicodeEmojiContentNode": {
-      "getContent": "b",
-      "getSurrogate": "c"
+      "getEmojiAnchor": "c"
     },
     "CustomEmojiContentNode": {
       "getAlt": "c"

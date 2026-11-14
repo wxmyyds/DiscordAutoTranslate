@@ -12,6 +12,27 @@ public class EnglishDetectorTest {
     }
 
     @Test
+    public void explicitDefaultTargetPreservesStructuralGuards() {
+        assertFalse(EnglishDetector.evaluate(null, 1, 0, false,
+                Config.DEF_TARGET_LANG).shouldTranslate);
+        assertFalse(EnglishDetector.evaluate("hello world", 1, 0, true,
+                Config.DEF_TARGET_LANG).shouldTranslate);
+        assertFalse(EnglishDetector.evaluate("hello world", 0, 0, false,
+                Config.DEF_TARGET_LANG).shouldTranslate);
+        assertFalse(EnglishDetector.evaluate("hello world", 1, 4, false,
+                Config.DEF_TARGET_LANG).shouldTranslate);
+        assertTrue(EnglishDetector.evaluate("hello world", 1, 3, false,
+                Config.DEF_TARGET_LANG).shouldTranslate);
+    }
+
+    @Test
+    public void explicitDefaultTargetPreservesLanguageAndLengthGuards() {
+        assertFalse(detect("hi", Config.DEF_TARGET_LANG).shouldTranslate);
+        assertFalse(detect("今天天气很好", Config.DEF_TARGET_LANG).shouldTranslate);
+        assertTrue(detect("Hello, how are you?", Config.DEF_TARGET_LANG).shouldTranslate);
+    }
+
+    @Test
     public void translatesRussianIntoChinese() {
         assertTrue(detect("Привет, как дела?", "简体中文").shouldTranslate);
     }

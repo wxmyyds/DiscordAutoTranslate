@@ -35,7 +35,7 @@ final class ContentNodeTestProfile {
             JSONObject members = new JSONObject()
                     .put("getContent", "getContent")
                     .put("getItems", "getItems")
-                    .put("getSurrogate", "getSurrogate")
+                    .put("getEmojiAnchor", "getContent")
                     .put("getAlt", "getAlt")
                     .put("getId", "getId");
             String json = new JSONObject()

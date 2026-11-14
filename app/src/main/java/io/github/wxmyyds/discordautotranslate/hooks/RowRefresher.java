@@ -212,11 +212,6 @@ final class RowRefresher {
             if (contentPosValue instanceof Integer) {
                 contentPosition = (Integer) contentPosValue;
             }
-            HookDiagnostics.info("row refresh started contentHeight=" + view.getHeight()
-                    + " contentMeasured=" + view.getMeasuredHeight()
-                    + " attached=" + view.isAttachedToWindow());
-            HookDiagnostics.info("row refresh recycler state before notify content="
-                    + recyclerState(contentRecycler) + " outer=" + recyclerState(rowRecycler));
             boolean contentNotified = contentPosition >= 0
                     && notifyAdapterItemChanged(contentAdapter, contentPosition);
             if (contentPosition >= 0 && !contentNotified) {
@@ -234,16 +229,7 @@ final class RowRefresher {
                     && consumeRecyclerPendingUpdates(contentRecycler);
             boolean rowUpdatesConsumed = consumeRecyclerPendingUpdates(rowRecycler);
             HookDiagnostics.info("row refresh RecyclerView updates consumed content="
-                    + contentUpdatesConsumed + " outer=" + rowUpdatesConsumed
-                    + " content=" + recyclerState(contentRecycler)
-                    + " outerState=" + recyclerState(rowRecycler));
-            postRecyclerState(contentRecycler, "content", view, messageRow);
-            postRecyclerState(rowRecycler, "outer", view, messageRow);
-            messageRow.post(() -> HookDiagnostics.info("row refresh after layout"
-                    + " content=" + sizeOf(view)
-                    + " accessories=" + sizeOf(findAncestorView(view, configuredType("MessageAccessoriesView")))
-                    + " row=" + sizeOf(messageRow)
-                    + " recycler=" + sizeOfViewParent(rowRecycler)));
+                    + contentUpdatesConsumed + " outer=" + rowUpdatesConsumed);
             HookDiagnostics.infoOnce("rowRefresh.outerAdapterNotified",
                     "outer chat adapter notified; recyclerClass="
                             + rowRecycler.getClass().getName()
@@ -255,70 +241,6 @@ final class RowRefresher {
         } catch (Throwable t) {
             return false;
         }
-    }
-
-    private static void postRecyclerState(android.view.ViewParent recycler, String label,
-                                          View contentView, View messageRow) {
-        if (!(recycler instanceof View)) {
-            return;
-        }
-        View recyclerView = (View) recycler;
-        recyclerView.postOnAnimation(() -> HookDiagnostics.info(
-                "row refresh recycler state next frame " + label + "="
-                        + recyclerState(recycler)));
-        android.view.ViewTreeObserver observer = recyclerView.getViewTreeObserver();
-        if (!observer.isAlive()) {
-            return;
-        }
-        android.view.ViewTreeObserver.OnPreDrawListener listener =
-                new android.view.ViewTreeObserver.OnPreDrawListener() {
-                    @Override
-                    public boolean onPreDraw() {
-                        if (observer.isAlive()) {
-                            observer.removeOnPreDrawListener(this);
-                        }
-                        HookDiagnostics.info("row refresh recycler state pre-draw " + label + "="
-                                + recyclerState(recycler)
-                                + " content=" + sizeOf(contentView)
-                                + " row=" + sizeOf(messageRow));
-                        return true;
-                    }
-                };
-        observer.addOnPreDrawListener(listener);
-    }
-
-    private static String recyclerState(android.view.ViewParent recycler) {
-        if (!(recycler instanceof View)) {
-            return recycler == null ? "missing" : recycler.getClass().getName();
-        }
-        View view = (View) recycler;
-        return view.getClass().getSimpleName()
-                + "{attached=" + view.isAttachedToWindow()
-                + ",layoutRequested=" + view.isLayoutRequested()
-                + ",height=" + view.getHeight()
-                + ",measured=" + view.getMeasuredHeight()
-                + ",P=" + readRecyclerState(recycler, "stateP")
-                + ",Q=" + readRecyclerState(recycler, "stateQ")
-                + ",R=" + readRecyclerState(recycler, "stateR")
-                + ",S=" + readRecyclerState(recycler, "stateS")
-                + ",T=" + readRecyclerState(recycler, "stateT")
-                + ",U=" + readRecyclerState(recycler, "stateU") + "}";
-    }
-
-    @Nullable
-    private static Object readRecyclerState(Object recycler, String key) {
-        String field = configuredField("RecyclerView", key);
-        return field == null ? null : Reflect.getField(recycler, field);
-    }
-
-    private static String sizeOf(@Nullable View view) {
-        return view == null ? "missing" : view.getClass().getSimpleName()
-                + "{" + view.getHeight() + "/" + view.getMeasuredHeight() + "}";
-    }
-
-    private static String sizeOfViewParent(@Nullable android.view.ViewParent parent) {
-        return parent instanceof View ? sizeOf((View) parent)
-                : parent == null ? "missing" : parent.getClass().getSimpleName();
     }
 
     private static boolean notifyAdapterItemChanged(Object adapter, int position) {

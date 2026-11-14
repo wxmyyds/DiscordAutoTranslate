@@ -1,44 +1,56 @@
 package io.github.wxmyyds.discordautotranslate.core;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
-/**
- * {@link Segments} 的译文净化（strip）与防损坏校验（plainTextViolation）。
- *
- * <p>分段标记协议的请求侧机器已随单链路重构删除；这里覆盖的是仍在
- * 生产链路上的两个入口：引擎返回前的防损坏校验，以及渲染侧剥离
- * 模型幻觉标记的最后防线。</p>
- */
+/** {@link Segments} 的共用标记拒绝谓词与纯文本防损坏校验。 */
 public class SegmentsTest {
 
     @Test
-    public void stripRemovesTagsAndKeepsContentInOrder() {
-        assertEquals("你好\n世界", Segments.strip("<s1>你好</s1>\n<s2>世界</s2>"));
-        // 只译了一段：剩下的标记被剥离，内容仍保留，不能把标签当文字显示。
-        assertEquals("你好", Segments.strip("<s1>你好</s1>"));
+    public void hasSegmentMarkersDetectsOpeningClosingAndIncompleteTags() {
+        for (String text : new String[]{"<s1>你好</s1>", "译文里残留</s2>字面量",
+                "<s1>你好", "<s 12 >文本", "</s 12 >", "前言 <s3", "</s4",
+                "<s999999999999999999999999>文本"}) {
+            assertTrue(text, Segments.hasSegmentMarkers(text));
+            assertNotNull(text, Segments.plainTextViolation(text, "hello world"));
+        }
     }
 
     @Test
-    public void stripKeepsTextOutsideTags() {
-        assertEquals("前 x", Segments.strip("前 <s1>x</s1>"));
-        assertEquals("a你好b", Segments.strip("a<s1>你好</s1>b"));
+    public void hasSegmentMarkersLeavesPlainTextUntouched() {
+        assertFalse(Segments.hasSegmentMarkers(null));
+        assertFalse(Segments.hasSegmentMarkers(""));
+        assertFalse(Segments.hasSegmentMarkers("你好世界"));
+        assertFalse(Segments.hasSegmentMarkers("<strong>hello</strong>"));
     }
 
     @Test
-    public void stripHandlesMissingCloseTagGracefully() {
-        // 闭合标记缺失：只丢掉开标记，其后文字不得丢失。
-        assertEquals("你好", Segments.strip("<s1>你好"));
+    public void plainTextViolationLengthBoundariesAreInclusive() {
+        String source = repeat('a', 40);
+        assertNull(Segments.plainTextViolation(repeat('b', 10), source));
+        assertNotNull(Segments.plainTextViolation(repeat('b', 9), source));
+        assertNull(Segments.plainTextViolation(repeat('b', 120), source));
+        assertNotNull(Segments.plainTextViolation(repeat('b', 121), source));
+        assertNull(Segments.plainTextViolation(repeat('b', 121), repeat('a', 39)));
     }
 
     @Test
-    public void stripReturnsEmptyForNullOrEmpty() {
-        assertEquals("", Segments.strip(null));
-        assertEquals("", Segments.strip(""));
+    public void plainTextViolationPlaceholderBoundaryAndNullAreRejected() {
+        assertNull(Segments.plainTextViolation("XXX", "hello"));
+        assertNotNull(Segments.plainTextViolation("XXXX", "hello"));
+        assertNotNull(Segments.plainTextViolation(null, "hello"));
+    }
+
+    private static String repeat(char value, int count) {
+        StringBuilder out = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            out.append(value);
+        }
+        return out.toString();
     }
 
     @Test

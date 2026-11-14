@@ -7,6 +7,9 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * 配置读取与显式无效配置行为。
  *
@@ -51,6 +54,34 @@ public class ConfigTest {
 
         assertTrue(s.configError != null);
         assertFalse(s.isUsable());
+    }
+
+    /** 无效字段不能使同一份配置中的有效 URL、密钥等被删除或替换。 */
+    @Test
+    public void readingInvalidPrefsDoesNotMutateSavedSettings() {
+        MemoryPrefs prefs = new MemoryPrefs()
+                .put(Config.KEY_ENABLED, false)
+                .put(Config.KEY_API_URL, "https://translator.example/v1")
+                .put(Config.KEY_API_KEY, "saved-secret")
+                .put(Config.KEY_MODEL, "saved-model")
+                .put(Config.KEY_TARGET_LANG, "日本語")
+                .put(Config.KEY_EXTRA_HEADERS, "X-Tenant: saved-tenant")
+                .put(Config.KEY_SYSTEM_PROMPT, "Saved instructions")
+                .put(Config.KEY_PROTOCOL, "invalid-protocol")
+                .put(Config.KEY_STREAMING, false)
+                .put(Config.KEY_TIMEOUT_MS, 45000)
+                .put(Config.KEY_MAX_CONCURRENCY, 6);
+        Map<String, ?> before = new HashMap<>(prefs.getAll());
+
+        Config.Snapshot snapshot = Config.read(prefs);
+
+        assertTrue(snapshot.configError != null);
+        assertFalse(snapshot.isUsable());
+        assertEquals(before, prefs.getAll());
+        assertEquals("invalid-protocol", prefs.getString(Config.KEY_PROTOCOL, null));
+        assertEquals("saved-secret", prefs.getString(Config.KEY_API_KEY, null));
+        assertFalse(Config.read(prefs).isUsable());
+        assertEquals(before, prefs.getAll());
     }
 
     @Test

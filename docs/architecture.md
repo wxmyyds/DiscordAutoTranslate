@@ -26,15 +26,16 @@ io.github.wxmyyds.discordautotranslate
   ModuleEntry.java            模块唯一入口：生命周期、Hook 安装、状态重建
   core/                       与 Discord 无关的纯逻辑
     Config / MemoryPrefs      默认值初始化与显式配置错误
-    StateStore / Scheduler / TranslationCache / IdentityMessageMap
+    StateStore / Scheduler / TranslationCache
     TextExtractor / BlankLines / Segments / EnglishDetector
-    Http / Protocols / JsonPath / JsonApiEngine（JSON 请求与响应提取）
+    Http / Protocols / JsonPath（JSON 请求与响应提取）
     Reflect / Sha256 / ModuleResources / TranslationException
   hooks/                      Discord Hook 与渲染替换
-    MessageHooks / HookBridge / EmbedHooks / PollHooks
+    MessageHooks / HookBridge / EmbedHooks
     ContentNodes / StructurableTextFactory / RerenderRegistry / RowRefresher
+    IdentityMessageMap / ReplyTextProjection / HookDiagnostics
     InlineIconInjector / InlineIconSpan / InlineIconGeometry / IconClickSpanFactory
-  translate/                  ApiTester（连接测试 / 测试翻译）
+  translate/                  JsonApiEngine / ApiTester（翻译请求与连接测试）
   ui/                         SettingsActivity / XposedServiceConnectionHolder
 ```
 
@@ -44,8 +45,8 @@ io.github.wxmyyds.discordautotranslate
 
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
-| `340013` | 消息绑定、正文渲染、文本转换（回复消费者映射未提供） | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | `MessageView.f` 建立引用作用域并登记预览消费者；回复按消息 ID/编辑版本读取规范正文及已有状态，不以预览投影哈希代替规范正文、不创建状态或请求 | Embed、帖子预览、Poll 仍待核实 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
+| `340013` | 消息绑定、正文渲染、文本转换（回复消费者映射未提供） | 富 Embed | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
+| `352017` | `MessageView.f` 建立引用作用域并登记预览消费者；回复按消息 ID/编辑版本读取规范正文及已有状态，不以预览投影哈希代替规范正文、不创建状态或请求 | 独立 Embed 待核实；帖子预览/Poll 实现已移除 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 
@@ -65,7 +66,7 @@ io.github.wxmyyds.discordautotranslate
 
 ## 热重载
 
-- `onHotReloaded` 从 `getOldHookHandles()` 的目标 `Executable` 反推宿主 ClassLoader；若未能恢复版本配置或 ClassLoader，则重新安装启动 Hook。
+- `onHotReloaded` 从 `getOldHookHandles()` 的目标 `Executable` 取宿主 ClassLoader，并以保存的版本号从新模块 APK 读取当前 profile；不保存/复用旧代次 JSON。读取失败或 ClassLoader 缺失时明确报告需要重启，不重新挂载已经执行完的 `Application.attach` 伪装恢复。
 - `ModuleResources.reset()` 后重新 `attach(this)`，否则图标资源解析失败。
 - `TranslationCache.reset()` 清理旧单例；`Scheduler.shutdown()` 经
   `Engine.cancel(Thread)` → `Http.cancelRequestOn` 关闭在途连接。
@@ -76,6 +77,14 @@ io.github.wxmyyds.discordautotranslate
 
 ## 能力范围（按 profile）
 
-- `340013`：保留原正文、Embed、帖子预览及投票配置；旧独立回复 Hook 已移除，当前 profile 未提供统一回复消费者映射，不声称回复支持。
-- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用投影与规范正文不同导致校验拒绝；`ca9713d` 的复用修正已由用户确认可显示译文，随后观察到空白/错位。`583ffbd` 日志确认原生预览模型已压平换行，但复用的正文译文渲染仍保留换行、提前终止首行。当前在同一个原生转换结果上、原生避让 span 添加之前等长压平行段分隔符；不改正文状态，不新增请求或渲染链，布局修正待设备复测。独立 Embed、帖子预览和 Poll 待各自目标核实。
-- 两个 profile 都保留失败时的原始节点树；用户可通过图标重试或切换原文/译文。
+- `340013`：保留正文和富 Embed 配置；帖子预览绑定缺少模型参数、Poll 绑定缺少附件参数，其业务体无法执行，已连同配置和相关状态接口删除；旧独立回复 Hook 已移除，当前 profile 未提供统一回复消费者映射，不声称回复支持。
+- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用投影与规范正文不同导致校验拒绝；`ca9713d` 的复用修正已由用户确认可显示译文，随后观察到空白/错位。`583ffbd` 日志确认原生预览模型已压平换行，但复用的正文译文渲染仍保留换行、提前终止首行。当前在同一个原生转换结果上、原生避让 span 添加之前等长压平行段分隔符；不改正文状态，不新增请求或渲染链，`27451e9` 的布局修正已由用户确认修复带图片引用的空白/错位。独立 Embed 待目标核实；帖子预览和 Poll 当前没有实现。
+- 无可用译文或严格回填失败时显示宿主原始节点树，这是状态/失败处理，不是尝试另一套翻译实现。352017 的点击接口已核实；340013 点击配置禁用，本次未设备复测。
+
+## 单链路与清理边界
+
+- 正文 ID 来源由 `message.render.identitySource` 明确指定：352017 只取消息 ID 参数；340013 只取绑定正文视图，不逐级尝试内容或父级映射。
+- 混淆容器只调用 `nodeConstructors` 指定的精确构造器，参数顺序和字段明确配置；失败不换构造器或改走 copy。未指定构造器的类型使用原 data class copy 规则。
+- 点击 span 只有配置构造器/回调一种实现；无 interfaceProxy。
+- 回复排障的 trace、逐条空白/布局监听和附件快照已删除；保留已验证的显示投影和必要错误日志。
+- 设置读取错误不能用默认值填表并保存；页面锁定并保留存储，用户确认重置后才删除配置。

@@ -21,8 +21,8 @@ import java.util.List;
  * 本类保留 Annotated 结构，只替换自然语言文本节点，其他结构节点原样保留。</p>
  *
  * <p>节点重建策略由版本配置确定：保留公开 Kotlin data class 方法的版本用
- * {@code componentN()/copy(...)}；混淆节点在 profile 中列入
- * {@code constructorFallbackTypes} 时，按已核对的字段与构造器顺序重建。未知类型不猜测。
+ * {@code componentN()/copy(...)}；混淆节点通过 profile 的 {@code nodeConstructors}
+ * 精确声明参数类型及参数来源，只调用选定构造器。未知类型不猜测。
  * 只遍历与 {@link TextExtractor} 相同的格式容器；提及、频道、emoji 和未知节点
  * 即使含有子列表也整节点保留，不参与译文分配。</p>
  */
@@ -92,7 +92,7 @@ public final class ContentNodes {
             return null;
         }
         // 锚点必须按原数量及顺序出现；各间隔只执行所属结构的唯一切分规则。
-        if (!Segments.strip(translated).equals(translated)) {
+        if (Segments.hasSegmentMarkers(translated)) {
             return null;
         }
         String plain = normalize(translated);
@@ -300,9 +300,10 @@ public final class ContentNodes {
         Class<?> cls = node.getClass();
         HookConfiguration configuration = HookConfiguration.activeConfiguration();
         String semanticType = HookConfiguration.semanticTypeName(cls);
-        if (configuration != null && semanticType != null
-                && configuration.allowsConstructorRebuild(semanticType)) {
-            return constructWithReplacedChildren(node, newChildren);
+        org.json.JSONObject constructor = configuration == null || semanticType == null
+                ? null : configuration.nodeConstructor(semanticType);
+        if (constructor != null) {
+            return constructWithReplacedChildren(node, newChildren, constructor);
         }
         Method copy = findCopyMethod(cls);
         if (copy == null) {
@@ -326,90 +327,64 @@ public final class ContentNodes {
         return Reflect.call(copy, node, args);
     }
 
+    /** Invoke exactly the profile-selected constructor; a failure rejects the entire rebuild. */
     @Nullable
-    private static Object constructWithReplacedChildren(Object node, List<Object> newChildren) {
+    private static Object constructWithReplacedChildren(Object node, List<Object> newChildren,
+                                                        org.json.JSONObject specification) {
         Class<?> cls = node.getClass();
-        List<java.lang.reflect.Field> fields = new ArrayList<>();
-        for (java.lang.reflect.Field field : cls.getDeclaredFields()) {
-            if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
-                continue;
+        try {
+            org.json.JSONArray configuredTypes = specification.getJSONArray("parameterTypes");
+            org.json.JSONArray configuredArguments = specification.getJSONArray("arguments");
+            Class<?>[] parameterTypes = new Class<?>[configuredTypes.length()];
+            for (int i = 0; i < parameterTypes.length; i++) {
+                parameterTypes[i] = constructorParameterType(
+                        configuredTypes.getString(i), cls.getClassLoader());
             }
-            field.setAccessible(true);
-            fields.add(field);
-        }
-        for (java.lang.reflect.Constructor<?> constructor : cls.getDeclaredConstructors()) {
-            Class<?>[] parameterTypes = constructor.getParameterTypes();
-            int fieldOffset = parameterTypes.length == fields.size() ? 0 : 1;
-            boolean kotlinDefaultConstructor = fieldOffset == 1
-                    && parameterTypes.length >= fields.size() + 1
-                    && parameterTypes[0] == int.class
-                    && (parameterTypes.length == fields.size() + 1
-                    || "kotlin.jvm.internal.DefaultConstructorMarker"
-                    .equals(parameterTypes[parameterTypes.length - 1].getName()));
-            if (fieldOffset == 1 && !kotlinDefaultConstructor) {
-                continue;
-            }
-            if (parameterTypes.length != fields.size() + fieldOffset
-                    && !(kotlinDefaultConstructor
-                    && parameterTypes.length == fields.size() + fieldOffset + 1)) {
-                continue;
-            }
-            Object[] values = new Object[parameterTypes.length];
-            if (kotlinDefaultConstructor) {
-                values[0] = fields.size() >= Integer.SIZE ? -1 : (1 << fields.size()) - 1;
-            }
-            int listIndex = -1;
-            boolean compatible = true;
-            for (int i = 0; i < fields.size(); i++) {
-                int parameterIndex = i + fieldOffset;
-                try {
-                    Object value = fields.get(i).get(node);
-                    Class<?> parameterType = parameterTypes[parameterIndex];
-                    if (value != null && !boxed(parameterType).isInstance(value)) {
-                        compatible = false;
+            java.lang.reflect.Constructor<?> constructor =
+                    cls.getDeclaredConstructor(parameterTypes);
+            Object[] arguments = new Object[parameterTypes.length];
+            for (int i = 0; i < arguments.length; i++) {
+                org.json.JSONObject argument = configuredArguments.getJSONObject(i);
+                switch (argument.getString("kind")) {
+                    case "integer":
+                        arguments[i] = argument.getInt("value");
                         break;
-                    }
-                    if (List.class.isAssignableFrom(parameterType)) {
-                        if (listIndex >= 0) {
-                            compatible = false;
-                            break;
-                        }
-                        listIndex = parameterIndex;
-                        values[parameterIndex] = newChildren;
-                    } else {
-                        values[parameterIndex] = value;
-                    }
-                } catch (Throwable ignored) {
-                    compatible = false;
-                    break;
+                    case "children":
+                        arguments[i] = newChildren;
+                        break;
+                    case "field":
+                        java.lang.reflect.Field field =
+                                cls.getDeclaredField(argument.getString("name"));
+                        field.setAccessible(true);
+                        arguments[i] = field.get(node);
+                        break;
+                    default:
+                        return null;
                 }
             }
-            if (!compatible || listIndex < 0) {
-                continue;
-            }
-            try {
-                constructor.setAccessible(true);
-                return constructor.newInstance(values);
-            } catch (Throwable ignored) {
-                // Check the next constructor; synthetic Kotlin constructors may not match.
-            }
+            constructor.setAccessible(true);
+            return constructor.newInstance(arguments);
+        } catch (Throwable t) {
+            HookDiagnostics.warnOnce("content.constructor.failed." + cls.getName(),
+                    "configured node constructor failed type=" + cls.getName()
+                            + " errorClass=" + t.getClass().getSimpleName());
+            return null;
         }
-        return null;
     }
 
-    private static Class<?> boxed(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return type;
+    private static Class<?> constructorParameterType(String name, ClassLoader classLoader)
+            throws ClassNotFoundException {
+        switch (name) {
+            case "boolean": return boolean.class;
+            case "byte": return byte.class;
+            case "short": return short.class;
+            case "int": return int.class;
+            case "long": return long.class;
+            case "float": return float.class;
+            case "double": return double.class;
+            case "char": return char.class;
+            default: return Class.forName(name, false, classLoader);
         }
-        if (type == boolean.class) return Boolean.class;
-        if (type == byte.class) return Byte.class;
-        if (type == short.class) return Short.class;
-        if (type == int.class) return Integer.class;
-        if (type == long.class) return Long.class;
-        if (type == float.class) return Float.class;
-        if (type == double.class) return Double.class;
-        if (type == char.class) return Character.class;
-        return type;
     }
 
     /** 新建承载译文的文本节点，类型跟随原节点（保持 TextContentNode 语义）。 */
@@ -996,20 +971,4 @@ public final class ContentNodes {
         return n;
     }
 
-    /** 拼接节点列表为 JSON 数组文本，用于诊断与单测。 */
-    public static String describe(@Nullable List<?> nodes) {
-        if (nodes == null) {
-            return "<null>";
-        }
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < nodes.size(); i++) {
-            if (i > 0) {
-                sb.append(", ");
-            }
-            Object n = nodes.get(i);
-            sb.append(n == null ? "null"
-                    : HookConfiguration.semanticTypeName(n.getClass()));
-        }
-        return sb.append(']').toString();
-    }
 }

@@ -62,25 +62,7 @@ public final class JsonPath {
             }
         }
 
-        return stringify(cur, path);
-    }
-
-    /** 校验一段文本是否为完整合法 JSON（允许尾随空白）。 */
-    public static void validateJson(String text, String what) throws TranslationException {
-        if (text == null) {
-            throw new TranslationException(TranslationException.Kind.CONFIG,
-                    what + "不是完整合法 JSON：输入为空");
-        }
-        try {
-            JSONTokener tokener = new JSONTokener(text);
-            tokener.nextValue();
-            if (tokener.nextClean() != 0) {
-                throw new JSONException("JSON 后存在额外内容");
-            }
-        } catch (JSONException e) {
-            throw new TranslationException(TranslationException.Kind.CONFIG,
-                    what + "不是完整合法 JSON：" + e.getMessage(), e);
-        }
+        return requireString(cur, path);
     }
 
     /** 解析完整 JSON 文本；只允许尾随空白。供协议层做结构化提取复用。 */
@@ -101,20 +83,13 @@ public final class JsonPath {
         }
     }
 
-    @Nullable
-    private static String stringify(@Nullable Object value, String path) throws TranslationException {
-        if (value == null || value == JSONObject.NULL) {
+    /** 所选译文字段必须为字符串，不将结构化值、数字或布尔值强制转换为文本。 */
+    static String requireString(@Nullable Object value, String path) throws TranslationException {
+        if (!(value instanceof String)) {
             throw new TranslationException(TranslationException.Kind.PARSE,
-                    "路径 " + path + " 的值为 null");
+                    "路径 " + path + " 的值不是字符串");
         }
-        if (value instanceof String) {
-            return (String) value;
-        }
-        if (value instanceof JSONObject || value instanceof JSONArray) {
-            // 取到结构化值时返回其 JSON 文本，便于诊断路径配置错误。
-            return value.toString();
-        }
-        return String.valueOf(value);
+        return (String) value;
     }
 
     private static int parseInt(String seg, String path) throws TranslationException {

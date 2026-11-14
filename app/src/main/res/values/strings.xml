@@ -11,6 +11,14 @@
     <string name="status_read_config_failed">Could not read settings (%1$s).</string>
     <string name="status_service_died">LSPosed disconnected. Settings cannot be saved.</string>
     <string name="status_invalid_config">Invalid settings. Review the values and try again.</string>
+    <string name="status_invalid_saved_config">Saved settings are invalid. They have not been loaded or changed. Editing, saving, checks, requests, and sync are blocked. Reset saved settings explicitly to configure again.</string>
+    <string name="button_reset_saved_settings">Reset saved settings</string>
+    <string name="confirm_reset_saved_settings">This permanently deletes ALL stored configuration: API URL, API key, model, target language, headers, system prompt, provider protocol, streaming, timeout, concurrency, and the auto-translation switch. Deletions sync to LSPosed when available. Defaults become active after reset; nothing is deleted unless you confirm. Continue?</string>
+    <string name="status_resetting">Resetting saved settings…</string>
+    <string name="status_reset_failed">Reset could not be persisted. Configuration remains locked. %1$s</string>
+    <string name="status_reset_saved_restart">All stored settings were reset and synced to LSPosed. Defaults are now active. Restart Discord to apply.</string>
+    <string name="status_reset_sync_pending">All stored settings were reset on this device. Defaults are now active locally. LSPosed was unavailable; remote deletion will retry when it reconnects.</string>
+    <string name="status_reset_sync_failed">All stored settings were reset on this device, but deletion could not sync to LSPosed. Remote settings may still be active. Sync will retry when LSPosed reconnects.</string>
     <string name="status_no_service">LSPosed is unavailable. Enable the module and its scope.</string>
     <string name="status_service_disconnected">LSPosed disconnected. Settings cannot be saved.</string>
     <string name="status_save_failed">Save failed (%1$s).</string>

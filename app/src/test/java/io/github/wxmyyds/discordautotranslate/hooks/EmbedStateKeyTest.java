@@ -11,10 +11,8 @@ import org.junit.Test;
 /**
  * Embed 状态键的口径一致性。
  *
- * <p>登记侧（{@code EmbedViewHolder.bind}）对 StructurableText 用
- * {@link HookBridge#embedStateKey}；替换侧（{@code setPostPreviewEmbed}）对
- * 裸 String 用 {@link HookBridge#embedTextStateKey}。同一段纯文本两者必须产出
- * 同一个键，否则帖子预览的标题译文永远查不到。本测试锁定该不变量。</p>
+ * <p>富 Embed 绑定按每段 StructurableText 生成状态键，键由行消息 ID 与
+ * 文本内容共同决定，保证内容相同的段使用一致的哈希口径。</p>
  */
 public class EmbedStateKeyTest {
 
@@ -26,12 +24,9 @@ public class EmbedStateKeyTest {
 
     private static final String ROW = "123456789012345678";
 
-    @Test
-    public void structurableAndRawTextProduceSameKey() {
-        Object text = new ContentNodesTest.PrimitiveStructurableText("Hello, world!");
-        assertEquals(
-                HookBridge.get().embedStateKey(ROW, text),
-                HookBridge.get().embedTextStateKey(ROW, "Hello, world!"));
+    private static String keyFor(String row, String text) {
+        return HookBridge.get().embedStateKey(row,
+                new ContentNodesTest.PrimitiveStructurableText(text));
     }
 
     @Test
@@ -53,12 +48,12 @@ public class EmbedStateKeyTest {
         assertNull(HookBridge.get().embedStateKey(ROW,
                 new ContentNodesTest.PrimitiveStructurableText("")));
         assertNull(HookBridge.get().embedStateKey(ROW, null));
-        assertNull(HookBridge.get().embedTextStateKey(ROW, "  "));
+        assertNull(keyFor(ROW, "  "));
     }
 
     @Test
     public void embedKeyIsRecognizableAndCarriesRowId() {
-        String key = HookBridge.get().embedTextStateKey(ROW, "Hello");
+        String key = keyFor(ROW, "Hello");
         assertTrue(HookBridge.isEmbedKey(key));
         assertFalse(HookBridge.isEmbedKey(ROW));
         assertFalse(HookBridge.isEmbedKey(null));
@@ -70,9 +65,9 @@ public class EmbedStateKeyTest {
 
     @Test
     public void sameRowEmbedKeysAreStillBoundWhileOtherRowsAreNot() {
-        String title = HookBridge.get().embedTextStateKey(ROW, "title text");
-        String description = HookBridge.get().embedTextStateKey(ROW, "description text");
-        String otherRow = HookBridge.get().embedTextStateKey("987654321098765432", "title text");
+        String title = keyFor(ROW, "title text");
+        String description = keyFor(ROW, "description text");
+        String otherRow = keyFor("987654321098765432", "title text");
         // 同一 Embed 视图按段登记多个键，视图绑定只留最后一个：同行必须互视为有效。
         assertTrue(RerenderRegistry.stillBound(title, description));
         assertTrue(RerenderRegistry.stillBound(description, title));
@@ -86,26 +81,11 @@ public class EmbedStateKeyTest {
     @Test
     public void iconKeyMarkingIsExplicitPerCard() {
         HookBridge bridge = HookBridge.get();
-        String key = bridge.embedTextStateKey(ROW, "icon marker text");
+        String key = keyFor(ROW, "icon marker text");
         // 未标记的 Embed 键不允许注入（每张卡片只挂一个图标）。
         assertFalse(bridge.isEmbedIconKey(key));
         bridge.markEmbedIconKey(key);
         assertTrue(bridge.isEmbedIconKey(key));
         assertFalse(bridge.isEmbedIconKey(null));
-    }
-
-    @Test
-    public void iconOnlyIdentityIsSeparateFromSubstitutionIdentity() {
-        HookBridge bridge = HookBridge.get();
-        String key = bridge.embedTextStateKey(ROW, "icon only probe");
-        Object footer = new Object();
-        assertNull(bridge.resolveIconOnlyKey(footer));
-        bridge.rememberIconOnlyContent(key, footer);
-        assertEquals(key, bridge.resolveIconOnlyKey(footer));
-        // 仅图标映射不得泄漏进替换身份，否则译文会写进 footer。
-        assertNull(bridge.resolveMessageId(footer));
-        // null 容错。
-        bridge.rememberIconOnlyContent(key, null);
-        assertNull(bridge.resolveIconOnlyKey(null));
     }
 }

@@ -10,9 +10,6 @@ import androidx.annotation.Nullable;
 
 import io.github.wxmyyds.discordautotranslate.R;
 
-import java.io.IOException;
-import java.io.InputStream;
-
 import io.github.libxposed.api.XposedInterface;
 
 /**
@@ -116,16 +113,6 @@ public final class ModuleResources {
                 return false;
             }
         }
-    }
-
-    /** 打开模块 APK 内的资产；用于读取版本化 Hook 配置。 */
-    @Nullable
-    public static InputStream openAsset(Context ctx, String path) throws IOException {
-        if (ctx == null || path == null || !ensureResources(ctx)) {
-            return null;
-        }
-        Resources res = sModuleRes;
-        return res == null ? null : res.getAssets().open(path);
     }
 
     /** 翻译图标（已翻译 / 显示原文）。未解析成功时返回 null。 */

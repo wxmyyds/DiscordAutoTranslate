@@ -7,7 +7,7 @@
 - Discord Hook 资料位于 `app/src/main/assets/hook-config/<versionCode>.json`；运行时从
   Discord `PackageInfo.versionCode` 精确读取对应文件，不存在匹配文件时不安装消息 Hook。
 - `hooks.*.target` 描述类、方法、静态/实例类型、参数数量和可选参数签名；绑定参数索引、
-  混淆类型语义名、访问器与字段别名也应放在该版本 JSON 中。
+  混淆类型语义名、访问器、字段别名及精确节点构造器参数也应放在该版本 JSON 中。
 - `requiredHooks` 只列出该版本已通过 smali 核实且启动必须成功的 Hook。未核实的回复、Embed、
   帖子预览或 Poll 入口保持 `enabled: false`，不能用其他版本的选择器作为默认值。
 - 静态渲染方法将 View 和正文都作为显式参数；对应 profile 要设置 `viewArgument` 和
@@ -19,13 +19,13 @@
 
 1. **文本转换目标按 profile 变化**：`340013` 使用 `TextUtilsKt.toSpannable`，
    `352017` 使用已核对的 `kl.b.B0` 静态方法。绑定和转换目标由 profile 指定。
-2. **扩展 Hook 按版本配置**：回复、Embed、帖子预览与 Poll 必须先核实目标。`352017` 的回复正文由 `af.i` 直接调用 `kl.b.B0`（不是 `MessageContentView.c`），必须复用引用消息 ID 的状态，不另加并行回复渲染链；原生首行避让依赖 `LeadingMarginSpan.Standard(前导区实测宽度, 0)`，不能用普通 `setText` 覆盖渲染结果；引用模型正文可能与完整正文不同，回复必须以消息 ID/编辑版本选取规范正文及已有译文，由同一个转换器生成预览，不按投影文本哈希拒绝规范译文。`583ffbd` 设备日志确认引用模型压平了规范正文换行，故译文必须在规范节点回填和原生转换之后、首行避让添加之前，对同一 Drawee builder 等长压平换行；不能先压平再回填或手动删 margin span。原生 `singleLine` 渲染参数不会清除文本内换行/显式 NewLine；Embed、帖子预览与 Poll 仍须分别核实。
+2. **扩展 Hook 按版本配置**：回复、Embed、帖子预览与 Poll 必须先核实目标。`352017` 的回复正文由 `af.i` 直接调用 `kl.b.B0`（不是 `MessageContentView.c`），必须复用引用消息 ID 的状态，不另加并行回复渲染链；原生首行避让依赖 `LeadingMarginSpan.Standard(前导区实测宽度, 0)`，不能用普通 `setText` 覆盖渲染结果；引用模型正文可能与完整正文不同，回复必须以消息 ID/编辑版本选取规范正文及已有译文，由同一个转换器生成预览，不按投影文本哈希拒绝规范译文。`583ffbd` 设备日志确认引用模型压平了规范正文换行，故译文必须在规范节点回填和原生转换之后、首行避让添加之前，对同一 Drawee builder 等长压平换行；不能先压平再回填或手动删 margin span。原生 `singleLine` 渲染参数不会清除文本内换行/显式 NewLine；保留 340013 富 Embed；缺少绑定参数的帖子预览和 Poll 业务体无实际生产链路，已连同配置删除，不再宣称支持。
 3. **替换对象类型**：必须是 `AnnotatedStructurableText` 或
    `PrimitiveStructurableText` 之一，否则渲染器抛 `RuntimeException`；
    Discord 自带的 simpleast Markdown 解析器在 APK 内无调用方，不能复用。
 4. **节点重建按 profile 选择**：`340013` 使用 Kotlin data class 的
-   `componentN()/copy(...)`；`352017` 混淆节点仅按 `constructorFallbackTypes`
-   白名单及已核实字段、构造器顺序重建。未知类型不通过猜字段或方法回退。
+   `componentN()/copy(...)`；`352017` 混淆节点仅按 `nodeConstructors`
+   指定唯一签名、参数顺序和字段重建。不存在 constructorFallbackTypes、字段顺序推断或失败后尝试下一个构造器。
 5. **正文存储绝不能依赖 View**：RecyclerView 复用视图，译文/状态一律以
    messageId 为键存 `StateStore`；同正文不同对象需身份映射（`IdentityMessageMap`）。
 6. **旧默认值会静默失效**：配置读取是「已存值优先于默认值」。曾出现用户在
@@ -37,7 +37,7 @@
 
 ## 排查与验证要点
 
-- `android.util.Log` 使用 `DiscordAutoTranslate` 标签输出启动 Hook 错误、未知版本及配置安装失败；当前代码不输出旧版 `XLog` 或 `hook pipeline armed` 诊断行。
+- `HookDiagnostics` 使用 `DiscordAutoTranslate` 标签记录安装、状态和异常类别；不输出正文/译文/消息 ID/内容哈希。回复问题修复确认后移除了 trace、空白统计与逐条布局观察，不保留临时排障监听。
 - 用户导出的 LSPosed 日志可能**不含 Discord 进程的 logcat**；若要确认上述启动错误，需检查 Discord 进程日志。
 - 单元测试无 Robolectric，**不能测 Android 类**；`ContentNodes` 的测试用
   同名假节点类模拟 Kotlin data class，才能真正执行反射代码路径。

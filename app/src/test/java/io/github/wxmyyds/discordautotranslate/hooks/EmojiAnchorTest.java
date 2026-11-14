@@ -112,10 +112,22 @@ public class EmojiAnchorTest {
     }
 
     @Test
-    public void unicodeEmojiFallsBackToSurrogateField() {
-        // 部分构造路径把字符放在 surrogate 字段。
-        assertEquals("\uD83D\uDCE2", TextExtractor.nodeEmojiText(
+    public void unicodeEmojiDoesNotSwitchMembersAfterEmptyConfiguredAnchor() {
+        assertNull(TextExtractor.nodeEmojiText(
                 new UnicodeEmojiContentNode("", "\uD83D\uDCE2", false)));
+    }
+
+    @Test
+    public void unicodeEmojiReadsOnlyProfileSelectedSurrogate() throws Exception {
+        org.json.JSONObject root = new org.json.JSONObject(
+                io.github.wxmyyds.discordautotranslate.core.HookConfiguration.activeConfiguration().rawJson());
+        root.getJSONObject("members").put("getEmojiAnchor", "getSurrogate");
+        io.github.wxmyyds.discordautotranslate.core.HookConfiguration.activate(
+                io.github.wxmyyds.discordautotranslate.core.HookConfiguration.parse(root.toString(), 352017));
+        assertEquals("\uD83D\uDCE2", TextExtractor.nodeEmojiText(
+                new UnicodeEmojiContentNode("wrong-member", "\uD83D\uDCE2", false)));
+        assertNull(TextExtractor.nodeEmojiText(
+                new UnicodeEmojiContentNode("\uD83D\uDCE2", "", false)));
     }
 
     @Test

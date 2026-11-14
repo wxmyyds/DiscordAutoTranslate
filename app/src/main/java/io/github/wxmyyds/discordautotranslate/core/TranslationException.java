@@ -50,10 +50,6 @@ public class TranslationException extends Exception {
         return kind;
     }
 
-    public int httpStatus() {
-        return httpStatus;
-    }
-
     /** 面向用户的可读提示（设置页与诊断日志共用）。 */
     public String userMessage() {
         switch (kind) {

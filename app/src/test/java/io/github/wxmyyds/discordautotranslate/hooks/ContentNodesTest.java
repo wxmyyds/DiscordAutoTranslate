@@ -782,7 +782,8 @@ public class ContentNodesTest {
         assertEquals(2, result.textNodeCount);
         assertEquals(0, result.opaqueNodeCount);
         assertTrue(EnglishDetector.evaluate(result.text, result.textNodeCount,
-                result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+                result.opaqueNodeCount, result.codeHeavy,
+                io.github.wxmyyds.discordautotranslate.core.Config.DEF_TARGET_LANG).shouldTranslate);
     }
 
     @Test
@@ -802,7 +803,8 @@ public class ContentNodesTest {
         assertEquals(3, result.textNodeCount);
         assertEquals(0, result.opaqueNodeCount);
         assertTrue(EnglishDetector.evaluate(result.text, result.textNodeCount,
-                result.opaqueNodeCount, result.codeHeavy).shouldTranslate);
+                result.opaqueNodeCount, result.codeHeavy,
+                io.github.wxmyyds.discordautotranslate.core.Config.DEF_TARGET_LANG).shouldTranslate);
     }
 
     @Test
@@ -1003,13 +1005,6 @@ public class ContentNodesTest {
 
         assertNotNull(out);
         assertEquals("  你好  ", ((TextContentNode) out.get(0)).getContent());
-    }
-
-    @Test
-    public void describesNodeList() {
-        String d = ContentNodes.describe(list(new TextContentNode("a"), new EmojiContentNode("b")));
-        assertEquals("[TextContentNode, EmojiContentNode]", d);
-        assertEquals("<null>", ContentNodes.describe(null));
     }
 
     // ---------------------------------------------------------------- 译文切分
