@@ -349,7 +349,7 @@ public final class MessageHooks {
                             ? safeArg(chain, viewArgument) : chain.getThisObject();
                     View view = asView(viewObject);
                     Object content = safeArg(chain, contentArgument);
-                    InlineIconInjector.enterHost(view);
+                    InlineIconInjector.HostScope hostScope = InlineIconInjector.enterHost(view, null);
                     try {
                         if (!HookBridge.get().isRerendering() && view != null) {
                             Object[] renderArgs = chain.getArgs().toArray();
@@ -381,7 +381,7 @@ public final class MessageHooks {
                     try {
                         return chain.proceed();
                     } finally {
-                        InlineIconInjector.exitHost();
+                        hostScope.close();
                     }
                 }));
         installedHookIds.add("message.render");

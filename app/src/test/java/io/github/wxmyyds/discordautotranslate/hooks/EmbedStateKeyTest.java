@@ -80,12 +80,25 @@ public class EmbedStateKeyTest {
 
     @Test
     public void iconKeyMarkingIsExplicitPerCard() {
-        HookBridge bridge = HookBridge.get();
         String key = keyFor(ROW, "icon marker text");
-        // 未标记的 Embed 键不允许注入（每张卡片只挂一个图标）。
-        assertFalse(bridge.isEmbedIconKey(key));
-        bridge.markEmbedIconKey(key);
-        assertTrue(bridge.isEmbedIconKey(key));
-        assertFalse(bridge.isEmbedIconKey(null));
+        String other = keyFor(ROW, "other segment");
+        try (InlineIconInjector.HostScope first = InlineIconInjector.enterHost(null, key)) {
+            assertTrue(first.allows(key));
+            assertFalse(first.allows(other));
+            assertFalse(first.allows(null));
+            try (InlineIconInjector.HostScope second = InlineIconInjector.enterHost(null, other)) {
+                assertTrue(second.allows(other));
+                assertFalse(second.allows(key));
+            }
+            assertEquals(first, InlineIconInjector.currentHost());
+            // Identical title/description text shares a state key, not two icons.
+            first.recordInjection(key);
+            assertFalse(first.allows(key));
+        }
+        assertNull(InlineIconInjector.currentHost());
+        try (InlineIconInjector.HostScope body = InlineIconInjector.enterHost(null, null)) {
+            assertTrue(body.allows(ROW));
+            assertFalse(body.allows(key));
+        }
     }
 }

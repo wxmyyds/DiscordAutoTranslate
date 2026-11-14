@@ -120,10 +120,6 @@ public final class HookBridge {
     /** 按引用身份反查消息 ID；Discord StructurableText 的 equals() 是按内容比较。 */
     private final IdentityMessageMap contentIdentityToMessageId = new IdentityMessageMap();
 
-    /** 允许注入行内图标的 Embed 状态键：每张卡片只标一段，避免逐段各挂一个图标。 */
-    private final java.util.Set<String> embedIconKeys =
-            java.util.Collections.newSetFromMap(boundedMap(1024));
-
     private volatile Config.Snapshot config = Config.read(null);
     private volatile Scheduler.Engine engine = new JsonApiEngine(config);
 
@@ -214,7 +210,6 @@ public final class HookBridge {
         messageRevisions.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
-        embedIconKeys.clear();
     }
 
     private static <K, V> Map<K, V> boundedMap(int maxEntries) {
@@ -318,18 +313,6 @@ public final class HookBridge {
         }
         int i = key.indexOf(EMBED_KEY_PREFIX);
         return i >= 0 ? key.substring(0, i) : key;
-    }
-
-    /** 标记某 Embed 状态键为所在卡片的图标承载段（每张卡片只标一段）。 */
-    public void markEmbedIconKey(String key) {
-        if (key != null) {
-            embedIconKeys.add(key);
-        }
-    }
-
-    /** 该 Embed 状态键当前是否允许注入行内图标。 */
-    public boolean isEmbedIconKey(@Nullable String key) {
-        return key != null && embedIconKeys.contains(key);
     }
 
     private static String stateKey(String rowMessageId, String contentHash) {

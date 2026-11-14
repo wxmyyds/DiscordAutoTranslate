@@ -56,6 +56,7 @@
       "contextArgument": 1
     },
     "embed.bind": {
+      "enabled": true,
       "target": {
         "class": "com.discord.chat.presentation.message.viewholder.EmbedViewHolder",
         "name": "bind",
@@ -65,19 +66,16 @@
           "1": "com.discord.chat.presentation.message.messagepart.EmbedMessageAccessory"
         }
       },
-      "accessoryArgument": 1
+      "inputSource": "accessory",
+      "accessoryArgument": 1,
+      "host": {
+        "source": "field",
+        "field": "itemView"
+      }
     }
   },
   "members": {
-    "embedHolderViewField": "itemView",
-    "embedMessageIdGetter": "getMessageId",
-    "embedGetter": "getEmbed",
-    "embedDescriptionGetter": "getDescription",
-    "embedTitleGetter": "getTitle",
-    "embedFieldsGetter": "getFields",
-    "embedFieldNameGetter": "getName",
-    "embedFieldValueGetter": "getValue",
-
+    "getEmbed": "getEmbed",
     "getMessageId": "getMessageId",
 
     "getContent": "getContent",

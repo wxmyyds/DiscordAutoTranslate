@@ -23,6 +23,7 @@ import io.github.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import io.github.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
 import io.github.wxmyyds.discordautotranslate.hooks.MessageHooks;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -259,10 +260,15 @@ public class ModuleEntry extends XposedModule {
         Scheduler.MainThread.install();
         reloadConfig();
 
-        Set<String> installedMessageHookIds = new HashSet<>();
-        List<XposedInterface.HookHandle> created = MessageHooks.install(
-                this, cl, config, installedMessageHookIds);
-        if (!config.hasAllRequiredHooks(installedMessageHookIds)) {
+        Set<String> installedHookIds = new HashSet<>();
+        List<XposedInterface.HookHandle> created = new ArrayList<>();
+        try {
+            created.addAll(MessageHooks.install(this, cl, config, installedHookIds));
+            created.addAll(EmbedHooks.install(this, cl, config, installedHookIds));
+            if (!config.hasAllRequiredHooks(installedHookIds)) {
+                throw new IllegalStateException("incomplete configured hook installation");
+            }
+        } catch (Throwable failure) {
             for (XposedInterface.HookHandle handle : created) {
                 try {
                     handle.unhook();
@@ -270,13 +276,11 @@ public class ModuleEntry extends XposedModule {
                     // Roll back incomplete required hook installation.
                 }
             }
-            throw new IllegalStateException("incomplete configured hook installation: "
-                    + installedMessageHookIds);
+            throw new IllegalStateException("configured hook installation failed", failure);
         }
         hooks.addAll(created);
-        hooks.addAll(EmbedHooks.install(this, cl, config));
         diagnosticInfo("installed hook profile versionCode=" + config.versionCode()
-                + " requiredHookIds=" + installedMessageHookIds);
+                + " requiredHookIds=" + installedHookIds);
     }
 
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */

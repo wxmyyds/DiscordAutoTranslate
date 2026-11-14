@@ -40,6 +40,7 @@ public final class HookConfiguration {
             throw new JSONException("hook config is missing hooks");
         }
         validateHookSelectors(hooks);
+        validateEmbedInput(hooks);
         validateNodeConstructors(root);
         return new HookConfiguration(versionCode, json, root);
     }
@@ -62,6 +63,41 @@ public final class HookConfiguration {
                     || !target.has("static")) {
                 throw new JSONException("enabled hook has an incomplete target: " + id);
             }
+        }
+    }
+
+    private static void validateEmbedInput(JSONObject hooks) throws JSONException {
+        JSONObject embed = hooks.optJSONObject("embed.bind");
+        if (embed == null || !embed.optBoolean("enabled", true)) {
+            return;
+        }
+        int count = embed.getJSONObject("target").getInt("parameterCount");
+        String source = embed.getString("inputSource");
+        if ("arguments".equals(source)) {
+            int model = embed.getInt("modelArgument");
+            int id = embed.getInt("messageIdArgument");
+            if (model < 0 || model >= count || id < 0 || id >= count || model == id
+                    || embed.has("accessoryArgument")) {
+                throw new JSONException("invalid Embed direct input arguments");
+            }
+        } else if ("accessory".equals(source)) {
+            int accessory = embed.getInt("accessoryArgument");
+            if (accessory < 0 || accessory >= count || embed.has("modelArgument")
+                    || embed.has("messageIdArgument")) {
+                throw new JSONException("invalid Embed accessory input argument");
+            }
+        } else {
+            throw new JSONException("unsupported Embed input source");
+        }
+        JSONObject host = embed.getJSONObject("host");
+        String hostSource = host.getString("source");
+        if ("field".equals(hostSource)) {
+            requireMetadataString(host.get("field"), "Embed host field");
+        } else if (!"this".equals(hostSource) || host.has("field")) {
+            throw new JSONException("unsupported Embed host source");
+        }
+        if (embed.getJSONObject("target").getBoolean("static")) {
+            throw new JSONException("Embed binding needs an instance host");
         }
     }
 

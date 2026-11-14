@@ -24,8 +24,8 @@ import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
  *       {@link #CURRENT_HOST}；回复引用不设置宿主，因此不注入。</li>
  *   <li>必须有可翻译文本：{@code TextExtractor} 的 {@code textNodeCount > 0}。
  *       纯图片、纯表情、纯提及消息的文本节点数为 0，不注入。</li>
- *   <li>Embed 每卡片只挂一个图标：只有 {@code HookBridge.markEmbedIconKey}
- *       标记的主段（富 Embed 的描述/标题/首字段）允许注入。</li>
+ *   <li>Embed 每卡片只挂一个图标：只有当前卡片绑定作用域
+ *       指定的主段（富 Embed 的描述/标题/首字段）允许注入。</li>
  * </ol>
  *
  * <h3>宿主 View 的传递</h3>
@@ -41,7 +41,41 @@ public final class InlineIconInjector {
      * <p>仅在正文或 Embed 渲染调用链的同步范围内有效；为 {@code null} 表示本次转换来自回复引用
      * 或其他不应注入行内图标的无宿主路径。</p>
      */
-    private static final ThreadLocal<View> CURRENT_HOST = new ThreadLocal<>();
+    private static final ThreadLocal<HostScope> CURRENT_HOST = new ThreadLocal<>();
+
+    /** Synchronous native render scope, including the sole icon-bearing Embed segment. */
+    static final class HostScope implements AutoCloseable {
+        final View view;
+        final String embedIconKey;
+        private final HostScope previous;
+        private boolean embedIconInjected;
+
+        HostScope(View view, String embedIconKey, HostScope previous) {
+            this.view = view;
+            this.embedIconKey = embedIconKey;
+            this.previous = previous;
+        }
+
+        boolean allows(String key) {
+            return key != null && (!HookBridge.isEmbedKey(key)
+                    || (!embedIconInjected && key.equals(embedIconKey)));
+        }
+
+        void recordInjection(String key) {
+            if (HookBridge.isEmbedKey(key)) {
+                embedIconInjected = true;
+            }
+        }
+
+        @Override
+        public void close() {
+            if (previous == null) {
+                CURRENT_HOST.remove();
+            } else {
+                CURRENT_HOST.set(previous);
+            }
+        }
+    }
 
     /** 占位字符：不换行空格。提供一个真实字符位置供 span 附着，且自身不触发换行。 */
     private static final String PLACEHOLDER = "\u00A0";
@@ -58,16 +92,16 @@ public final class InlineIconInjector {
     private InlineIconInjector() {
     }
 
-    /** 由正文渲染 Hook 在调用文本转换前设置，调用后必须清理。 */
-    static void enterHost(@Nullable View host) {
-        if (host != null) {
-            CURRENT_HOST.set(host);
-        }
+    /** Always close the scope; null explicitly suspends any enclosing render host. */
+    static HostScope enterHost(@Nullable View host, @Nullable String embedIconKey) {
+        HostScope scope = new HostScope(host, embedIconKey, CURRENT_HOST.get());
+        CURRENT_HOST.set(scope);
+        return scope;
     }
 
-    /** 由正文渲染 Hook 在返回前清理，避免宿主泄漏到后续其它渲染。 */
-    static void exitHost() {
-        CURRENT_HOST.remove();
+    @Nullable
+    static HostScope currentHost() {
+        return CURRENT_HOST.get();
     }
 
     /**
@@ -85,7 +119,8 @@ public final class InlineIconInjector {
     public static Object inject(@Nullable Object structurable, @Nullable Object rendered,
                                 @Nullable Object rawContext, @Nullable ClassLoader hostCl) {
         try {
-            View host = CURRENT_HOST.get();
+            HostScope scope = CURRENT_HOST.get();
+            View host = scope == null ? null : scope.view;
             if (host == null) {
                 HookDiagnostics.warnOnce("icon.noHost", "icon injection skipped: no active render host");
                 return rendered; // 回复引用等无宿主路径：不注入
@@ -98,9 +133,7 @@ public final class InlineIconInjector {
                 return rendered;
             }
             String messageId = HookBridge.get().resolveMessageId(structurable);
-            boolean iconAllowed = messageId != null
-                    && (!HookBridge.isEmbedKey(messageId)
-                    || HookBridge.get().isEmbedIconKey(messageId));
+            boolean iconAllowed = scope.allows(messageId);
             if (!iconAllowed) {
                 HookDiagnostics.warnOnce("icon.noMessageIdentity", "icon injection skipped: message identity not resolved");
                 return rendered;
@@ -156,6 +189,7 @@ public final class InlineIconInjector {
             }
             // 启动/续接旋转动画（仅翻译中状态）。
             icon.bindHost(host);
+            scope.recordInjection(messageId);
             HookDiagnostics.infoOnce("icon.injected", "translation icon injected successfully");
 
             return ssb;
@@ -166,7 +200,7 @@ public final class InlineIconInjector {
         }
     }
 
-    /** 状态 → 图标 Drawable。Embed/投票路径共用。 */
+    /** 状态 → 图标 Drawable。正文/Embed 共用。 */
     @Nullable
     static Drawable iconFor(Context context, StateStore.Status status) {
         switch (status) {

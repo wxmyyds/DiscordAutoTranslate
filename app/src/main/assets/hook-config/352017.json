@@ -4,7 +4,8 @@
   "requiredHooks": [
     "message.bind",
     "message.render",
-    "message.textConversion"
+    "message.textConversion",
+    "embed.bind"
   ],
   "iconClick": {
     "enabled": true,
@@ -100,8 +101,56 @@
       "messageIdArgument": 2
     },
     "embed.bind": {
-      "enabled": false,
-      "reason": "352017 embed binding target has not been verified."
+      "enabled": true,
+      "target": {
+        "class": "q9.q",
+        "name": "b",
+        "static": false,
+        "parameterCount": 34,
+        "returnType": "void",
+        "parameterTypes": {
+          "0": "m9.f0",
+          "1": "n7.c",
+          "2": "long",
+          "3": "java.lang.String",
+          "4": "int",
+          "5": "int",
+          "6": "int",
+          "7": "boolean",
+          "8": "boolean",
+          "9": "boolean",
+          "10": "boolean",
+          "11": "boolean",
+          "12": "boolean",
+          "13": "ea.n",
+          "14": "ea.n",
+          "15": "cb.i0",
+          "16": "ag.c",
+          "17": "android.view.View$OnLongClickListener",
+          "18": "a50.r",
+          "19": "af.m",
+          "20": "af.m",
+          "21": "k9.g",
+          "22": "af.m",
+          "23": "ea.b",
+          "24": "ea.c",
+          "25": "af.m",
+          "26": "af.m",
+          "27": "af.m",
+          "28": "j8.c",
+          "29": "double",
+          "30": "boolean",
+          "31": "boolean",
+          "32": "boolean",
+          "33": "boolean"
+        }
+      },
+      "inputSource": "arguments",
+      "modelArgument": 1,
+      "messageIdArgument": 3,
+      "host": {
+        "source": "this"
+      }
     }
   },
   "types": {
@@ -132,6 +181,8 @@
     "RecyclerViewAdapterObservable": "k3.n0",
     "MessageContentViewHolder": "ea.p0",
     "Message": "com.discord.chat.bridge.Message",
+    "Embed": "n7.c",
+    "EmbedField": "n7.o",
     "RecyclerView": "androidx.recyclerview.widget.RecyclerView",
     "MessageAccessoriesView": "com.discord.chat.presentation.message.MessageAccessoriesView",
     "MessageView": "com.discord.chat.presentation.message.MessageView"
@@ -423,6 +474,15 @@
     }
   },
   "fields": {
+    "Embed": {
+      "getDescription": "j",
+      "getTitle": "f",
+      "getFields": "g"
+    },
+    "EmbedField": {
+      "getName": "c",
+      "getValue": "d"
+    },
     "RecyclerViewViewHolder": {
       "itemView": "a",
       "bindingAdapter": "s",

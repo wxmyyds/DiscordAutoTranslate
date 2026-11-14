@@ -8,12 +8,18 @@
   Discord `PackageInfo.versionCode` 精确读取对应文件，不存在匹配文件时不安装消息 Hook。
 - `hooks.*.target` 描述类、方法、静态/实例类型、参数数量和可选参数签名；绑定参数索引、
   混淆类型语义名、访问器、字段别名及精确节点构造器参数也应放在该版本 JSON 中。
-- `requiredHooks` 只列出该版本已通过 smali 核实且启动必须成功的 Hook。未核实的回复、Embed、
-  帖子预览或 Poll 入口保持 `enabled: false`，不能用其他版本的选择器作为默认值。
+- `requiredHooks` 只列出该版本已通过 smali 核实且启动必须成功的 Hook；不能用其他版本的选择器作为默认值。352017 的富 Embed 已静态核实 `q9.q.b` 并列为必需 Hook；静态核实不等同于设备回归通过。回复复用统一转换，不安装独立 Hook；帖子预览/Poll 已删除，不能当作禁用实现保留。
 - 静态渲染方法将 View 和正文都作为显式参数；对应 profile 要设置 `viewArgument` 和
   `contentArgument`，重渲染登记会以静态调用方式执行它。
 - 新增或修改 profile 后，先做 JSON/签名核对；编译与单元测试通过 GitHub Actions 运行，
   不在本地运行 Gradle 或 `javac`。
+
+## 富 Embed 配置核实
+
+- 352017 的 `smali/q9/q.smali:764` 为 `b` 的完整描述符；按 Java 参数计数为 34（`J`/`D` 各一个参数），返回 `void`。目标中的 0–33 每个参数类型都必须精确配置，不能只按数量或部分签名匹配。
+- `inputSource=arguments`、`modelArgument=1`、`messageIdArgument=3`、`host.source=this` 与该实例方法对应。描述 `n7.c.j`、标题 `n7.c.f`、字段 `n7.c.g`；结构化字段名/值为 `n7.o.c/d`，不是原始字符串 `a/b`。
+- 340013 保留原目标和 accessory 参数 1；`inputSource=accessory`、宿主字段 `itemView`、语义 getter `getMessageId/getEmbed/getDescription/getTitle/getFields/getName/getValue` 由 profile 明确声明。旧模型源码未找到，不猜测 `Embed` 或 `EmbedField` 全限定名。
+- 专用全局 `embedHolderViewField` 与 `embed*Getter` 已移除，两版复用同一个配置选择的绑定入口。需要实机核查多卡片、描述/标题/字段、编辑、切换及回收复用；本次未确认设备回归。
 
 ## 已确认的架构教训（改代码前先读）
 
