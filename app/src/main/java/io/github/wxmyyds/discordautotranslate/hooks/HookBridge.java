@@ -50,8 +50,69 @@ public final class HookBridge {
     /** 正文视图 → 消息 ID（有界，避免列表回收后无限增长）。 */
     private final Map<View, String> viewToMessageId = boundedMap(512);
 
-    /** 消息 ID → 原始 StructurableText（有界，供失败重试使用）。 */
-    private final Map<String, Object> rawContent = boundedMap(512);
+    /** Canonical body and the message revision observed when that body was bound. */
+    private final Map<String, CanonicalContent> rawContent = boundedMap(512);
+    private final Map<String, MessageRevision> messageRevisions = boundedMap(512);
+
+    private static final class MessageRevision {
+        final String editedTimestamp;
+
+        MessageRevision(@Nullable String editedTimestamp) {
+            this.editedTimestamp = editedTimestamp;
+        }
+    }
+
+    private static final class CanonicalContent {
+        final Object content;
+        final MessageRevision revision;
+
+        CanonicalContent(Object content, @Nullable MessageRevision revision) {
+            this.content = content;
+            this.revision = revision;
+        }
+    }
+
+    static final class ReferencedTranslation {
+        final StateStore.Entry state;
+        final Object originalContent;
+
+        ReferencedTranslation(StateStore.Entry state, Object originalContent) {
+            this.state = state;
+            this.originalContent = originalContent;
+        }
+    }
+
+    /** Only the containing message's own bind may record its edit revision. */
+    void rememberMessageRevision(String messageId, @Nullable String editedTimestamp) {
+        if (messageId != null) {
+            messageRevisions.put(messageId, new MessageRevision(editedTimestamp));
+        }
+    }
+
+    void rememberCanonicalContent(String messageId, Object content) {
+        rawContent.put(messageId, new CanonicalContent(content, messageRevisions.get(messageId)));
+    }
+
+    /**
+     * A reply is a projection, not a second body. Select the canonical source by
+     * message identity and edit revision, then verify that source against state.
+     * Never hash the preview text or mutate/create state from it.
+     */
+    @Nullable
+    ReferencedTranslation referencedTranslation(String messageId, @Nullable String editedTimestamp) {
+        if (messageId == null) {
+            return null;
+        }
+        CanonicalContent original = rawContent.get(messageId);
+        MessageRevision current = messageRevisions.get(messageId);
+        if (original == null || original.revision == null || current == null
+                || !java.util.Objects.equals(original.revision.editedTimestamp, editedTimestamp)
+                || !java.util.Objects.equals(current.editedTimestamp, editedTimestamp)) {
+            return null;
+        }
+        StateStore.Entry state = existingReferencedMessageState(messageId, original.content);
+        return state == null ? null : new ReferencedTranslation(state, original.content);
+    }
 
     /** 消息 ID → 最近承载它的视图（弱引用，避免消息状态反向固定 View）。 */
     private final Map<String, java.lang.ref.WeakReference<View>> lastView = boundedMap(512);
@@ -161,6 +222,7 @@ public final class HookBridge {
     public void reset() {
         viewToMessageId.clear();
         rawContent.clear();
+        messageRevisions.clear();
         lastView.clear();
         contentIdentityToMessageId.clear();
         iconOnlyContentToKey.clear();
@@ -481,7 +543,7 @@ public final class HookBridge {
         String requestText = ex.text;
         String hash = contentHashOf(ex, cfg);
         StateStore.Entry entry = StateStore.get().obtain(messageId, hash, ex.text);
-        rawContent.put(messageId, structurableText);
+        rememberCanonicalContent(messageId, structurableText);
         if (contentView != null) {
             lastView.put(messageId, new java.lang.ref.WeakReference<>(contentView));
         }
@@ -683,10 +745,11 @@ public final class HookBridge {
         if (e == null) {
             return;
         }
-        Object structurable = rawContent.get(messageId);
-        if (structurable == null) {
+        CanonicalContent original = rawContent.get(messageId);
+        if (original == null) {
             return;
         }
+        Object structurable = original.content;
 
         e.status = StateStore.Status.IDLE;
         e.lastError = null;

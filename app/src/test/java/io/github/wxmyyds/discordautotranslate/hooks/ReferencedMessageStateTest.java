@@ -86,6 +86,71 @@ public class ReferencedMessageStateTest {
     }
 
     @Test
+    public void projectedReplyUsesCanonicalContentNotItsDifferentText() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("body\nwith attachment");
+        Object projected = new ContentNodesTest.PrimitiveStructurableText("body with attachment");
+        StateStore.Entry entry = canonical(original);
+        entry.translatedText = "正文\n含附件";
+        entry.status = StateStore.Status.TRANSLATED;
+        bridge.rememberMessageRevision(ID, null);
+        bridge.rememberCanonicalContent(ID, original);
+        assertNull(bridge.existingReferencedMessageState(ID, projected));
+        HookBridge.ReferencedTranslation reused = bridge.referencedTranslation(ID, null);
+        assertNotNull(reused);
+        assertSame(entry, reused.state);
+        assertSame(original, reused.originalContent);
+    }
+
+    @Test
+    public void editRevisionRejectsOldAndFutureReplyModels() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("Body text");
+        canonical(original);
+        bridge.rememberMessageRevision(ID, "revision-1");
+        bridge.rememberCanonicalContent(ID, original);
+        assertNotNull(bridge.referencedTranslation(ID, "revision-1"));
+        assertNull(bridge.referencedTranslation(ID, null));
+        assertNull(bridge.referencedTranslation(ID, "revision-2"));
+        bridge.rememberMessageRevision(ID, "revision-2");
+        // New bind arrived before its body renderer: do not relabel the old body.
+        assertNull(bridge.referencedTranslation(ID, "revision-1"));
+        assertNull(bridge.referencedTranslation(ID, "revision-2"));
+    }
+
+    @Test
+    public void missingRevisionAndStaleCanonicalHashDoNotBypassGuards() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("Body text");
+        StateStore.Entry entry = canonical(original);
+        bridge.rememberCanonicalContent(ID, original);
+        assertNull(bridge.referencedTranslation(ID, null));
+        bridge.rememberMessageRevision(ID, null);
+        bridge.rememberCanonicalContent(ID, original);
+        assertNotNull(bridge.referencedTranslation(ID, null));
+        entry.contentHash = "edited-hash";
+        assertNull(bridge.referencedTranslation(ID, null));
+        assertNull(bridge.referencedTranslation(null, null));
+    }
+
+    @Test
+    public void canonicalProjectionReusesStatusWithoutCreatingOrOverridingIt() {
+        Object original = new ContentNodesTest.PrimitiveStructurableText("Body text");
+        bridge.rememberMessageRevision(ID, null);
+        bridge.rememberCanonicalContent(ID, original);
+        assertNull(bridge.referencedTranslation(ID, null));
+        assertNull(StateStore.get().peek(ID));
+        StateStore.Entry entry = canonical(original);
+        for (StateStore.Status status : StateStore.Status.values()) {
+            entry.status = status;
+            entry.showingOriginal = true;
+            HookBridge.ReferencedTranslation reused = bridge.referencedTranslation(ID, null);
+            assertNotNull(reused);
+            assertSame(entry, reused.state);
+            assertSame(original, reused.originalContent);
+            assertEquals(status, entry.status);
+            assertTrue(entry.showingOriginal);
+        }
+    }
+
+    @Test
     public void consumerDoesNotOverrideToggleOrFailedAndInFlightStatus() {
         Object body = new ContentNodesTest.PrimitiveStructurableText("Original message");
         StateStore.Entry entry = canonical(body);

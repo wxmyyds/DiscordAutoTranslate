@@ -45,7 +45,7 @@ io.github.wxmyyds.discordautotranslate
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
 | `340013` | 消息绑定、正文渲染、文本转换（回复消费者映射未提供） | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | `MessageView.f` 建立引用消息正文身份并登记预览消费者；回复只读取该消息已有状态，不创建状态或请求 | Embed、帖子预览、Poll 仍待核实 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
+| `352017` | `MessageView.f` 建立引用作用域并登记预览消费者；回复按消息 ID/编辑版本读取规范正文及已有状态，不以预览投影哈希代替规范正文、不创建状态或请求 | Embed、帖子预览、Poll 仍待核实 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 
@@ -77,5 +77,5 @@ io.github.wxmyyds.discordautotranslate
 ## 能力范围（按 profile）
 
 - `340013`：保留原正文、Embed、帖子预览及投票配置；旧独立回复 Hook 已移除，当前 profile 未提供统一回复消费者映射，不声称回复支持。
-- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用预览未跟随翻译仍在排查。独立 Embed、帖子预览和 Poll 待各自目标核实。
+- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用投影与规范正文不同导致校验拒绝，当前修正待设备复测。独立 Embed、帖子预览和 Poll 待各自目标核实。
 - 两个 profile 都保留失败时的原始节点树；用户可通过图标重试或切换原文/译文。

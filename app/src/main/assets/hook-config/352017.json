@@ -52,6 +52,7 @@
       "modelArgument": 0,
       "messageIdGetter": "getId",
       "contentGetter": "getContent",
+      "editedTimestampGetter": "getEditedTimestamp",
       "referencedMessage": {
         "accessor": "getReferencedMessage",
         "loadedClass": "c8.c",
@@ -59,6 +60,7 @@
         "messageIdGetter": "getId",
         "contentField": "b",
         "messageContentGetter": "getContent",
+        "editedTimestampGetter": "getEditedTimestamp",
         "hasAttachmentsOrEmbedsGetter": "hasAttachmentsOrEmbeds"
       },
       "replyPreviewField": "v",
@@ -96,7 +98,8 @@
         }
       },
       "contentArgument": 0,
-      "contextArgument": 1
+      "contextArgument": 1,
+      "messageIdArgument": 2
     },
     "embed.bind": {
       "enabled": false,

@@ -54,6 +54,42 @@ public class StructurableTextFactoryTest {
     }
 
     @Test
+    public void replyBuildsFromCanonicalSourceAndLeavesTruncationToDiscord() {
+        HookBridge bridge = HookBridge.get();
+        io.github.wxmyyds.discordautotranslate.core.StateStore store =
+                io.github.wxmyyds.discordautotranslate.core.StateStore.get();
+        String id = "123456789012345678";
+        bridge.reset();
+        store.onNewGeneration();
+        try {
+            PrimitiveStructurableText original = new PrimitiveStructurableText("line one\nline two");
+            AnnotatedStructurableText projected = new AnnotatedStructurableText(
+                    list(new TextContentNode("line one line two")));
+            String key = bridge.embedStateKey(id, original);
+            String hash = key.substring((id + "\u0000embed\u0000").length());
+            io.github.wxmyyds.discordautotranslate.core.StateStore.Entry entry =
+                    store.obtain(id, hash, TextExtractor.extract(original).text);
+            String translated = "译文第一行\n" + "完整译文".repeat(100);
+            entry.translatedText = translated;
+            entry.status = io.github.wxmyyds.discordautotranslate.core.StateStore.Status.TRANSLATED;
+            bridge.rememberMessageRevision(id, null);
+            bridge.rememberCanonicalContent(id, original);
+            assertNull(bridge.existingReferencedMessageState(id, projected));
+            HookBridge.ReferencedTranslation reused = bridge.referencedTranslation(id, null);
+            assertNotNull(reused);
+            Object replacement = StructurableTextFactory.forTranslation(
+                    reused.originalContent, reused.state.translatedText);
+            assertTrue(replacement instanceof PrimitiveStructurableText);
+            assertEquals(translated, TextExtractor.extract(replacement).text);
+            // Full content goes to native B0/TextView; this layer never adds an ellipsis.
+            assertTrue(TextExtractor.extract(replacement).text.length() > 250);
+        } finally {
+            bridge.reset();
+            store.onNewGeneration();
+        }
+    }
+
+    @Test
     public void failedRichTextReplacementLeavesOriginalUntouched() {
         TextContentNode text = new TextContentNode("hello");
         EmojiContentNode emoji = new EmojiContentNode("1");

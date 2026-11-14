@@ -38,6 +38,8 @@ public final class MessageHooks {
     private static final Map<View, Long> REPLY_PREVIEW_TRACE_IDS =
             java.util.Collections.synchronizedMap(new WeakHashMap<>());
 
+    private static final ThreadLocal<ReferencedContent> REPLY_CONVERSION = new ThreadLocal<>();
+
     private MessageHooks() {
     }
 
@@ -92,7 +94,32 @@ public final class MessageHooks {
                                 + t.getClass().getName());
                     }
                     Object[] bindArgs = chain.getArgs().toArray();
-                    Object result = chain.proceed();
+                    ReferencedContent previousReply = REPLY_CONVERSION.get();
+                    try {
+                        Object model = safeArg(chain, spec.optInt("modelArgument", -1));
+                        ReferencedContent referenced = model == null ? null
+                                : readReferencedContent(model, spec.optJSONObject("referencedMessage"));
+                        if (referenced == null) {
+                            REPLY_CONVERSION.remove();
+                        } else {
+                            REPLY_CONVERSION.set(referenced);
+                        }
+                    } catch (Throwable t) {
+                        REPLY_CONVERSION.remove();
+                        HookDiagnostics.warnOnce("message.bind.replyScope",
+                                "reply conversion scope unavailable errorClass="
+                                        + t.getClass().getSimpleName());
+                    }
+                    Object result;
+                    try {
+                        result = chain.proceed();
+                    } finally {
+                        if (previousReply == null) {
+                            REPLY_CONVERSION.remove();
+                        } else {
+                            REPLY_CONVERSION.set(previousReply);
+                        }
+                    }
                     try {
                         bindPost(chain, bind, spec, bindArgs, replyTrace);
                     } catch (Throwable t) {
@@ -130,6 +157,11 @@ public final class MessageHooks {
         if (!validMessageId) {
             return;
         }
+        String revisionGetter = spec.optString("editedTimestampGetter", null);
+        if (revisionGetter != null) {
+            HookBridge.get().rememberMessageRevision(messageId,
+                    readEditedTimestamp(model, revisionGetter));
+        }
         HookBridge.get().rememberContent(messageId, content);
 
         // The body TextView is a descendant of MessageView, not necessarily the same
@@ -154,13 +186,15 @@ public final class MessageHooks {
         final Object systemContent;
         final Object messageContent;
         final boolean hasAttachmentsOrEmbeds;
+        final String editedTimestamp;
 
         ReferencedContent(String messageId, Object systemContent, Object messageContent,
-                          boolean hasAttachmentsOrEmbeds) {
+                          boolean hasAttachmentsOrEmbeds, @Nullable String editedTimestamp) {
             this.messageId = messageId;
             this.systemContent = systemContent;
             this.messageContent = messageContent;
             this.hasAttachmentsOrEmbeds = hasAttachmentsOrEmbeds;
+            this.editedTimestamp = editedTimestamp;
         }
     }
 
@@ -210,8 +244,10 @@ public final class MessageHooks {
         String idGetter = spec.optString("messageIdGetter", null);
         String contentField = spec.optString("contentField", null);
         String messageContentGetter = spec.optString("messageContentGetter", null);
+        String revisionGetter = spec.optString("editedTimestampGetter", null);
         if (referencedAccessor == null || referencedClass == null || messageField == null
-                || idGetter == null || contentField == null || messageContentGetter == null) {
+                || idGetter == null || contentField == null || messageContentGetter == null
+                || revisionGetter == null) {
             return new ReferencedContentRead(null, "profile-incomplete", "none");
         }
         Method accessorMethod = Reflect.findMethodExact(model.getClass(), referencedAccessor, 0);
@@ -248,10 +284,23 @@ public final class MessageHooks {
         Object media = mediaGetter == null ? null : Reflect.call(
                 Reflect.findMethodExact(message.getClass(), mediaGetter, 0), message);
         ReferencedContent content = new ReferencedContent(messageId, systemContent, messageContent,
-                Boolean.TRUE.equals(media));
+                Boolean.TRUE.equals(media), readEditedTimestamp(message, revisionGetter));
         return new ReferencedContentRead(content,
                 HookBridge.looksLikeSnowflake(messageId) ? "loaded" : "message-id-invalid",
                 actualReferenceClass);
+    }
+
+    @Nullable
+    private static String readEditedTimestamp(Object model, String getter) {
+        Method method = Reflect.findMethodExact(model.getClass(), getter, 0);
+        if (method == null || method.getReturnType() != String.class) {
+            throw new IllegalStateException("configured edit revision getter unavailable");
+        }
+        try {
+            return (String) method.invoke(model);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("edit revision read failed", e);
+        }
     }
 
     /** After Discord has bound the preview, register it on the shared translation/render path. */
@@ -308,8 +357,9 @@ public final class MessageHooks {
         HookBridge bridge = HookBridge.get();
         bridge.bindView(previewText, replySource.messageId);
         RerenderRegistry.register(replySource.messageId, previewText, row, bind, bindArgs);
-        StateStore.Entry entry = bridge.existingReferencedMessageState(
-                replySource.messageId, replySource.messageContent);
+        HookBridge.ReferencedTranslation reused = bridge.referencedTranslation(
+                replySource.messageId, replySource.editedTimestamp);
+        StateStore.Entry entry = reused == null ? null : reused.state;
         if (entry != null && entry.status == StateStore.Status.TRANSLATING) {
             bridge.trackReplyPreviewState(replySource.messageId, replyTrace);
         }
@@ -320,6 +370,7 @@ public final class MessageHooks {
                 + " state=" + (entry == null ? "missing-or-stale" : entry.status.name())
                 + " canonicalState=" + (canonical == null ? "missing" : canonical.status.name())
                 + " hasAttachmentsOrEmbeds=" + replySource.hasAttachmentsOrEmbeds
+                + " canonicalRevisionMatched=" + (reused != null)
                 + " canonicalLength=" + (canonical == null || canonical.originalText == null
                 ? -1 : canonical.originalText.length())
                 + " modelLength=" + (modelBody == null ? -1 : modelBody.text.length())
@@ -558,6 +609,7 @@ public final class MessageHooks {
                 + conversionMethod.toGenericString());
         int contentArgument = spec.optInt("contentArgument", -1);
         int contextArgument = spec.optInt("contextArgument", -1);
+        int messageIdArgument = spec.optInt("messageIdArgument", -1);
 
         out.add(module.hook(conversionMethod)
                 .setId("dat.textConversion")
@@ -565,7 +617,13 @@ public final class MessageHooks {
                 .intercept(chain -> {
                     Object source = safeArg(chain, contentArgument);
                     Object[] renderArgs = chain.getArgs().toArray();
-                    String resolvedMessageId = HookBridge.get().resolveMessageId(source);
+                    ReferencedContent reply = REPLY_CONVERSION.get();
+                    Object configuredId = safeArg(chain, messageIdArgument);
+                    boolean replyConversion = reply != null && reply.systemContent == null
+                            && source != null && source == reply.messageContent
+                            && reply.messageId.equals(configuredId);
+                    String resolvedMessageId = replyConversion ? reply.messageId
+                            : HookBridge.get().resolveMessageId(source);
                     HookDiagnostics.infoOnce("message.textConversion.idResolved." + (resolvedMessageId != null),
                             "message.textConversion identity resolved=" + (resolvedMessageId != null)
                                     + " sourceClass="
@@ -579,17 +637,24 @@ public final class MessageHooks {
                             // 内容身份映射由显式绑定/渲染入口建立；此处只读取并应用已有状态。
                             HookBridge.get().rememberContent(messageId, source);
 
-                            StateStore.Entry e = HookBridge.get()
-                                    .existingReferencedMessageState(messageId, source);
+                            HookBridge.ReferencedTranslation reused = replyConversion
+                                    ? HookBridge.get().referencedTranslation(messageId,
+                                    reply.editedTimestamp) : null;
+                            StateStore.Entry e = replyConversion
+                                    ? reused == null ? null : reused.state
+                                    : HookBridge.get().existingReferencedMessageState(messageId, source);
+                            Object original = replyConversion && reused != null
+                                    ? reused.originalContent : source;
                             String translated = (e != null
                                     && e.status == StateStore.Status.TRANSLATED
                                     && !e.showingOriginal) ? e.translatedText : null;
                             if (translated != null) {
                                 Object replacement = StructurableTextFactory
-                                        .forTranslation(source, translated);
+                                        .forTranslation(original, translated);
                                 if (replacement != null) {
                                     HookDiagnostics.info("message translation replacement applied"
-                                            + " sourceClass=" + source.getClass().getName()
+                                            + " route=" + (replyConversion ? "reply-canonical" : "body")
+                                            + " sourceClass=" + original.getClass().getName()
                                             + " replacementClass=" + replacement.getClass().getName());
                                     renderArgs[contentArgument] = replacement;
                                 } else {
