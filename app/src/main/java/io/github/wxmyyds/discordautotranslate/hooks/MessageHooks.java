@@ -136,8 +136,9 @@ public final class MessageHooks {
         String messageField = spec.optString("messageField", null);
         String idGetter = spec.optString("messageIdGetter", null);
         String contentField = spec.optString("contentField", null);
+        String messageContentGetter = spec.optString("messageContentGetter", null);
         if (referencedAccessor == null || referencedClass == null || messageField == null
-                || idGetter == null || contentField == null) {
+                || idGetter == null || contentField == null || messageContentGetter == null) {
             return;
         }
         Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(),
@@ -150,16 +151,23 @@ public final class MessageHooks {
             return;
         }
         String messageId = Reflect.callString(message, idGetter);
-        Object content = Reflect.getField(referenced, contentField);
+        Object systemContent = Reflect.getField(referenced, contentField);
+        Object messageContent = Reflect.call(Reflect.findMethodExact(message.getClass(),
+                messageContentGetter, 0), message);
         boolean validMessageId = messageId != null && HookBridge.looksLikeSnowflake(messageId);
-        boolean mapped = validMessageId && content != null;
-        if (mapped) {
-            HookBridge.get().rememberContent(messageId, content);
+        boolean systemContentMapped = validMessageId && systemContent != null;
+        boolean messageContentMapped = validMessageId && messageContent != null;
+        if (systemContentMapped) {
+            HookBridge.get().rememberContent(messageId, systemContent);
         }
-        HookDiagnostics.infoOnce("message.bind.replyMapping." + mapped,
-                "message.bind referenced preview content mapped=" + mapped
-                        + " idValid=" + validMessageId
-                        + " contentClass=" + (content == null ? "null" : content.getClass().getName()));
+        if (messageContentMapped) {
+            HookBridge.get().rememberContent(messageId, messageContent);
+        }
+        HookDiagnostics.infoOnce("message.bind.replyMapping." + validMessageId + "."
+                        + (systemContent != null) + "." + (messageContent != null),
+                "message.bind referenced preview identity idValid=" + validMessageId
+                        + " systemContentPresent=" + (systemContent != null)
+                        + " messageContentPresent=" + (messageContent != null));
     }
 
     // -------------------------------------------------- Hook 2: 正文渲染入口

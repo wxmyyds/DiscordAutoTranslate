@@ -57,7 +57,8 @@
         "loadedClass": "c8.c",
         "messageField": "a",
         "messageIdGetter": "getId",
-        "contentField": "b"
+        "contentField": "b",
+        "messageContentGetter": "getContent"
       }
     },
     "message.render": {
