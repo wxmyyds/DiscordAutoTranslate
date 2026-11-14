@@ -128,9 +128,7 @@ public class ModuleEntry extends XposedModule {
             }
         }
 
-        // 热重载不会重放 onPackageReady，因此从旧 Hook 的目标反推宿主 ClassLoader，
-        // 用于直接恢复已选中的版本配置。
-        ClassLoader recovered = classLoaderFromOldHooks(param.getOldHookHandles());
+        // 宿主 loader 只从已保存 profile 的绑定 Hook 取得，排除 Application.attach。
 
         // Drop old state and the old thread pool so stale results cannot leak in.
         Scheduler.MainThread.clear();
@@ -172,6 +170,8 @@ public class ModuleEntry extends XposedModule {
         hookConfiguration = null;
         reloadConfig();
 
+        ClassLoader recovered = restored == null ? null
+                : classLoaderFromOldHooks(param.getOldHookHandles(), restored);
         if (restored != null && recovered != null) {
             try {
                 install(recovered, restored);
@@ -282,12 +282,12 @@ public class ModuleEntry extends XposedModule {
     /** 从旧 Hook 的目标方法反推宿主 ClassLoader（热重载后包回调不会重放）。 */
     @Nullable
     private ClassLoader classLoaderFromOldHooks(
-            @NonNull List<XposedInterface.HookHandle> oldHandles) {
+            @NonNull List<XposedInterface.HookHandle> oldHandles, HookConfiguration profile) {
         for (XposedInterface.HookHandle handle : oldHandles) {
             try {
                 java.lang.reflect.Executable target = handle.getExecutable();
                 Class<?> declaring = target == null ? null : target.getDeclaringClass();
-                ClassLoader loader = declaring == null ? null : declaring.getClassLoader();
+                ClassLoader loader = profile.bindingClassLoader(declaring);
                 if (loader != null) {
                     return loader;
                 }

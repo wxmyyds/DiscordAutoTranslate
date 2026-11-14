@@ -105,6 +105,27 @@ public class HookConfigurationTest {
     }
 
     @Test
+    public void hotReloadLoaderMustComeFromConfiguredBindingTarget() throws Exception {
+        org.json.JSONObject selector = new org.json.JSONObject()
+                .put("class", SelectorFixture.class.getName()).put("name", "render")
+                .put("static", false).put("parameterCount", 2);
+        org.json.JSONObject root = new org.json.JSONObject()
+                .put("schemaVersion", 1).put("versionCode", 352017)
+                .put("requiredHooks", new org.json.JSONArray().put("message.bind"))
+                .put("hooks", new org.json.JSONObject().put("message.bind",
+                        new org.json.JSONObject().put("target", selector)));
+        HookConfiguration config = HookConfiguration.parse(root.toString(), 352017);
+        assertNull(config.bindingClassLoader(String.class));
+        assertNull(config.bindingClassLoader(GetterFixture.class));
+        assertNull(config.bindingClassLoader(null));
+        assertEquals(SelectorFixture.class.getClassLoader(),
+                config.bindingClassLoader(SelectorFixture.class));
+        selector.put("name", "unavailable");
+        config = HookConfiguration.parse(root.toString(), 352017);
+        assertNull(config.bindingClassLoader(SelectorFixture.class));
+    }
+
+    @Test
     public void resolvesConfiguredAccessorAndFieldAliases() throws Exception {
         String json = "{\"schemaVersion\":1,\"versionCode\":352017,"
                 + "\"hooks\":{},\"types\":{\"TextContentNode\":\""

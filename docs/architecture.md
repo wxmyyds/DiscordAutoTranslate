@@ -25,7 +25,7 @@ Discord AutoTranslate 是运行在 Discord 进程内的 LSPosed 模块（LibXpos
 io.github.wxmyyds.discordautotranslate
   ModuleEntry.java            模块唯一入口：生命周期、Hook 安装、状态重建
   core/                       与 Discord 无关的纯逻辑
-    Config / MemoryPrefs      默认值初始化与显式配置错误
+    Config / MemoryPrefs / PreferenceCommit      默认值、显式配置错误与提交事务
     StateStore / Scheduler / TranslationCache
     TextExtractor / BlankLines / Segments / EnglishDetector
     Http / Protocols / JsonPath（JSON 请求与响应提取）
@@ -66,7 +66,7 @@ io.github.wxmyyds.discordautotranslate
 
 ## 热重载
 
-- `onHotReloaded` 从 `getOldHookHandles()` 的目标 `Executable` 取宿主 ClassLoader，并以保存的版本号从新模块 APK 读取当前 profile；不保存/复用旧代次 JSON。读取失败或 ClassLoader 缺失时明确报告需要重启，不重新挂载已经执行完的 `Application.attach` 伪装恢复。
+- `onHotReloaded` 以保存的版本号从新模块 APK 读取当前 profile，只从该 profile 的消息绑定目标取得宿主 ClassLoader，并核对全部必需目标；排除 Android `Application.attach` 的启动类加载器。不保存/复用旧代次 JSON。读取失败或 ClassLoader 缺失时明确报告需要重启，不重新挂载已经执行完的 `Application.attach` 伪装恢复。
 - `ModuleResources.reset()` 后重新 `attach(this)`，否则图标资源解析失败。
 - `TranslationCache.reset()` 清理旧单例；`Scheduler.shutdown()` 经
   `Engine.cancel(Thread)` → `Http.cancelRequestOn` 关闭在途连接。
@@ -87,4 +87,4 @@ io.github.wxmyyds.discordautotranslate
 - 混淆容器只调用 `nodeConstructors` 指定的精确构造器，参数顺序和字段明确配置；失败不换构造器或改走 copy。未指定构造器的类型使用原 data class copy 规则。
 - 点击 span 只有配置构造器/回调一种实现；无 interfaceProxy。
 - 回复排障的 trace、逐条空白/布局监听和附件快照已删除；保留已验证的显示投影和必要错误日志。
-- 设置读取错误不能用默认值填表并保存；页面锁定并保留存储，用户确认重置后才删除配置。
+- 设置读取错误不能用默认值填表并保存；页面锁定并保留存储，用户确认重置后才删除配置。提交失败还必须恢复原内存快照，不能把已改变但未持久化的配置作为成功同步。

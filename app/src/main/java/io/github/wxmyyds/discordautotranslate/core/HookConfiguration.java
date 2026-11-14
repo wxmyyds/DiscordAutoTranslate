@@ -251,6 +251,19 @@ public final class HookConfiguration {
         return true;
     }
 
+    /** Recover only from this profile's binding target, never a framework/bootstrap class. */
+    @Nullable
+    public ClassLoader bindingClassLoader(@Nullable Class<?> declaringClass) {
+        JSONObject bind = hook("message.bind");
+        JSONObject target = bind == null ? null : bind.optJSONObject("target");
+        String expected = target == null ? null : target.optString("class", null);
+        if (declaringClass == null || !declaringClass.getName().equals(expected)) {
+            return null;
+        }
+        ClassLoader loader = declaringClass.getClassLoader();
+        return loader != null && hasAllRequiredTargets(loader) ? loader : null;
+    }
+
     public boolean hasAllRequiredHooks(Set<String> installedHookIds) {
         JSONArray required = root.optJSONArray("requiredHooks");
         if (required == null || required.length() == 0 || installedHookIds == null) {

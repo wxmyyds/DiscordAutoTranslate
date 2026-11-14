@@ -29,6 +29,7 @@ import io.github.wxmyyds.discordautotranslate.R;
 import io.github.wxmyyds.discordautotranslate.core.Config;
 import io.github.wxmyyds.discordautotranslate.core.Protocols;
 import io.github.wxmyyds.discordautotranslate.core.MemoryPrefs;
+import io.github.wxmyyds.discordautotranslate.core.PreferenceCommit;
 import io.github.wxmyyds.discordautotranslate.translate.ApiTester;
 
 import java.util.ArrayList;
@@ -56,6 +57,14 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             Config.KEY_PROTOCOL, Config.KEY_STREAMING, Config.KEY_TIMEOUT_MS,
             Config.KEY_MAX_CONCURRENCY
     };
+
+    private static final String[] LOCAL_COMMIT_KEYS = localCommitKeys();
+
+    private static String[] localCommitKeys() {
+        String[] keys = Arrays.copyOf(CONFIG_KEYS, CONFIG_KEYS.length + 1);
+        keys[CONFIG_KEYS.length] = KEY_LOCAL_INITIALIZED;
+        return keys;
+    }
 
     private static final String[] TARGET_LANGUAGE_VALUES = {
             "简体中文", "繁體中文", "English", "日本語", "한국어", "Русский",
@@ -138,7 +147,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         loadIntoUi();
         installDirtyTracking();
         updateSaveButtonState();
-        updateStatus(getString(R.string.status_local_ready));
+        if (!persistedConfigInvalid) {
+            updateStatus(getString(R.string.status_local_ready));
+        }
         XposedServiceConnectionHolder.bind(this);
     }
 
@@ -172,6 +183,16 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             return;
         }
 
+        // The active save owns synchronization; a reconnect must not read its
+        // memory-before-disk intermediate state or bypass a failed rollback.
+        if (saveInProgress) {
+            return;
+        }
+        if (PreferenceCommit.isPoisoned(prefs)) {
+            showInvalidSavedConfig();
+            showPersistenceFailure(true, getString(R.string.status_save_persist_failed));
+            return;
+        }
         if (persistedConfigInvalid) {
             updateSaveButtonState();
             updateStatus(getString(R.string.status_invalid_saved_config));
@@ -187,12 +208,16 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 boolean synced = false;
                 boolean invalidSource = false;
                 try {
-                    boolean initialized = local.getBoolean(KEY_LOCAL_INITIALIZED, false);
-                    SharedPreferences source = initialized ? local : remote;
-                    invalidSource = Config.read(source).configError != null;
-                    if (!invalidSource) {
-                        synced = copyConfigPreferences(source,
-                                initialized ? remote : local, !initialized);
+                    synchronized (PreferenceCommit.class) {
+                        if (!PreferenceCommit.isPoisoned(local)) {
+                            boolean initialized = local.getBoolean(KEY_LOCAL_INITIALIZED, false);
+                            SharedPreferences source = initialized ? local : remote;
+                            invalidSource = Config.read(source).configError != null;
+                            if (!invalidSource) {
+                                synced = copyConfigPreferences(source,
+                                        initialized ? remote : local, !initialized);
+                            }
+                        }
                     }
                 } catch (Throwable ignored) {
                     synced = false;
@@ -205,6 +230,12 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                         return;
                     }
                     syncInProgress = false;
+                    if (PreferenceCommit.isPoisoned(local)) {
+                        showInvalidSavedConfig();
+                        showPersistenceFailure(true,
+                                getString(R.string.status_save_persist_failed));
+                        return;
+                    }
                     if (invalidResult) {
                         showInvalidSavedConfig();
                     } else if (!persistedConfigInvalid && !hasUnsavedChanges) {
@@ -570,7 +601,16 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         }
         loadingUi = true;
         try {
-            Config.Snapshot snapshot = Config.read(currentPrefs);
+            final Config.Snapshot snapshot;
+            synchronized (PreferenceCommit.class) {
+                snapshot = PreferenceCommit.isPoisoned(currentPrefs)
+                        ? null : Config.read(currentPrefs);
+            }
+            if (snapshot == null) {
+                showInvalidSavedConfig();
+                showPersistenceFailure(true, getString(R.string.status_save_persist_failed));
+                return;
+            }
             if (snapshot.configError != null) {
                 showInvalidSavedConfig();
                 return;
@@ -654,23 +694,6 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
             return;
         }
 
-        final SharedPreferences.Editor editor;
-        try {
-            editor = local.edit();
-            if (resetting) {
-                for (String key : CONFIG_KEYS) {
-                    editor.remove(key);
-                }
-            } else {
-                writeSnapshot(editor, snapshot);
-            }
-            editor.putBoolean(KEY_LOCAL_INITIALIZED, true);
-        } catch (Throwable t) {
-            showPersistenceFailure(resetting, getString(R.string.status_save_failed,
-                    t.getClass().getSimpleName()));
-            return;
-        }
-
         saveInProgress = true;
         updateSaveButtonState();
         updateStatus(getString(R.string.status_saving));
@@ -682,10 +705,25 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 boolean localCommitted = false;
                 boolean remoteCommitted = false;
                 Throwable failure = null;
+                PreferenceCommit.Result transaction = null;
                 try {
-                    localCommitted = editor.commit();
-                    if (localCommitted && remote != null) {
-                        remoteCommitted = copyConfigPreferences(local, remote, false);
+                    synchronized (PreferenceCommit.class) {
+                        transaction = PreferenceCommit.commit(local, local.edit(),
+                                LOCAL_COMMIT_KEYS, editor -> {
+                                    if (resetting) {
+                                        for (String key : CONFIG_KEYS) {
+                                            editor.remove(key);
+                                        }
+                                    } else {
+                                        writeSnapshot(editor, snapshot);
+                                    }
+                                    editor.putBoolean(KEY_LOCAL_INITIALIZED, true);
+                                });
+                        localCommitted = transaction.committed;
+                        failure = transaction.failure;
+                        if (localCommitted && remote != null) {
+                            remoteCommitted = copyConfigPreferences(local, remote, false);
+                        }
                     }
                 } catch (Throwable t) {
                     failure = t;
@@ -693,18 +731,31 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                 final boolean localResult = localCommitted;
                 final boolean remoteResult = remoteCommitted;
                 final Throwable saveFailure = failure;
+                final PreferenceCommit.Result commitResult = transaction;
                 mainHandler.post(() -> {
                     if (destroyed || local != prefs) {
                         return;
                     }
                     saveInProgress = false;
                     updateSaveButtonState();
-                    if (saveFailure != null && !localResult) {
-                        showPersistenceFailure(resetting, getString(R.string.status_save_failed,
-                                saveFailure.getClass().getSimpleName()));
-                    } else if (!localResult) {
-                        showPersistenceFailure(resetting,
-                                getString(R.string.status_save_persist_failed));
+                    if (!localResult) {
+                        if (PreferenceCommit.isPoisoned(local)) {
+                            showInvalidSavedConfig();
+                        }
+                        String detail = saveFailure == null
+                                ? getString(R.string.status_save_persist_failed)
+                                : getString(R.string.status_save_failed,
+                                        saveFailure.getClass().getSimpleName());
+                        if (commitResult != null && commitResult.rollbackFailed) {
+                            // Only fixed labels and exception classes, never values/messages.
+                            detail += "\n" + (chineseUi ? "回滚：" : "Rollback: ")
+                                    + (commitResult.rollbackFailure == null
+                                            ? getString(R.string.status_save_persist_failed)
+                                            : getString(R.string.status_save_failed,
+                                                    commitResult.rollbackFailure.getClass()
+                                                            .getSimpleName()));
+                        }
+                        showPersistenceFailure(resetting || persistedConfigInvalid, detail);
                     } else if (resetting) {
                         loadIntoUi();
                         String status = getString(remoteResult && remote == remotePrefs
@@ -721,6 +772,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
                         toast(getString(R.string.toast_saved));
                         updateStatus(getString(remoteResult && remote == remotePrefs
                                 ? R.string.status_saved_restart : R.string.status_sync_pending));
+                        if (service != null && remote != remotePrefs) {
+                            onServiceConnected(service);
+                        }
                     }
                 });
             });
@@ -837,9 +891,9 @@ public class SettingsActivity extends Activity implements XposedServiceConnectio
         for (String key : CONFIG_KEYS) {
             if (!values.containsKey(key)) {
                 editor.remove(key);
-                continue;
+            } else {
+                putPreferenceValue(editor, key, values.get(key));
             }
-            putPreferenceValue(editor, key, values.get(key));
         }
         if (markInitialized) {
             editor.putBoolean(KEY_LOCAL_INITIALIZED, true);
