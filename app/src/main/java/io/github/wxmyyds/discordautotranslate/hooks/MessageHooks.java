@@ -270,7 +270,7 @@ public final class MessageHooks {
                 HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithContent",
                         "message.bind reply preview target registered; content available");
             } else if (!captureRenderedReplyPreview(previewText, row, bind, bindArgs,
-                    referenced.messageId)) {
+                    referenced.messageId, spec)) {
                 // Keep its identity, but don't fabricate text or attribute it to the reply author.
                 HookBridge.get().bindView(previewText, referenced.messageId);
                 RerenderRegistry.register(referenced.messageId, previewText, row, bind, bindArgs);
@@ -320,7 +320,7 @@ public final class MessageHooks {
         RerenderRegistry.register(stateKey, previewText, row, bind, bindArgs);
         HookBridge.get().rememberContent(stateKey, wrapped);
         HookBridge.get().onMessageBound(previewText, stateKey, wrapped);
-        applyReplyPreviewTranslation((TextView) previewText, stateKey, true);
+        applyReplyPreviewTranslation((TextView) previewText, stateKey, true, row, spec);
         HookDiagnostics.infoOnce("message.bind.systemReplyPreview.registered",
                 "system reply preview uses shared translation state");
         return true;
@@ -328,7 +328,8 @@ public final class MessageHooks {
 
     /** Use Discord's bound TextView as the authoritative visible source when the model omits it. */
     private static boolean captureRenderedReplyPreview(View preview, View row, Method bind,
-                                                       Object[] bindArgs, String referencedId) {
+                                                       Object[] bindArgs, String referencedId,
+                                                       JSONObject spec) {
         if (!(preview instanceof TextView)) {
             return false;
         }
@@ -369,7 +370,7 @@ public final class MessageHooks {
         RerenderRegistry.register(stateKey, preview, row, bind, bindArgs);
         HookBridge.get().rememberContent(stateKey, wrapped);
         HookBridge.get().onMessageBound(preview, stateKey, wrapped);
-        applyReplyPreviewTranslation(textView, stateKey, false);
+        applyReplyPreviewTranslation(textView, stateKey, false, row, spec);
         HookDiagnostics.infoOnce("message.bind.replyVisibleText.captured",
                 "reply preview translated from bound visible text via shared state pipeline");
         return true;
@@ -377,7 +378,8 @@ public final class MessageHooks {
 
     /** Apply a ready preview translation after Discord finishes its own bind. */
     private static void applyReplyPreviewTranslation(TextView view, String stateKey,
-                                                     boolean boldSystemText) {
+                                                     boolean boldSystemText, View row,
+                                                     JSONObject spec) {
         StateStore.Entry entry = StateStore.get().peek(stateKey);
         if (entry == null || entry.status != StateStore.Status.TRANSLATED
                 || entry.showingOriginal || entry.translatedText == null) {
@@ -389,6 +391,31 @@ public final class MessageHooks {
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         view.setText(styled, TextView.BufferType.SPANNABLE);
+        refreshReplyPreviewLayout(view, row, spec);
+    }
+
+    /** Re-run Discord's reply-preview measurement after its text height changes. */
+    private static void refreshReplyPreviewLayout(TextView textView, View row, JSONObject spec) {
+        String previewField = spec.optString("replyPreviewField", null);
+        String layoutMethodName = spec.optString("replyPreviewLayoutMethod", null);
+        Object preview = previewField == null ? null : Reflect.getField(row, previewField);
+        if (!(preview instanceof View) || layoutMethodName == null) {
+            return;
+        }
+        View previewView = (View) preview;
+        Runnable refresh = () -> {
+            Method layoutMethod = Reflect.findMethodExact(previewView.getClass(), layoutMethodName, 0);
+            Reflect.call(layoutMethod, previewView);
+            textView.requestLayout();
+            previewView.requestLayout();
+            row.requestLayout();
+            row.invalidate();
+        };
+        if (textView.getWidth() > 0) {
+            refresh.run();
+        } else {
+            textView.post(refresh);
+        }
     }
 
     @Nullable

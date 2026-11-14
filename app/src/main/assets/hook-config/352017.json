@@ -66,7 +66,8 @@
       },
       "replyPreviewField": "v",
       "replyPreviewBindingField": "P",
-      "replyPreviewTextField": "H"
+      "replyPreviewTextField": "H",
+      "replyPreviewLayoutMethod": "q"
     },
     "message.render": {
       "target": {

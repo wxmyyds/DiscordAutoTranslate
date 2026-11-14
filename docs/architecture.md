@@ -45,7 +45,7 @@ io.github.wxmyyds.discordautotranslate
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
 | `340013` | 消息绑定、正文渲染、文本转换、回复引用 | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | `MessageView.f` 对引用预览先使用模型正文；模型缺正文时，以 Discord 绑定后预览 `TextView` 的实际可见文本作为该预览的输入，按引用消息及内容生成隔离状态键，并通过唯一 `onMessageBound` 翻译链处理。译文在同一 bind 重渲染后写回预览；不发转换阶段请求，也不把预览归属到回复消息 | Embed、帖子预览、Poll 仍待核实 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法；`c8.i` 系统回复纯文本直绘分支 |
+| `352017` | `MessageView.f` 对引用预览先使用模型正文；模型缺正文时，以 Discord 绑定后的预览 `TextView` 实际可见文本作为输入，按引用消息及内容生成独立状态键，通过唯一翻译链处理。译文写回后调用 `MessageViewReplyPreview.q()` 重算前导视图高度和预览布局，避免多行译文与被引用用户名重叠 | Embed、帖子预览、Poll 仍待核实 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法；`c8.i` 系统回复纯文本直绘分支 |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 
