@@ -5,7 +5,11 @@
     "message.bind",
     "message.render",
     "message.textConversion",
-    "embed.bind"
+    "embed.bind",
+    "poll.bind",
+    "poll.answerBind",
+    "poll.textSet",
+    "poll.accessibilitySet"
   ],
   "iconClick": {
     "enabled": true,
@@ -99,6 +103,80 @@
       "contentArgument": 0,
       "contextArgument": 1,
       "messageIdArgument": 2
+    },
+    "poll.bind": {
+      "enabled": true,
+      "target": {
+        "class": "ea.r0",
+        "name": "v",
+        "static": false,
+        "parameterCount": 4,
+        "returnType": "void",
+        "parameterTypes": {
+          "0": "m9.g0",
+          "1": "ea.n",
+          "2": "ea.n",
+          "3": "k9.l"
+        }
+      },
+      "accessoryArgument": 0,
+      "messageIdPath": ["e"],
+      "textPath": ["g", "b", "a"],
+      "hostPath": ["u"],
+      "textViewPath": ["u", "P", "w"]
+    },
+    "poll.answerBind": {
+      "enabled": true,
+      "target": {
+        "class": "ba.h",
+        "name": "f",
+        "static": false,
+        "parameterCount": 2,
+        "returnType": "void",
+        "parameterTypes": {
+          "0": "k3.k1",
+          "1": "int"
+        }
+      },
+      "holderArgument": 0,
+      "positionArgument": 1,
+      "itemsPath": ["d"],
+      "messageIdPath": ["a"],
+      "answerIdPath": ["c", "a"],
+      "textPath": ["c", "b", "a"],
+      "holderBindingPath": ["u"],
+      "textBindingClass": "q8.f0",
+      "textViewPath": ["v"],
+      "imageBindingClass": "q8.d0",
+      "imageViewPath": ["i"]
+    },
+    "poll.textSet": {
+      "enabled": true,
+      "target": {
+        "class": "android.widget.TextView",
+        "name": "setText",
+        "static": false,
+        "parameterCount": 1,
+        "returnType": "void",
+        "parameterTypes": {
+          "0": "java.lang.CharSequence"
+        }
+      },
+      "contentArgument": 0
+    },
+    "poll.accessibilitySet": {
+      "enabled": true,
+      "target": {
+        "class": "android.view.View",
+        "name": "setContentDescription",
+        "static": false,
+        "parameterCount": 1,
+        "returnType": "void",
+        "parameterTypes": {
+          "0": "java.lang.CharSequence"
+        }
+      },
+      "contentArgument": 0
     },
     "embed.bind": {
       "enabled": true,

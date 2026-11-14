@@ -22,6 +22,7 @@ import io.github.wxmyyds.discordautotranslate.hooks.InlineIconSpan;
 import io.github.wxmyyds.discordautotranslate.hooks.RerenderRegistry;
 import io.github.wxmyyds.discordautotranslate.hooks.StructurableTextFactory;
 import io.github.wxmyyds.discordautotranslate.hooks.MessageHooks;
+import io.github.wxmyyds.discordautotranslate.hooks.PollHooks;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -265,6 +266,7 @@ public class ModuleEntry extends XposedModule {
         try {
             created.addAll(MessageHooks.install(this, cl, config, installedHookIds));
             created.addAll(EmbedHooks.install(this, cl, config, installedHookIds));
+            created.addAll(PollHooks.install(this, cl, config, installedHookIds));
             if (!config.hasAllRequiredHooks(installedHookIds)) {
                 throw new IllegalStateException("incomplete configured hook installation");
             }

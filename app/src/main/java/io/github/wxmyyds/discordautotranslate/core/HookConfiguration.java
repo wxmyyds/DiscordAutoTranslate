@@ -41,6 +41,7 @@ public final class HookConfiguration {
         }
         validateHookSelectors(hooks);
         validateEmbedInput(hooks);
+        validatePollInput(hooks);
         validateNodeConstructors(root);
         return new HookConfiguration(versionCode, json, root);
     }
@@ -99,6 +100,50 @@ public final class HookConfiguration {
         if (embed.getJSONObject("target").getBoolean("static")) {
             throw new JSONException("Embed binding needs an instance host");
         }
+    }
+
+    private static void validatePollInput(JSONObject hooks) throws JSONException {
+        String[] ids = {"poll.bind", "poll.answerBind", "poll.textSet", "poll.accessibilitySet"};
+        boolean present = false;
+        for (String id : ids) present |= hooks.has(id);
+        if (!present) return;
+        for (String id : ids) {
+            JSONObject spec = hooks.getJSONObject(id);
+            if (!spec.getBoolean("enabled") || spec.getJSONObject("target").getBoolean("static")) {
+                throw new JSONException("Poll hooks need enabled instance targets");
+            }
+            int count = spec.getJSONObject("target").getInt("parameterCount");
+            if ("poll.bind".equals(id)) {
+                validateIndex(spec, "accessoryArgument", count);
+                for (String path : new String[]{"messageIdPath", "textPath", "hostPath", "textViewPath"})
+                    validateFieldPath(spec, path);
+            } else if ("poll.answerBind".equals(id)) {
+                validateIndex(spec, "holderArgument", count);
+                validateIndex(spec, "positionArgument", count);
+                if (spec.getInt("holderArgument") == spec.getInt("positionArgument"))
+                    throw new JSONException("Poll holder and position must be distinct");
+                for (String path : new String[]{"itemsPath", "messageIdPath", "answerIdPath",
+                        "textPath", "holderBindingPath", "textViewPath", "imageViewPath"})
+                    validateFieldPath(spec, path);
+                requireMetadataString(spec.get("textBindingClass"), "Poll text binding class");
+                requireMetadataString(spec.get("imageBindingClass"), "Poll image binding class");
+                if (spec.getString("textBindingClass").equals(spec.getString("imageBindingClass")))
+                    throw new JSONException("Poll binding classes must be distinct");
+            } else {
+                validateIndex(spec, "contentArgument", count);
+            }
+        }
+    }
+
+    private static void validateIndex(JSONObject spec, String key, int count) throws JSONException {
+        int index = spec.getInt(key);
+        if (index < 0 || index >= count) throw new JSONException("invalid configured argument: " + key);
+    }
+
+    private static void validateFieldPath(JSONObject spec, String key) throws JSONException {
+        JSONArray path = spec.getJSONArray(key);
+        if (path.length() == 0) throw new JSONException("empty configured field path: " + key);
+        for (int i = 0; i < path.length(); i++) requireMetadataString(path.get(i), key);
     }
 
     private static void validateNodeConstructors(JSONObject root) throws JSONException {

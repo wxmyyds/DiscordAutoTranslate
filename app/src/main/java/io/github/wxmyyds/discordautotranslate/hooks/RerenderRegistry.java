@@ -128,8 +128,8 @@ public final class RerenderRegistry {
         if (expected == null || actual == null || expected.equals(actual)) {
             return true;
         }
-        if (HookBridge.isEmbedKey(expected) && HookBridge.isEmbedKey(actual)) {
-            return HookBridge.embedRowOf(expected).equals(HookBridge.embedRowOf(actual));
+        if (HookBridge.isCardKey(expected) && HookBridge.isCardKey(actual)) {
+            return HookBridge.cardRowOf(expected).equals(HookBridge.cardRowOf(actual));
         }
         return false;
     }

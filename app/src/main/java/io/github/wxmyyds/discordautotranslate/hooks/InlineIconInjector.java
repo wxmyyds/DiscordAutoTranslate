@@ -43,27 +43,27 @@ public final class InlineIconInjector {
      */
     private static final ThreadLocal<HostScope> CURRENT_HOST = new ThreadLocal<>();
 
-    /** Synchronous native render scope, including the sole icon-bearing Embed segment. */
+    /** Synchronous native render scope, including its sole icon-bearing card segment. */
     static final class HostScope implements AutoCloseable {
         final View view;
-        final String embedIconKey;
+        final String cardIconKey;
         private final HostScope previous;
-        private boolean embedIconInjected;
+        private boolean cardIconInjected;
 
-        HostScope(View view, String embedIconKey, HostScope previous) {
+        HostScope(View view, String cardIconKey, HostScope previous) {
             this.view = view;
-            this.embedIconKey = embedIconKey;
+            this.cardIconKey = cardIconKey;
             this.previous = previous;
         }
 
         boolean allows(String key) {
-            return key != null && (!HookBridge.isEmbedKey(key)
-                    || (!embedIconInjected && key.equals(embedIconKey)));
+            return key != null && (!HookBridge.isCardKey(key)
+                    || (!cardIconInjected && key.equals(cardIconKey)));
         }
 
         void recordInjection(String key) {
-            if (HookBridge.isEmbedKey(key)) {
-                embedIconInjected = true;
+            if (HookBridge.isCardKey(key)) {
+                cardIconInjected = true;
             }
         }
 
@@ -93,8 +93,8 @@ public final class InlineIconInjector {
     }
 
     /** Always close the scope; null explicitly suspends any enclosing render host. */
-    static HostScope enterHost(@Nullable View host, @Nullable String embedIconKey) {
-        HostScope scope = new HostScope(host, embedIconKey, CURRENT_HOST.get());
+    static HostScope enterHost(@Nullable View host, @Nullable String cardIconKey) {
+        HostScope scope = new HostScope(host, cardIconKey, CURRENT_HOST.get());
         CURRENT_HOST.set(scope);
         return scope;
     }

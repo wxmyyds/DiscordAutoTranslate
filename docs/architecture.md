@@ -46,7 +46,7 @@ io.github.wxmyyds.discordautotranslate
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
 | `340013` | 消息绑定、正文渲染、文本转换（回复消费者映射未提供） | 富 Embed | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | `MessageView.f` 建立引用作用域并登记预览消费者；回复按消息 ID/编辑版本读取规范正文及已有状态；`embed.bind` 精确匹配 `q9.q.b` 实例方法（34 个 Java 参数，返回 `void`） | 帖子预览/Poll 实现已移除 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
+| `352017` | `MessageView.f` 建立引用作用域并登记预览消费者；回复按消息 ID/编辑版本读取规范正文及已有状态；`embed.bind` 精确匹配 `q9.q.b` 实例方法（34 个 Java 参数，返回 `void`） | Poll 使用精确绑定作用域及原生文本/无障碍 setter；帖子预览未接入 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 
@@ -78,7 +78,7 @@ io.github.wxmyyds.discordautotranslate
 ## 能力范围（按 profile）
 
 - `340013`：保留正文和富 Embed 配置；帖子预览绑定缺少模型参数、Poll 绑定缺少附件参数，其业务体无法执行，已连同配置和相关状态接口删除；旧独立回复 Hook 已移除，当前 profile 未提供统一回复消费者映射，不声称回复支持。
-- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用投影与规范正文不同导致校验拒绝；`ca9713d` 的复用修正已由用户确认可显示译文，随后观察到空白/错位。`583ffbd` 日志确认原生预览模型已压平换行，但复用的正文译文渲染仍保留换行、提前终止首行。当前在同一个原生转换结果上、原生避让 span 添加之前等长压平行段分隔符；不改正文状态，不新增请求或渲染链，`27451e9` 的布局修正已由用户确认修复带图片引用的空白/错位。富 Embed 已复用现有 `embed.bind` 链路完成 smali 静态适配并启用，设备回归尚未确认；帖子预览和 Poll 当前没有实现。
+- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用投影与规范正文不同导致校验拒绝；`ca9713d` 的复用修正已由用户确认可显示译文，随后观察到空白/错位。`583ffbd` 日志确认原生预览模型已压平换行，但复用的正文译文渲染仍保留换行、提前终止首行。当前在同一个原生转换结果上、原生避让 span 添加之前等长压平行段分隔符；不改正文状态，不新增请求或渲染链，`27451e9` 的布局修正已由用户确认修复带图片引用的空白/错位。富 Embed 已复用现有 `embed.bind` 链路完成 smali 静态适配并启用，设备回归尚未确认。投票问题/选项由 `ea.r0.v`/`ba.h.f` 建立字符串与精确视图的作用域，只在原生 setter 参数处替换；图片选项仅处理无障碍文本。投票复用现有调度/状态/图标/重渲染，不修改模型或投票结果；帖子预览没有实现。
 - 无可用译文或严格回填失败时显示宿主原始节点树，这是状态/失败处理，不是尝试另一套翻译实现。352017 的点击接口已核实；340013 点击配置禁用，本次未设备复测。
 
 ## 单链路与清理边界
@@ -87,6 +87,7 @@ io.github.wxmyyds.discordautotranslate
 - 富 Embed 输入和宿主均由同一 `embed.bind` profile 显式选择：352017 的 `inputSource=arguments` 只取模型参数 1、消息 ID 参数 3，`host.source=this`；340013 的 `inputSource=accessory` 只取 accessory 参数 1，`host.source=field` 只读 `itemView`。不探测其他输入或宿主。
 - 352017 的 `Embed=n7.c`、`EmbedField=n7.o` 通过语义字段访问结构化描述 `j`、标题 `f`、字段 `g`、字段名 `c` 和值 `d`；340013 保留已配置的语义 getter，旧模型类型源码不可用，不新增未经核实的类型别名。旧 `embed*Getter`/`embedHolderViewField` 专用全局配置已移除。
 - Embed 每次实际绑定先移除该视图全部旧段登记；空卡片和同一消息的卡片编辑也不能重放旧参数。段状态共享现有 StateStore/Scheduler/缓存/转换器；当前绑定作用域选择一个图标承载段并最多注入一次，不保留跨卡片全局图标键。嵌套渲染退出后恢复之前的宿主作用域。
+- Poll 的原始字符串通过 Primitive 输入适配已有翻译链，显示端按当前状态选译文；状态键为行 ID + poll + question/answer ID + 正文 hash，与正文/Embed 隔离。投票选项保存的 adapter position 在重放前核对当前 ID、槽位与文本键，不能因同一行 ID 而套用旧参数。图片选项不注入图标；文字问题/选项图标使用只消费图标范围的触摸监听，普通投票点击仍走宿主。
 - 混淆容器只调用 `nodeConstructors` 指定的精确构造器，参数顺序和字段明确配置；失败不换构造器或改走 copy。未指定构造器的类型使用原 data class copy 规则。
 - 点击 span 只有配置构造器/回调一种实现；无 interfaceProxy。
 - 回复排障的 trace、逐条空白/布局监听和附件快照已删除；保留已验证的显示投影和必要错误日志。

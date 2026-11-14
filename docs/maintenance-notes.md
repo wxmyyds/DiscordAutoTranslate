@@ -8,7 +8,7 @@
   Discord `PackageInfo.versionCode` 精确读取对应文件，不存在匹配文件时不安装消息 Hook。
 - `hooks.*.target` 描述类、方法、静态/实例类型、参数数量和可选参数签名；绑定参数索引、
   混淆类型语义名、访问器、字段别名及精确节点构造器参数也应放在该版本 JSON 中。
-- `requiredHooks` 只列出该版本已通过 smali 核实且启动必须成功的 Hook；不能用其他版本的选择器作为默认值。352017 的富 Embed 已静态核实 `q9.q.b` 并列为必需 Hook；静态核实不等同于设备回归通过。回复复用统一转换，不安装独立 Hook；帖子预览/Poll 已删除，不能当作禁用实现保留。
+- `requiredHooks` 只列出该版本已通过 smali 核实且启动必须成功的 Hook；不能用其他版本的选择器作为默认值。352017 的富 Embed 已静态核实 `q9.q.b` 并列为必需 Hook；静态核实不等同于设备回归通过。回复复用统一转换，不安装独立 Hook；帖子预览旧实现已删除；352017 Poll 已重新核实原生绑定与 setter 并接入统一翻译状态，340013 未接入。
 - 静态渲染方法将 View 和正文都作为显式参数；对应 profile 要设置 `viewArgument` 和
   `contentArgument`，重渲染登记会以静态调用方式执行它。
 - 新增或修改 profile 后，先做 JSON/签名核对；编译与单元测试通过 GitHub Actions 运行，
@@ -21,11 +21,18 @@
 - 340013 保留原目标和 accessory 参数 1；`inputSource=accessory`、宿主字段 `itemView`、语义 getter `getMessageId/getEmbed/getDescription/getTitle/getFields/getName/getValue` 由 profile 明确声明。旧模型源码未找到，不猜测 `Embed` 或 `EmbedField` 全限定名。
 - 专用全局 `embedHolderViewField` 与 `embed*Getter` 已移除，两版复用同一个配置选择的绑定入口。需要实机核查多卡片、描述/标题/字段、编辑、切换及回收复用；本次未确认设备回归。
 
+## 投票配置核实
+
+- 问题：`ea.r0.v(m9.g0, ea.n, ea.n, k9.l)`；消息 ID 为 accessory `e`，原始问题为 `g.b.a`，问题视图为 holder `u.P.w`，提示标签 `u.P.v` 不处理。
+- 选项：`ba.h.f(k3.k1, int)`；`this.d` 是当前选项列表，消息/答案 ID 为 `n9.a.a`/`n9.a.c.a`，文字为 `n9.a.c.b.a`。文本布局 `q8.f0.v` 调用 `TextView.setText(CharSequence)`；图片布局 `q8.d0.i` 调用 `View.setContentDescription(CharSequence)`。百分比/票数是不同视图，不处理。
+- 无 `B0` 转换：只在精确绑定作用域匹配当前 receiver 和捕获的原始字符串，作用域在 finally 恢复。不能修改投票模型制造差分，更不能改答案 ID、图片、投票状态、结果或回调。
+- 先解析视图并清理旧登记，再读取新文本/构造 Primitive；重放参数前核对当前槽位/文本键。每次绑定和重放都登记包装内容的身份，但仅实际绑定发起统一翻译流程。设备投票/点击/布局回归尚未确认。
+
 ## 已确认的架构教训（改代码前先读）
 
 1. **文本转换目标按 profile 变化**：`340013` 使用 `TextUtilsKt.toSpannable`，
    `352017` 使用已核对的 `kl.b.B0` 静态方法。绑定和转换目标由 profile 指定。
-2. **扩展 Hook 按版本配置**：回复、Embed、帖子预览与 Poll 必须先核实目标。`352017` 的回复正文由 `af.i` 直接调用 `kl.b.B0`（不是 `MessageContentView.c`），必须复用引用消息 ID 的状态，不另加并行回复渲染链；原生首行避让依赖 `LeadingMarginSpan.Standard(前导区实测宽度, 0)`，不能用普通 `setText` 覆盖渲染结果；引用模型正文可能与完整正文不同，回复必须以消息 ID/编辑版本选取规范正文及已有译文，由同一个转换器生成预览，不按投影文本哈希拒绝规范译文。`583ffbd` 设备日志确认引用模型压平了规范正文换行，故译文必须在规范节点回填和原生转换之后、首行避让添加之前，对同一 Drawee builder 等长压平换行；不能先压平再回填或手动删 margin span。原生 `singleLine` 渲染参数不会清除文本内换行/显式 NewLine；保留 340013 富 Embed；缺少绑定参数的帖子预览和 Poll 业务体无实际生产链路，已连同配置删除，不再宣称支持。
+2. **扩展 Hook 按版本配置**：回复、Embed、帖子预览与 Poll 必须先核实目标。`352017` 的回复正文由 `af.i` 直接调用 `kl.b.B0`（不是 `MessageContentView.c`），必须复用引用消息 ID 的状态，不另加并行回复渲染链；原生首行避让依赖 `LeadingMarginSpan.Standard(前导区实测宽度, 0)`，不能用普通 `setText` 覆盖渲染结果；引用模型正文可能与完整正文不同，回复必须以消息 ID/编辑版本选取规范正文及已有译文，由同一个转换器生成预览，不按投影文本哈希拒绝规范译文。`583ffbd` 设备日志确认引用模型压平了规范正文换行，故译文必须在规范节点回填和原生转换之后、首行避让添加之前，对同一 Drawee builder 等长压平换行；不能先压平再回填或手动删 margin span。原生 `singleLine` 渲染参数不会清除文本内换行/显式 NewLine；保留 340013 富 Embed；原先缺少绑定参数的帖子预览和 Poll 业务体已清理。352017 Poll 此次核实为 `ea.r0.v` 问题绑定、`ba.h.f` 选项绑定与原生字符串 setter，不恢复旧实现。
 3. **替换对象类型**：必须是 `AnnotatedStructurableText` 或
    `PrimitiveStructurableText` 之一，否则渲染器抛 `RuntimeException`；
    Discord 自带的 simpleast Markdown 解析器在 APK 内无调用方，不能复用。

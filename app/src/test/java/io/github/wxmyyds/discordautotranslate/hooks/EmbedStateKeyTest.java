@@ -54,13 +54,13 @@ public class EmbedStateKeyTest {
     @Test
     public void embedKeyIsRecognizableAndCarriesRowId() {
         String key = keyFor(ROW, "Hello");
-        assertTrue(HookBridge.isEmbedKey(key));
-        assertFalse(HookBridge.isEmbedKey(ROW));
-        assertFalse(HookBridge.isEmbedKey(null));
+        assertTrue(HookBridge.isCardKey(key));
+        assertFalse(HookBridge.isCardKey(ROW));
+        assertFalse(HookBridge.isCardKey(null));
         // 行 ID 提取：复用校验按行比较，行必须可还原。
-        assertEquals(ROW, HookBridge.embedRowOf(key));
-        assertEquals(ROW, HookBridge.embedRowOf(ROW));
-        assertNull(HookBridge.embedRowOf(null));
+        assertEquals(ROW, HookBridge.cardRowOf(key));
+        assertEquals(ROW, HookBridge.cardRowOf(ROW));
+        assertNull(HookBridge.cardRowOf(null));
     }
 
     @Test

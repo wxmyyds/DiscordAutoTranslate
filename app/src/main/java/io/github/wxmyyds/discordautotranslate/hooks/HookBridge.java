@@ -271,7 +271,7 @@ public final class HookBridge {
         if (ex == null || ex.text.trim().isEmpty()) {
             return null;
         }
-        return stateKey(rowMessageId, contentHashOf(ex, config));
+        return stateKey(rowMessageId, EMBED_KEY_PREFIX, contentHashOf(ex, config));
     }
 
     /**
@@ -295,28 +295,41 @@ public final class HookBridge {
                 ? entry : null;
     }
 
-    /** 是否为 Embed 状态键。 */
-    public static boolean isEmbedKey(@Nullable String key) {
-        return key != null && key.contains(EMBED_KEY_PREFIX);
+    /** Poll question/answer slots share the same hash, scheduler and state pipeline. */
+    @Nullable
+    String pollStateKey(String rowMessageId, String slot, Object structurable) {
+        if (!looksLikeSnowflake(rowMessageId) || slot == null || slot.isEmpty()
+                || slot.indexOf('\u0000') >= 0) {
+            throw new IllegalArgumentException("Invalid Poll state identity");
+        }
+        TextExtractor.Result ex = TextExtractor.extract(structurable);
+        return ex == null || ex.text.trim().isEmpty() ? null
+                : stateKey(rowMessageId, POLL_KEY_PREFIX + slot + "\u0000",
+                        contentHashOf(ex, config));
+    }
+
+    /** Card segment keys are isolated from canonical body IDs. */
+    public static boolean isCardKey(@Nullable String key) {
+        return key != null && (key.contains(EMBED_KEY_PREFIX) || key.contains(POLL_KEY_PREFIX));
     }
 
     /**
-     * 取 Embed 状态键中的行消息 ID 部分；非 Embed 键原样返回。
+     * 取卡片段状态键中的行消息 ID 部分；正文键原样返回。
      *
-     * <p>同一个 Embed 视图承载同一条消息的多段文本（标题/描述/字段），
+     * <p>同一张卡片承载同一条消息的多个文本段，
      * 各段键不同但行 ID 相同。复用校验按“行未变即仍有效”放宽，
      * 行 ID 变化（视图被复用到其他消息）则仍然拒绝。</p>
      */
-    public static String embedRowOf(@Nullable String key) {
+    public static String cardRowOf(@Nullable String key) {
         if (key == null) {
             return key;
         }
-        int i = key.indexOf(EMBED_KEY_PREFIX);
+        int i = isCardKey(key) ? key.indexOf('\u0000') : -1;
         return i >= 0 ? key.substring(0, i) : key;
     }
 
-    private static String stateKey(String rowMessageId, String contentHash) {
-        return rowMessageId + EMBED_KEY_PREFIX + contentHash;
+    private static String stateKey(String rowMessageId, String namespace, String contentHash) {
+        return rowMessageId + namespace + contentHash;
     }
 
     /** 与 {@link #onMessageBound} 同口径的内容哈希（含多片段缓存命名空间）。 */
@@ -428,6 +441,7 @@ public final class HookBridge {
 
     /** Embed 状态键的分隔符；真实消息 ID（雪花 ID）不可能包含 U+0000。 */
     private static final String EMBED_KEY_PREFIX = "\u0000embed\u0000";
+    private static final String POLL_KEY_PREFIX = "\u0000poll\u0000";
 
     // ---------------------------------------------------------------- 翻译流程
 

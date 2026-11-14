@@ -31,7 +31,7 @@ public class ShippedHookProfileTest {
                     "embedFieldsGetter", "embedFieldNameGetter", "embedFieldValueGetter"}) {
                 assertTrue(members == null || !members.has(key));
             }
-            assertFalse(hooks.has("poll.bind"));
+            assertEquals(version == 352017, hooks.has("poll.bind"));
             assertFalse(hooks.has("embed.postPreviewBind"));
             assertFalse(hooks.has("embed.postPreviewRender"));
             assertFalse(root.has("constructorFallbackTypes"));
@@ -94,7 +94,7 @@ public class ShippedHookProfileTest {
         JSONObject host = embed.getJSONObject("host");
         assertEquals("this", host.getString("source"));
         assertEquals(1, host.length());
-        assertEquals(4, root.getJSONArray("requiredHooks").length());
+        assertEquals(8, root.getJSONArray("requiredHooks").length());
         assertEquals("embed.bind", root.getJSONArray("requiredHooks").getString(3));
         JSONObject types = root.getJSONObject("types");
         assertEquals("n7.c", types.getString("Embed"));
@@ -109,6 +109,64 @@ public class ShippedHookProfileTest {
         assertEquals(2, itemFields.length());
         assertEquals("c", itemFields.getString("getName"));
         assertEquals("d", itemFields.getString("getValue"));
+    }
+
+    @Test
+    public void pollUsesExactNativeScopesAndReceiversOnly() throws Exception {
+        JSONObject root = profile(352017);
+        String[] ids = {"poll.bind", "poll.answerBind", "poll.textSet", "poll.accessibilitySet"};
+        String[] owners = {"ea.r0", "ba.h", "android.widget.TextView", "android.view.View"};
+        String[] methods = {"v", "f", "setText", "setContentDescription"};
+        String[][] parameters = {{"m9.g0", "ea.n", "ea.n", "k9.l"}, {"k3.k1", "int"},
+                {"java.lang.CharSequence"}, {"java.lang.CharSequence"}};
+        for (int i = 0; i < ids.length; i++) {
+            JSONObject hook = root.getJSONObject("hooks").getJSONObject(ids[i]);
+            JSONObject target = hook.getJSONObject("target");
+            assertTrue(hook.getBoolean("enabled"));
+            assertEquals(ids[i], root.getJSONArray("requiredHooks").getString(i + 4));
+            assertEquals(owners[i], target.getString("class"));
+            assertEquals(methods[i], target.getString("name"));
+            assertFalse(target.getBoolean("static"));
+            assertEquals("void", target.getString("returnType"));
+            assertEquals(parameters[i].length, target.getInt("parameterCount"));
+            assertEquals(parameters[i].length, target.getJSONObject("parameterTypes").length());
+            for (int j = 0; j < parameters[i].length; j++) {
+                assertEquals(parameters[i][j], target.getJSONObject("parameterTypes")
+                        .getString(Integer.toString(j)));
+            }
+        }
+        JSONObject question = root.getJSONObject("hooks").getJSONObject("poll.bind");
+        assertEquals(0, question.getInt("accessoryArgument"));
+        assertEquals("[\"g\",\"b\",\"a\"]", question.getJSONArray("textPath").toString());
+        assertEquals("[\"e\"]", question.getJSONArray("messageIdPath").toString());
+        assertEquals("[\"u\",\"P\",\"w\"]", question.getJSONArray("textViewPath").toString());
+        JSONObject answer = root.getJSONObject("hooks").getJSONObject("poll.answerBind");
+        assertEquals(0, answer.getInt("holderArgument"));
+        assertEquals(1, answer.getInt("positionArgument"));
+        assertEquals("[\"d\"]", answer.getJSONArray("itemsPath").toString());
+        assertEquals("[\"c\",\"a\"]", answer.getJSONArray("answerIdPath").toString());
+        assertEquals("[\"c\",\"b\",\"a\"]", answer.getJSONArray("textPath").toString());
+        assertEquals("q8.f0", answer.getString("textBindingClass"));
+        assertEquals("q8.d0", answer.getString("imageBindingClass"));
+        assertEquals("[\"v\"]", answer.getJSONArray("textViewPath").toString());
+        assertEquals("[\"i\"]", answer.getJSONArray("imageViewPath").toString());
+        for (String id : ids) assertFalse(profile(340013).getJSONObject("hooks").has(id));
+    }
+
+    @Test
+    public void malformedPollProfilesRejectBeforeInstallation() throws Exception {
+        for (int caseIndex = 0; caseIndex < 4; caseIndex++) {
+            JSONObject root = profile(352017);
+            JSONObject hooks = root.getJSONObject("hooks");
+            switch (caseIndex) {
+                case 0: hooks.remove("poll.textSet"); break;
+                case 1: hooks.getJSONObject("poll.bind").put("accessoryArgument", 4); break;
+                case 2: hooks.getJSONObject("poll.answerBind").put("textPath", new org.json.JSONArray()); break;
+                case 3: hooks.getJSONObject("poll.accessibilitySet").put("enabled", false); break;
+            }
+            assertThrows(org.json.JSONException.class,
+                    () -> HookConfiguration.parse(root.toString(), 352017));
+        }
     }
 
     @Test
