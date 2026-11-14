@@ -245,6 +245,18 @@ public final class HookBridge {
         return stateKey(rowMessageId, contentHashOf(rawText, config));
     }
 
+    /** Find an existing canonical translation for exactly the same referenced text. */
+    @Nullable
+    public StateStore.Entry existingMessageStateForText(String messageId, String text) {
+        if (messageId == null || text == null) {
+            return null;
+        }
+        StateStore.Entry entry = StateStore.get().peek(messageId);
+        String hash = contentHashOf(text, config);
+        return entry != null && (hash.equals(entry.contentHash)
+                || text.equals(entry.originalText)) ? entry : null;
+    }
+
     /** 是否为 Embed 状态键。 */
     public static boolean isEmbedKey(@Nullable String key) {
         return key != null && key.contains(EMBED_KEY_PREFIX);

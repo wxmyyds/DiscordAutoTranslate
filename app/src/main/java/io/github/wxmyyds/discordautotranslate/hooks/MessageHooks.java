@@ -440,17 +440,34 @@ public final class MessageHooks {
         if (wrapped == null) {
             return false;
         }
-        String stateKey = HookBridge.get().embedTextStateKey(referencedId, visibleText);
+        HookBridge bridge = HookBridge.get();
+        StateStore.Entry existingMessageState =
+                bridge.existingMessageStateForText(referencedId, visibleText);
+        String stateKey = existingMessageState == null
+                ? bridge.embedTextStateKey(referencedId, visibleText) : referencedId;
         if (stateKey == null) {
             return false;
         }
         REPLY_PREVIEW_SNAPSHOTS.put(preview,
                 new ReplyPreviewSnapshot(referencedId, stateKey, visibleText));
-        HookBridge.get().bindView(preview, stateKey);
+        bridge.bindView(preview, stateKey);
         RerenderRegistry.register(stateKey, preview, row, bind, bindArgs);
-        String status = bindReplySource(preview, stateKey, wrapped, replyTrace);
+        String status;
+        if (existingMessageState != null) {
+            // Reuse the canonical referenced-message state; do not submit a second request.
+            bridge.trackReplyPreviewState(stateKey, replyTrace);
+            bridge.rememberContent(stateKey, wrapped);
+            status = existingMessageState.status.name();
+            if (!StateStore.Status.TRANSLATING.name().equals(status)) {
+                bridge.clearReplyPreviewState(stateKey, replyTrace);
+            }
+        } else {
+            status = bindReplySource(preview, stateKey, wrapped, replyTrace);
+        }
         HookDiagnostics.info("replyPreview.capture trace=" + replyTrace
-                + " outcome=visible-text textLength=" + visibleText.length()
+                + " outcome=visible-text stateSource="
+                + (existingMessageState == null ? "preview-state" : "shared-message-state")
+                + " textLength=" + visibleText.length()
                 + " lineCount=" + textView.getLineCount()
                 + " state=" + status);
         applyReplyPreviewTranslation(textView, stateKey, false, row, spec);
