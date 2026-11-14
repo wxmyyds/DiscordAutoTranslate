@@ -67,6 +67,8 @@
       "replyPreviewField": "v",
       "replyPreviewBindingField": "P",
       "replyPreviewTextField": "H",
+      "replyPreviewUsernameField": "v",
+      "replyPreviewLeadingViewsField": "E",
       "replyPreviewLayoutMethod": "q"
     },
     "message.render": {
