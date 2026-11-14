@@ -45,7 +45,7 @@ io.github.wxmyyds.discordautotranslate
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
 | `340013` | 消息绑定、正文渲染、文本转换、回复引用 | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | 消息绑定时将已加载回复预览的 `systemContent`（`c8.c.b`）及其 `Message.getContent()` 按 `c8.c.a` 的消息 ID 登记；两种正文来源对应 `af/i` 的不同分支，并共用 `kl.b.B0` 转换 | Embed、帖子预览、Poll 仍待核实 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法 |
+| `352017` | `MessageView.f` 绑定前登记两种回复预览正文身份；绑定后将实际预览正文送入 `onMessageBound`，并登记 `MessageView.f` 重渲染目标。正文来源按 smali 分支取 `c8.c.b` 或 `c8.c.a.getContent()` | Embed、帖子预览、Poll 仍待核实 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法 |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 

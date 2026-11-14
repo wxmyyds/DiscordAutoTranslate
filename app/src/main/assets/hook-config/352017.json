@@ -59,7 +59,10 @@
         "messageIdGetter": "getId",
         "contentField": "b",
         "messageContentGetter": "getContent"
-      }
+      },
+      "replyPreviewField": "v",
+      "replyPreviewBindingField": "P",
+      "replyPreviewTextField": "H"
     },
     "message.render": {
       "target": {

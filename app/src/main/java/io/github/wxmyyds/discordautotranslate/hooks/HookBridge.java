@@ -119,6 +119,21 @@ public final class HookBridge {
         lastView.put(messageId, new java.lang.ref.WeakReference<>(contentView));
     }
 
+    /** Remove a stale direct binding when a recycled preview has no resolvable message ID. */
+    public void unbindView(@Nullable View contentView) {
+        if (contentView == null) {
+            return;
+        }
+        String previous = viewToMessageId.remove(contentView);
+        if (previous == null) {
+            return;
+        }
+        java.lang.ref.WeakReference<View> last = lastView.get(previous);
+        if (last != null && last.get() == contentView) {
+            lastView.remove(previous, last);
+        }
+    }
+
     @Nullable
     public String directMessageIdOf(@Nullable View contentView) {
         return contentView == null ? null : viewToMessageId.get(contentView);

@@ -90,6 +90,26 @@ public final class RerenderRegistry {
         }
     }
 
+    /** Remove every stale registration for a view before it is rebound to another message. */
+    public static void unregister(View contentView) {
+        if (contentView == null) {
+            return;
+        }
+        for (Map.Entry<String, List<Target>> entry : TARGETS.entrySet()) {
+            List<Target> list = entry.getValue();
+            synchronized (list) {
+                for (Iterator<Target> it = list.iterator(); it.hasNext(); ) {
+                    if (it.next().contentView.get() == contentView) {
+                        it.remove();
+                    }
+                }
+                if (list.isEmpty()) {
+                    TARGETS.remove(entry.getKey(), list);
+                }
+            }
+        }
+    }
+
     public static void clear() {
         TARGETS.clear();
     }

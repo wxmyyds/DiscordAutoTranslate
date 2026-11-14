@@ -78,7 +78,16 @@ public final class MessageHooks {
                         HookDiagnostics.warnOnce("message.bind.exception", "message.bind processing failed with "
                                 + t.getClass().getName());
                     }
-                    return chain.proceed();
+                    Object[] bindArgs = chain.getArgs().toArray();
+                    Object result = chain.proceed();
+                    try {
+                        bindPost(chain, bind, spec, bindArgs);
+                    } catch (Throwable t) {
+                        HookDiagnostics.warnOnce("message.bind.postException",
+                                "message.bind post-processing failed with "
+                                        + t.getClass().getName());
+                    }
+                    return result;
                 }));
         installedHookIds.add("message.bind");
     }
@@ -126,10 +135,46 @@ public final class MessageHooks {
         }
     }
 
-    /** Map a loaded reply's body to its original message ID before its content is converted. */
+    /** Loaded reply data captured from the exact MessageView.f model. */
+    private static final class ReferencedContent {
+        final String messageId;
+        final Object systemContent;
+        final Object messageContent;
+
+        ReferencedContent(String messageId, Object systemContent, Object messageContent) {
+            this.messageId = messageId;
+            this.systemContent = systemContent;
+            this.messageContent = messageContent;
+        }
+
+        Object previewContent() {
+            // Matches af/i: systemContent is rendered when present; otherwise Message.getContent().
+            return systemContent != null ? systemContent : messageContent;
+        }
+    }
+
+    /** Establish content identity mappings before MessageView.f invokes Discord's converter. */
     private static void rememberReferencedContent(Object model, @Nullable JSONObject spec) {
-        if (spec == null) {
+        ReferencedContent referenced = readReferencedContent(model, spec);
+        if (referenced == null) {
             return;
+        }
+        boolean validMessageId = HookBridge.looksLikeSnowflake(referenced.messageId);
+        if (validMessageId) {
+            HookBridge.get().rememberContent(referenced.messageId, referenced.systemContent);
+            HookBridge.get().rememberContent(referenced.messageId, referenced.messageContent);
+        }
+        HookDiagnostics.infoOnce("message.bind.replyMapping." + validMessageId + "."
+                        + (referenced.systemContent != null) + "." + (referenced.messageContent != null),
+                "message.bind referenced preview identity idValid=" + validMessageId
+                        + " systemContentPresent=" + (referenced.systemContent != null)
+                        + " messageContentPresent=" + (referenced.messageContent != null));
+    }
+
+    @Nullable
+    private static ReferencedContent readReferencedContent(Object model, @Nullable JSONObject spec) {
+        if (spec == null) {
+            return null;
         }
         String referencedAccessor = spec.optString("accessor", null);
         String referencedClass = spec.optString("loadedClass", null);
@@ -139,35 +184,79 @@ public final class MessageHooks {
         String messageContentGetter = spec.optString("messageContentGetter", null);
         if (referencedAccessor == null || referencedClass == null || messageField == null
                 || idGetter == null || contentField == null || messageContentGetter == null) {
-            return;
+            return null;
         }
         Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(),
                 referencedAccessor, 0), model);
         if (!Reflect.isInstanceOfName(referenced, referencedClass)) {
-            return;
+            return null;
         }
         Object message = Reflect.getField(referenced, messageField);
         if (message == null) {
-            return;
+            return null;
         }
         String messageId = Reflect.callString(message, idGetter);
         Object systemContent = Reflect.getField(referenced, contentField);
         Object messageContent = Reflect.call(Reflect.findMethodExact(message.getClass(),
                 messageContentGetter, 0), message);
-        boolean validMessageId = messageId != null && HookBridge.looksLikeSnowflake(messageId);
-        boolean systemContentMapped = validMessageId && systemContent != null;
-        boolean messageContentMapped = validMessageId && messageContent != null;
-        if (systemContentMapped) {
-            HookBridge.get().rememberContent(messageId, systemContent);
+        return messageId == null ? null
+                : new ReferencedContent(messageId, systemContent, messageContent);
+    }
+
+    /** After Discord has bound the preview, register it on the shared translation/render path. */
+    private static void bindPost(XposedInterface.Chain chain, Method bind, JSONObject spec,
+                                 Object[] bindArgs) {
+        int modelArgument = spec.optInt("modelArgument", -1);
+        if (modelArgument < 0 || modelArgument >= chain.getArgs().size()) {
+            return;
         }
-        if (messageContentMapped) {
-            HookBridge.get().rememberContent(messageId, messageContent);
+        Object model = chain.getArg(modelArgument);
+        View row = asView(chain.getThisObject());
+        if (model == null || row == null) {
+            return;
         }
-        HookDiagnostics.infoOnce("message.bind.replyMapping." + validMessageId + "."
-                        + (systemContent != null) + "." + (messageContent != null),
-                "message.bind referenced preview identity idValid=" + validMessageId
-                        + " systemContentPresent=" + (systemContent != null)
-                        + " messageContentPresent=" + (messageContent != null));
+        View previewText = replyPreviewTextView(row, spec);
+        if (previewText == null) {
+            return;
+        }
+
+        // RecyclerView may reuse this preview for another referenced message.
+        RerenderRegistry.unregister(previewText);
+        ReferencedContent referenced = readReferencedContent(model,
+                spec.optJSONObject("referencedMessage"));
+        Object previewContent = referenced == null ? null : referenced.previewContent();
+        if (referenced != null && previewContent != null
+                && HookBridge.looksLikeSnowflake(referenced.messageId)) {
+            HookBridge.get().rememberContent(referenced.messageId, previewContent);
+            HookBridge.get().bindView(previewText, referenced.messageId);
+            RerenderRegistry.register(referenced.messageId, previewText, row,
+                    bind, bindArgs);
+            // Reuse the one message state/cache/request pipeline; no converter-side request.
+            HookBridge.get().onMessageBound(previewText, referenced.messageId, previewContent);
+            HookDiagnostics.infoOnce("message.bind.replyTarget.registered",
+                    "message.bind reply preview target registered on shared pipeline");
+            return;
+        }
+
+        String parentId = Reflect.callString(model, spec.optString("messageIdGetter", null));
+        if (parentId != null && HookBridge.looksLikeSnowflake(parentId)) {
+            HookBridge.get().bindView(previewText, parentId);
+        } else {
+            HookBridge.get().unbindView(previewText);
+        }
+    }
+
+    @Nullable
+    private static View replyPreviewTextView(View row, JSONObject spec) {
+        String previewField = spec.optString("replyPreviewField", null);
+        String bindingField = spec.optString("replyPreviewBindingField", null);
+        String textViewField = spec.optString("replyPreviewTextField", null);
+        if (previewField == null || bindingField == null || textViewField == null) {
+            return null;
+        }
+        Object preview = Reflect.getField(row, previewField);
+        Object binding = Reflect.getField(preview, bindingField);
+        return asView(Reflect.getField(binding, textViewField));
     }
 
     // -------------------------------------------------- Hook 2: 正文渲染入口
