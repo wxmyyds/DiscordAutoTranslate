@@ -199,10 +199,27 @@ public final class MessageHooks {
                         + " messageContentPresent=" + (referenced.messageContent != null));
     }
 
+    private static final class ReferencedContentRead {
+        final ReferencedContent content;
+        final String outcome;
+        final String referenceClass;
+
+        ReferencedContentRead(ReferencedContent content, String outcome, String referenceClass) {
+            this.content = content;
+            this.outcome = outcome;
+            this.referenceClass = referenceClass;
+        }
+    }
+
     @Nullable
     private static ReferencedContent readReferencedContent(Object model, @Nullable JSONObject spec) {
+        return inspectReferencedContent(model, spec).content;
+    }
+
+    private static ReferencedContentRead inspectReferencedContent(Object model,
+                                                                  @Nullable JSONObject spec) {
         if (spec == null) {
-            return null;
+            return new ReferencedContentRead(null, "profile-unavailable", "none");
         }
         String referencedAccessor = spec.optString("accessor", null);
         String referencedClass = spec.optString("loadedClass", null);
@@ -212,23 +229,42 @@ public final class MessageHooks {
         String messageContentGetter = spec.optString("messageContentGetter", null);
         if (referencedAccessor == null || referencedClass == null || messageField == null
                 || idGetter == null || contentField == null || messageContentGetter == null) {
-            return null;
+            return new ReferencedContentRead(null, "profile-incomplete", "none");
         }
-        Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(),
-                referencedAccessor, 0), model);
+        Method accessorMethod = Reflect.findMethodExact(model.getClass(), referencedAccessor, 0);
+        if (accessorMethod == null) {
+            return new ReferencedContentRead(null, "accessor-not-found", "none");
+        }
+        Object referenced;
+        try {
+            referenced = accessorMethod.invoke(model);
+        } catch (Throwable t) {
+            Throwable cause = t.getCause() == null ? t : t.getCause();
+            return new ReferencedContentRead(null,
+                    "accessor-error-" + cause.getClass().getSimpleName(), "none");
+        }
+        if (referenced == null) {
+            return new ReferencedContentRead(null, "reference-null", "none");
+        }
+        String actualReferenceClass = referenced.getClass().getName();
         if (!Reflect.isInstanceOfName(referenced, referencedClass)) {
-            return null;
+            return new ReferencedContentRead(null, "reference-type-unmapped", actualReferenceClass);
         }
         Object message = Reflect.getField(referenced, messageField);
         if (message == null) {
-            return null;
+            return new ReferencedContentRead(null, "referenced-message-null", actualReferenceClass);
         }
         String messageId = Reflect.callString(message, idGetter);
+        if (messageId == null) {
+            return new ReferencedContentRead(null, "message-id-unavailable", actualReferenceClass);
+        }
         Object systemContent = Reflect.getField(referenced, contentField);
         Object messageContent = Reflect.call(Reflect.findMethodExact(message.getClass(),
                 messageContentGetter, 0), message);
-        return messageId == null ? null
-                : new ReferencedContent(messageId, systemContent, messageContent);
+        ReferencedContent content = new ReferencedContent(messageId, systemContent, messageContent);
+        return new ReferencedContentRead(content,
+                HookBridge.looksLikeSnowflake(messageId) ? "loaded" : "message-id-invalid",
+                actualReferenceClass);
     }
 
     /** After Discord has bound the preview, register it on the shared translation/render path. */
@@ -252,15 +288,27 @@ public final class MessageHooks {
         if (bindArgs == null) {
             bindArgs = chain.getArgs().toArray();
         }
-        ReferencedContent replySource = readReferencedContent(model,
+        ReferencedContentRead referenceRead = inspectReferencedContent(model,
                 spec.optJSONObject("referencedMessage"));
-        HookDiagnostics.info("replyPreview.bind trace=" + replyTrace
-                + " sourceClass=" + (replySource == null ? "unavailable"
-                : replySource.systemContent != null ? "system-structured"
-                : replySource.messageContent != null ? "message-structured" : "missing")
-                + " textViewPresent=" + (previewText instanceof TextView)
-                + " textLength=" + (previewText instanceof TextView
-                ? textLength((TextView) previewText) : -1));
+        ReferencedContent replySource = referenceRead.content;
+        Object previewObject = Reflect.getField(row, spec.optString("replyPreviewField", null));
+        View previewContainer = asView(previewObject);
+        boolean previewActive = previewContainer != null
+                && previewContainer.getVisibility() == View.VISIBLE;
+        boolean referencePresent = !"reference-null".equals(referenceRead.outcome);
+        if (previewActive || referencePresent) {
+            HookDiagnostics.info("replyPreview.bind trace=" + replyTrace
+                    + " referenceState=" + referenceRead.outcome
+                    + " referenceClass=" + referenceRead.referenceClass
+                    + " sourceClass=" + (replySource == null ? "unavailable"
+                    : replySource.systemContent != null ? "system-structured"
+                    : replySource.messageContent != null ? "message-structured" : "missing")
+                    + " previewVisibility=" + visibilityName(previewContainer)
+                    + " textVisibility=" + visibilityName(previewText)
+                    + " textShown=" + previewText.isShown()
+                    + " textLength=" + (previewText instanceof TextView
+                    ? textLength((TextView) previewText) : -1));
+        }
         // SystemReferencedMessage(c8.i) carries plain String content and Discord draws
         // it directly, bypassing kl.b.B0. Route that source through the same state engine.
         if (bindSystemReferencedPreview(model, row, previewText, bind, bindArgs, spec,
@@ -270,8 +318,7 @@ public final class MessageHooks {
 
         // RecyclerView may reuse this preview for another referenced message.
         RerenderRegistry.unregister(previewText);
-        ReferencedContent referenced = readReferencedContent(model,
-                spec.optJSONObject("referencedMessage"));
+        ReferencedContent referenced = replySource;
         if (referenced != null && HookBridge.looksLikeSnowflake(referenced.messageId)) {
             // The preview belongs to the referenced message even when Discord has not
             // supplied its text yet. Never bind it to the containing/replying message.
@@ -300,6 +347,13 @@ public final class MessageHooks {
             return;
         }
 
+        if (previewActive || referencePresent) {
+            HookDiagnostics.info("replyPreview.route trace=" + replyTrace
+                    + " outcome=unbound referenceState=" + referenceRead.outcome
+                    + " referenceClass=" + referenceRead.referenceClass
+                    + " previewVisibility=" + visibilityName(previewContainer)
+                    + " textVisibility=" + visibilityName(previewText));
+        }
         // Unknown reference identity is not permission to associate the preview with its parent row.
         HookBridge.get().unbindView(previewText);
     }
@@ -331,8 +385,12 @@ public final class MessageHooks {
         Object wrapped = rawText == null ? null : StructurableTextFactory.primitive(rawText);
         if (stateKey == null || wrapped == null || !(previewText instanceof TextView)) {
             HookBridge.get().unbindView(previewText);
-            HookDiagnostics.infoOnce("message.bind.systemReplyPreview.unavailable",
-                    "system reply preview source or render target unavailable");
+            HookDiagnostics.info("replyPreview.source trace=" + replyTrace
+                    + " source=system-plain outcome=unavailable"
+                    + " rawTextPresent=" + (rawText != null)
+                    + " rawTextLength=" + (rawText == null ? 0 : rawText.length())
+                    + " rowMessageIdValid=" + HookBridge.looksLikeSnowflake(rowId)
+                    + " textViewPresent=" + (previewText instanceof TextView));
             return true;
         }
 
@@ -490,6 +548,22 @@ public final class MessageHooks {
             HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
                     + " invocation=posted textWidth=" + textView.getWidth());
             textView.post(refresh);
+        }
+    }
+
+    private static String visibilityName(@Nullable View view) {
+        if (view == null) {
+            return "missing";
+        }
+        switch (view.getVisibility()) {
+            case View.VISIBLE:
+                return "visible";
+            case View.INVISIBLE:
+                return "invisible";
+            case View.GONE:
+                return "gone";
+            default:
+                return "unknown";
         }
     }
 
