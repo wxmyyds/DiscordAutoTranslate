@@ -245,24 +245,25 @@ public final class HookBridge {
         return stateKey(rowMessageId, contentHashOf(rawText, config));
     }
 
+    /**
+     * Read only the referenced message's canonical state. A preview is a projection,
+     * not a second message body: its displayed string must never be used as a cache
+     * key or to create/reset state. When the model supplies the complete body, reject
+     * a stale state after an edit using the normal body/configuration hash.
+     */
     @Nullable
-    public String cachedTranslationForText(@Nullable String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return null;
-        }
-        return TranslationCache.get().get(contentHashOf(text, config));
-    }
-
-    /** Find an existing canonical translation for exactly the same referenced text. */
-    @Nullable
-    public StateStore.Entry existingMessageStateForText(String messageId, String text) {
-        if (messageId == null || text == null) {
+    public StateStore.Entry existingReferencedMessageState(String messageId,
+                                                           @Nullable Object messageContent) {
+        if (messageId == null) {
             return null;
         }
         StateStore.Entry entry = StateStore.get().peek(messageId);
-        String hash = contentHashOf(text, config);
-        return entry != null && (hash.equals(entry.contentHash)
-                || text.equals(entry.originalText)) ? entry : null;
+        if (entry == null || messageContent == null) {
+            return entry;
+        }
+        TextExtractor.Result source = TextExtractor.extract(messageContent);
+        return source != null && contentHashOf(source, config).equals(entry.contentHash)
+                ? entry : null;
     }
 
     /** 是否为 Embed 状态键。 */
@@ -379,7 +380,8 @@ public final class HookBridge {
      */
     public void requestRerender(@Nullable View contentView, @Nullable String messageId,
                                 @Nullable Object invocationTarget, @Nullable Method method,
-                                @Nullable Object[] args) {
+                                @Nullable Object[] args,
+                                java.util.function.BooleanSupplier registrationCurrent) {
         if (method == null || args == null
                 || (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
                 && invocationTarget == null)) {
@@ -394,6 +396,11 @@ public final class HookBridge {
             return;
         }
         Runnable task = () -> {
+            // A new bind replaces/removes the registry Target even when the new row
+            // references the same message. Reject old queued whole-row parameters.
+            if (!registrationCurrent.getAsBoolean()) {
+                return;
+            }
             String currentBound = messageIdOf(contentView);
             if (contentView != null && messageId != null
                     && !RerenderRegistry.stillBound(messageId, currentBound)) {

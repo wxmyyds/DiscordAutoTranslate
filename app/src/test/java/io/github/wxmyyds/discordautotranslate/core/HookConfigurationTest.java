@@ -41,6 +41,45 @@ public class HookConfigurationTest {
         }
     }
 
+    public static final class GetterFixture {
+        public Object getContent() {
+            return "body";
+        }
+
+        public static void getContent$annotations() {
+        }
+    }
+
+    public static final class MetadataOnlyFixture {
+        public static void getContent$annotations() {
+        }
+    }
+
+    public static final class SuffixedGetterFixture {
+        public String getContentMetadata() {
+            return "not-the-body";
+        }
+    }
+
+    @Test
+    public void exactGetterCannotSelectKotlinAnnotationsMethod() {
+        Method getter = Reflect.findMethodExact(GetterFixture.class, "getContent", 0);
+        assertNotNull(getter);
+        assertEquals("getContent", getter.getName());
+        assertEquals("body", Reflect.call(getter, new GetterFixture()));
+        assertNull(Reflect.findMethodExact(MetadataOnlyFixture.class, "getContent", 0));
+        assertNull(Reflect.findMethodExact(GetterFixture.class, "get", 0));
+    }
+
+    @Test
+    public void stringGetterRequiresTheCompleteConfiguredName() throws Exception {
+        String json = "{\"schemaVersion\":1,\"versionCode\":352017,\"hooks\":{},"
+                + "\"types\":{\"Message\":\"" + SuffixedGetterFixture.class.getName()
+                + "\"},\"accessors\":{\"Message\":{\"getContent\":\"getContent\"}}}";
+        HookConfiguration.activate(HookConfiguration.parse(json, 352017));
+        assertNull(Reflect.callString(new SuffixedGetterFixture(), "getContent"));
+    }
+
     @After
     public void clearActiveProfile() {
         HookConfiguration.activate(null);

@@ -11,8 +11,8 @@ import java.lang.reflect.Method;
  * <p>本模块不编译期依赖 Discord 类（那些类在目标 APK 内且名称会被混淆），
  * 所有访问都通过反射完成，并做防御性判断。</p>
  *
- * <p>重要：Discord 340.13 中部分 Kotlin 值类方法带有名称修饰后缀，
- * 例如 {@code Message.getId-3Eiw7ao()}。因此按“前缀匹配”而不是精确名称查找。</p>
+ * <p>所有宿主成员名称由活动版本配置提供并精确匹配，包括 Kotlin 值类后缀。
+ * 不使用前缀匹配，避免将 getContent$annotations 等元数据方法误当作 getter。</p>
  */
 public final class Reflect {
 
@@ -33,7 +33,7 @@ public final class Reflect {
     }
 
     /**
-     * Find a method by a name/prefix mapped through the active profile.
+     * Find a method by its exact name mapped through the active profile.
      *
      * @param requiredFirstParams types that must be assignable for the leading parameters
      */
@@ -47,19 +47,19 @@ public final class Reflect {
         return findMethodExact(c, configuredPrefix, paramCount, requiredFirstParams);
     }
 
-    /** Find a method by an exact name/prefix supplied explicitly by profile data. */
+    /** Find a method by an exact name supplied explicitly by profile data. */
     @Nullable
-    public static Method findMethodExact(Class<?> c, @Nullable String namePrefix, int paramCount,
+    public static Method findMethodExact(Class<?> c, @Nullable String name, int paramCount,
                                          Class<?>... requiredFirstParams) {
-        if (c == null || namePrefix == null || namePrefix.isEmpty()) {
+        if (c == null || name == null || name.isEmpty()) {
             return null;
         }
         for (Method m : c.getDeclaredMethods()) {
-            if (!m.getName().startsWith(namePrefix)) {
+            if (!m.getName().equals(name)) {
                 continue;
             }
             Class<?>[] ps = m.getParameterTypes();
-            if (ps.length != paramCount) {
+            if (ps.length != paramCount || requiredFirstParams.length > ps.length) {
                 continue;
             }
             boolean ok = true;
@@ -78,7 +78,7 @@ public final class Reflect {
         return null;
     }
 
-    /** Find a no-argument String getter by its profile-selected name/prefix. */
+    /** Find a no-argument String getter by its profile-selected exact name. */
     @Nullable
     public static Method findStringGetter(Class<?> c, String namePrefix) {
         String configuredPrefix = accessorName(c, namePrefix);
@@ -93,7 +93,7 @@ public final class Reflect {
         }
         for (Method m : c.getDeclaredMethods()) {
             if (m.getParameterTypes().length == 0
-                    && m.getName().startsWith(namePrefix)
+                    && m.getName().equals(namePrefix)
                     && m.getReturnType() == String.class) {
                 m.setAccessible(true);
                 return m;

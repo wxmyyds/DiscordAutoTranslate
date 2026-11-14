@@ -1,8 +1,9 @@
 package io.github.wxmyyds.discordautotranslate.hooks;
 
-import android.text.SpannableStringBuilder;
+import android.text.Layout;
+import android.text.Spanned;
+import android.text.style.LeadingMarginSpan;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.widget.TextView;
 
@@ -11,7 +12,6 @@ import androidx.annotation.Nullable;
 import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 import io.github.wxmyyds.discordautotranslate.core.StateStore;
-import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
 
 import org.json.JSONObject;
 
@@ -27,7 +27,7 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 /**
- * 根据活动版本配置安装消息绑定、正文渲染、文本转换和可选回复引用 Hook。
+ * 根据活动版本配置安装消息绑定、正文渲染和文本转换 Hook。
  * 类名、方法签名及参数位置只保存在 {@code hook-config/<versionCode>.json}；
  * 本类负责稳定的翻译与重渲染行为，并返回句柄供热重载清理。
  */
@@ -36,22 +36,6 @@ public final class MessageHooks {
     private static final AtomicLong REPLY_PREVIEW_TRACE_SEQUENCE = new AtomicLong();
     private static final Map<View, Long> REPLY_PREVIEW_TRACE_IDS =
             java.util.Collections.synchronizedMap(new WeakHashMap<>());
-
-    /** Raw visible reply text retained across Discord's bind-driven rerenders. */
-    private static final Map<View, ReplyPreviewSnapshot> REPLY_PREVIEW_SNAPSHOTS =
-            java.util.Collections.synchronizedMap(new WeakHashMap<>());
-
-    private static final class ReplyPreviewSnapshot {
-        final String referencedMessageId;
-        final String stateKey;
-        final String originalText;
-
-        ReplyPreviewSnapshot(String referencedMessageId, String stateKey, String originalText) {
-            this.referencedMessageId = referencedMessageId;
-            this.stateKey = stateKey;
-            this.originalText = originalText;
-        }
-    }
 
     private MessageHooks() {
     }
@@ -173,11 +157,6 @@ public final class MessageHooks {
             this.messageId = messageId;
             this.systemContent = systemContent;
             this.messageContent = messageContent;
-        }
-
-        Object previewContent() {
-            // Matches af/i: systemContent is rendered when present; otherwise Message.getContent().
-            return systemContent != null ? systemContent : messageContent;
         }
     }
 
@@ -309,327 +288,87 @@ public final class MessageHooks {
                     + " textLength=" + (previewText instanceof TextView
                     ? textLength((TextView) previewText) : -1));
         }
-        // SystemReferencedMessage(c8.i) carries plain String content and Discord draws
-        // it directly, bypassing kl.b.B0. Route that source through the same state engine.
-        if (bindSystemReferencedPreview(model, row, previewText, bind, bindArgs, spec,
-                replyTrace)) {
+        // The preview is rendered by af.i through the same text converter as the body.
+        // Only subscribe to the canonical message here. Never overwrite Discord's
+        // Drawee builder: it contains the first-line margin reserved for the username.
+        RerenderRegistry.unregister(previewText);
+        if (!previewActive || replySource == null
+                || !HookBridge.looksLikeSnowflake(replySource.messageId)) {
+            HookBridge.get().unbindView(previewText);
             return;
         }
-
-        // RecyclerView may reuse this preview for another referenced message.
-        RerenderRegistry.unregister(previewText);
-        ReferencedContent referenced = replySource;
-        if (referenced != null && HookBridge.looksLikeSnowflake(referenced.messageId)) {
-            // The preview belongs to the referenced message even when Discord has not
-            // supplied its text yet. Never bind it to the containing/replying message.
-            Object previewContent = referenced.previewContent();
-            if (previewContent != null) {
-                String previewSourceText = extractedText(previewContent);
-                String status = registerReplyPreviewConsumer(previewText, row, bind, bindArgs,
-                        referenced.messageId, previewSourceText, replyTrace, spec,
-                        "model-structured");
-                HookDiagnostics.info("replyPreview.source trace=" + replyTrace
-                        + " source=model-structured state=" + status + " requestSubmitted=false");
-                HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithContent",
-                        "message.bind reply preview target registered; content available");
-            } else if (!captureRenderedReplyPreview(previewText, row, bind, bindArgs,
-                    referenced.messageId, spec, replyTrace)) {
-                String status = registerReplyPreviewConsumer(previewText, row, bind, bindArgs,
-                        referenced.messageId, null, replyTrace, spec, "awaiting-source");
-                HookDiagnostics.info("replyPreview.source trace=" + replyTrace
-                        + " outcome=waiting-canonical-bind state=" + status
-                        + " requestSubmitted=false");
-                HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithoutText",
-                        "message.bind reply preview target registered; no source text available");
-            }
-            return;
-        }
-
-        if (previewActive || referencePresent) {
-            HookDiagnostics.info("replyPreview.route trace=" + replyTrace
-                    + " outcome=unbound referenceState=" + referenceRead.outcome
-                    + " referenceClass=" + referenceRead.referenceClass
-                    + " previewVisibility=" + visibilityName(previewContainer)
-                    + " textVisibility=" + visibilityName(previewText));
-        }
-        // Unknown reference identity is not permission to associate the preview with its parent row.
-        HookBridge.get().unbindView(previewText);
-    }
-
-    /** Handle the c8.i SystemReferencedMessage(String) branch that bypasses kl.b.B0. */
-    private static boolean bindSystemReferencedPreview(Object model, View row, View previewText,
-                                                       Method bind, Object[] bindArgs,
-                                                       JSONObject spec, long replyTrace) {
-        JSONObject systemSpec = spec.optJSONObject("systemReferencedMessage");
-        JSONObject referenceSpec = spec.optJSONObject("referencedMessage");
-        String accessor = referenceSpec == null ? null : referenceSpec.optString("accessor", null);
-        String systemClass = systemSpec == null ? null : systemSpec.optString("class", null);
-        String contentField = systemSpec == null ? null : systemSpec.optString("contentField", null);
-        if (accessor == null || systemClass == null || contentField == null) {
-            return false;
-        }
-        Object referenced = Reflect.call(Reflect.findMethodExact(model.getClass(), accessor, 0), model);
-        if (!Reflect.isInstanceOfName(referenced, systemClass)) {
-            return false;
-        }
-
-        RerenderRegistry.unregister(previewText);
-        REPLY_PREVIEW_SNAPSHOTS.remove(previewText);
-        Object rawValue = Reflect.getField(referenced, contentField);
-        String rawText = rawValue instanceof String ? (String) rawValue : null;
-        HookBridge.get().unbindView(previewText);
-        HookDiagnostics.info("replyPreview.source trace=" + replyTrace
-                + " source=system-plain outcome=no-canonical-referenced-message"
-                + " rawTextPresent=" + (rawText != null)
-                + " rawTextLength=" + (rawText == null ? 0 : rawText.length())
-                + " requestSubmitted=false");
-        return true;
-    }
-
-    /** Use Discord's bound TextView as the authoritative visible source when the model omits it. */
-    private static boolean captureRenderedReplyPreview(View preview, View row, Method bind,
-                                                       Object[] bindArgs, String referencedId,
-                                                       JSONObject spec, long replyTrace) {
-        if (!(preview instanceof TextView)) {
-            return false;
-        }
-        TextView textView = (TextView) preview;
-        CharSequence displayed = textView.getText();
-        String visibleText = displayed == null ? null : displayed.toString();
-        ReplyPreviewSnapshot previous = REPLY_PREVIEW_SNAPSHOTS.get(preview);
-        if (previous != null && !previous.referencedMessageId.equals(referencedId)) {
-            previous = null;
-            REPLY_PREVIEW_SNAPSHOTS.remove(preview);
-        }
-        if (previous != null) {
-            StateStore.Entry previousEntry = StateStore.get().peek(previous.stateKey);
-            boolean isOurTranslation = previousEntry != null
-                    && previousEntry.originalText != null
-                    && previousEntry.originalText.equals(previous.originalText)
-                    && previousEntry.translatedText != null
-                    && previousEntry.translatedText.equals(visibleText);
-            if (isOurTranslation || visibleText == null || visibleText.trim().isEmpty()) {
-                visibleText = previous.originalText;
-            }
-        }
-        if (visibleText == null || visibleText.trim().isEmpty()) {
-            HookDiagnostics.info("replyPreview.capture trace=" + replyTrace
-                    + " outcome=empty textViewPresent=true textLength=0");
-            return false;
-        }
-
-        String status = registerReplyPreviewConsumer(preview, row, bind, bindArgs,
-                referencedId, visibleText, replyTrace, spec, "visible-text");
-        HookDiagnostics.info("replyPreview.capture trace=" + replyTrace
-                + " outcome=visible-text textLength=" + visibleText.length()
-                + " lineCount=" + textView.getLineCount()
-                + " state=" + status + " requestSubmitted=false");
-        return true;
-    }
-
-    private static String registerReplyPreviewConsumer(View preview, View row, Method bind,
-                                                       Object[] bindArgs, String referencedId,
-                                                       @Nullable String originalText, long replyTrace,
-                                                       JSONObject spec, String source) {
         HookBridge bridge = HookBridge.get();
-        RerenderRegistry.unregister(preview);
-        bridge.bindView(preview, referencedId);
-        RerenderRegistry.register(referencedId, preview, row, bind, bindArgs);
-        if (originalText == null) {
-            REPLY_PREVIEW_SNAPSHOTS.remove(preview);
-        } else {
-            REPLY_PREVIEW_SNAPSHOTS.put(preview,
-                    new ReplyPreviewSnapshot(referencedId, referencedId, originalText));
-        }
-
-        StateStore.Entry entry = originalText == null
-                ? null : bridge.existingMessageStateForText(referencedId, originalText);
-        String cachedTranslation = originalText == null
-                ? null : bridge.cachedTranslationForText(originalText);
-        String status = entry == null
-                ? cachedTranslation == null ? "missing-or-different-source" : "cached"
-                : entry.status.name();
+        bridge.bindView(previewText, replySource.messageId);
+        RerenderRegistry.register(replySource.messageId, previewText, row, bind, bindArgs);
+        StateStore.Entry entry = bridge.existingReferencedMessageState(
+                replySource.messageId, replySource.messageContent);
         if (entry != null && entry.status == StateStore.Status.TRANSLATING) {
-            bridge.trackReplyPreviewState(referencedId, replyTrace);
-        } else {
-            bridge.clearReplyPreviewState(referencedId, replyTrace);
+            bridge.trackReplyPreviewState(replySource.messageId, replyTrace);
         }
         HookDiagnostics.info("replyPreview.consumer trace=" + replyTrace
-                + " source=" + source
-                + " state=" + status
-                + " sourceTextMatches=" + (entry != null)
-                + " requestSubmitted=false");
-        if (preview instanceof TextView) {
-            applyReplyPreviewTranslation((TextView) preview, referencedId, originalText,
-                    cachedTranslation, row, spec);
+                + " state=" + (entry == null ? "missing-or-stale" : entry.status.name())
+                + " route=native-converter requestSubmitted=false");
+        if (previewText instanceof TextView) {
+            observeReplyPreviewLayout((TextView) previewText, row, spec, replyTrace);
         }
-        return status;
     }
 
-    @Nullable
-    private static String extractedText(@Nullable Object content) {
-        TextExtractor.Result extracted = TextExtractor.extract(content);
-        return extracted == null || extracted.text.trim().isEmpty() ? null : extracted.text;
-    }
-
-    private static int textLength(TextView view) {
-        CharSequence text = view.getText();
-        return text == null ? 0 : text.length();
-    }
-
-    /** Apply the cited message's existing translation, never starting a request here. */
-    private static void applyReplyPreviewTranslation(TextView view, String stateKey,
-                                                     @Nullable String sourceText,
-                                                     @Nullable String cachedTranslation,
-                                                     View row, JSONObject spec) {
-        StateStore.Entry entry = StateStore.get().peek(stateKey);
-        boolean sameSource = entry != null && sourceText != null
-                && sourceText.equals(entry.originalText);
-        String translated = null;
-        if (sameSource && entry.status == StateStore.Status.TRANSLATED
-                && !entry.showingOriginal) {
-            translated = entry.translatedText;
-        } else if (!sameSource) {
-            translated = cachedTranslation;
-        }
-        if (translated == null || translated.isEmpty()) {
-            HookDiagnostics.info("replyPreview.apply trace="
-                    + replyTraceFor(view) + " outcome=translation-unavailable"
-                    + " state=" + (entry == null ? "missing" : entry.status.name())
-                    + " sourceMatches=" + sameSource
-                    + " cachedTranslationPresent=" + (cachedTranslation != null));
+    /** Observe native layout without changing its text, spans or measurement. */
+    private static void observeReplyPreviewLayout(TextView textView, View row,
+                                                  JSONObject spec, long replyTrace) {
+        ViewTreeObserver observer = textView.getViewTreeObserver();
+        if (!observer.isAlive()) {
             return;
         }
-        SpannableStringBuilder styled = new SpannableStringBuilder(translated);
-        view.setText(styled, TextView.BufferType.SPANNABLE);
-        refreshReplyPreviewLayout(view, row, spec);
-        HookDiagnostics.info("replyPreview.apply trace=" + replyTraceFor(view)
-                + " outcome=translation-applied textLength=" + styled.length());
-    }
-
-    private static long replyTraceFor(View view) {
-        Long trace = REPLY_PREVIEW_TRACE_IDS.get(view);
-        return trace == null ? 0L : trace;
-    }
-
-    /** Re-run Discord's reply-preview measurement after its text height changes. */
-    private static void refreshReplyPreviewLayout(TextView textView, View row, JSONObject spec) {
-        Long traceId = REPLY_PREVIEW_TRACE_IDS.get(textView);
-        long replyTrace = traceId == null ? 0L : traceId;
-        String previewField = spec.optString("replyPreviewField", null);
-        String layoutMethodName = spec.optString("replyPreviewLayoutMethod", null);
-        Object preview = previewField == null ? null : Reflect.getField(row, previewField);
-        if (!(preview instanceof View) || layoutMethodName == null) {
-            HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
-                    + " skipped=preview-or-method-unavailable"
-                    + " previewPresent=" + (preview instanceof View)
-                    + " methodConfigured=" + (layoutMethodName != null));
-            return;
-        }
-        View previewView = (View) preview;
-        Runnable refresh = () -> {
-            Method layoutMethod = Reflect.findMethodExact(previewView.getClass(), layoutMethodName, 0);
-            boolean invocationSucceeded = false;
-            String invocationError = "none";
-            if (layoutMethod == null) {
-                invocationError = "method-not-found";
-            } else {
-                try {
-                    layoutMethod.invoke(previewView);
-                    invocationSucceeded = true;
-                } catch (Throwable t) {
-                    Throwable cause = t.getCause() == null ? t : t.getCause();
-                    invocationError = cause.getClass().getSimpleName();
+        observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                ViewTreeObserver current = textView.getViewTreeObserver();
+                if (current.isAlive()) {
+                    current.removeOnPreDrawListener(this);
                 }
-            }
-            View leadingViews = replyLeadingViews(row, spec);
-            View username = replyUsernameView(row, spec);
-            HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
-                    + " methodFound=" + (layoutMethod != null)
-                    + " invocationSucceeded=" + invocationSucceeded
-                    + " errorClass=" + invocationError
-                    + " textWidth=" + textView.getWidth()
-                    + " textLines=" + textView.getLineCount()
-                    + " textHeight=" + textView.getHeight()
-                    + " textLeft=" + textView.getLeft()
-                    + " textTop=" + textView.getTop()
-                    + " textRight=" + textView.getRight()
-                    + " textBottom=" + textView.getBottom()
-                    + " usernameLeft=" + (username == null ? -1 : username.getLeft())
-                    + " usernameTop=" + (username == null ? -1 : username.getTop())
-                    + " usernameRight=" + (username == null ? -1 : username.getRight())
-                    + " usernameBottom=" + (username == null ? -1 : username.getBottom())
-                    + " usernameVisibility=" + visibilityName(username)
-                    + " previewWidth=" + previewView.getWidth()
-                    + " previewHeight=" + previewView.getHeight()
-                    + " leadingWidth=" + (leadingViews == null ? -1 : leadingViews.getWidth())
-                    + " leadingHeight=" + (leadingViews == null ? -1 : leadingViews.getHeight())
-                    + " leadingRight=" + (leadingViews == null ? -1 : leadingViews.getRight())
-                    + " leadingHeightParam=" + layoutHeightParam(leadingViews));
-            textView.requestLayout();
-            previewView.requestLayout();
-            row.requestLayout();
-            row.invalidate();
-            ViewTreeObserver observer = previewView.getViewTreeObserver();
-            if (observer.isAlive()) {
-                ViewTreeObserver.OnPreDrawListener[] holder =
-                        new ViewTreeObserver.OnPreDrawListener[1];
-                holder[0] = () -> {
-                    ViewTreeObserver current = previewView.getViewTreeObserver();
-                    if (current.isAlive()) {
-                        current.removeOnPreDrawListener(holder[0]);
-                    }
-                    logReplyPreviewPostLayout(replyTrace, textView, username,
-                            previewView, leadingViews);
+                Long currentTrace = REPLY_PREVIEW_TRACE_IDS.get(textView);
+                if (currentTrace == null || currentTrace != replyTrace || !textView.isShown()) {
                     return true;
-                };
-                observer.addOnPreDrawListener(holder[0]);
-            } else {
+                }
+                View username = replyUsernameView(row, spec);
+                View leading = replyLeadingViews(row, spec);
+                CharSequence text = textView.getText();
+                LeadingMarginSpan[] margins = text instanceof Spanned
+                        ? ((Spanned) text).getSpans(0, text.length(), LeadingMarginSpan.class)
+                        : new LeadingMarginSpan[0];
+                int firstMargin = 0;
+                for (LeadingMarginSpan margin : margins) {
+                    firstMargin += margin.getLeadingMargin(true);
+                }
+                Layout layout = textView.getLayout();
+                int[] location = new int[2];
+                int[] nameLocation = new int[2];
+                textView.getLocationOnScreen(location);
+                if (username != null) {
+                    username.getLocationOnScreen(nameLocation);
+                }
                 HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
-                        + " postLayout=observer-unavailable");
+                        + " route=native phase=pre-draw"
+                        + " textLength=" + (text == null ? 0 : text.length())
+                        + " marginSpanCount=" + margins.length
+                        + " firstMargin=" + firstMargin
+                        + " firstLineLeft=" + (layout == null || layout.getLineCount() == 0
+                        ? -1 : layout.getLineLeft(0))
+                        + " firstLineRight=" + (layout == null || layout.getLineCount() == 0
+                        ? -1 : layout.getLineRight(0))
+                        + " textX=" + location[0] + " textY=" + location[1]
+                        + " textPaddingLeft=" + textView.getTotalPaddingLeft()
+                        + " textWidth=" + textView.getWidth()
+                        + " textHeight=" + textView.getHeight()
+                        + " textLines=" + textView.getLineCount()
+                        + " usernameX=" + (username == null ? -1 : nameLocation[0])
+                        + " usernameWidth=" + (username == null ? -1 : username.getWidth())
+                        + " usernameVisibility=" + visibilityName(username)
+                        + " leadingWidth=" + (leading == null ? -1 : leading.getMeasuredWidth()));
+                return true;
             }
-        };
-        if (textView.getWidth() > 0) {
-            refresh.run();
-        } else {
-            HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
-                    + " invocation=posted textWidth=" + textView.getWidth());
-            textView.post(refresh);
-        }
-    }
-
-    private static void logReplyPreviewPostLayout(long replyTrace, TextView textView,
-                                                   @Nullable View username,
-                                                   View previewView,
-                                                   @Nullable View leadingViews) {
-        int[] textLocation = new int[2];
-        int[] usernameLocation = new int[2];
-        textView.getLocationOnScreen(textLocation);
-        if (username != null) {
-            username.getLocationOnScreen(usernameLocation);
-        }
-        boolean rectanglesOverlap = username != null
-                && textLocation[0] < usernameLocation[0] + username.getWidth()
-                && usernameLocation[0] < textLocation[0] + textView.getWidth()
-                && textLocation[1] < usernameLocation[1] + username.getHeight()
-                && usernameLocation[1] < textLocation[1] + textView.getHeight();
-        HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
-                + " phase=post-layout"
-                + " textX=" + textLocation[0] + " textY=" + textLocation[1]
-                + " textWidth=" + textView.getWidth()
-                + " textHeight=" + textView.getHeight()
-                + " textLines=" + textView.getLineCount()
-                + " usernameX=" + (username == null ? -1 : usernameLocation[0])
-                + " usernameY=" + (username == null ? -1 : usernameLocation[1])
-                + " usernameWidth=" + (username == null ? -1 : username.getWidth())
-                + " usernameHeight=" + (username == null ? -1 : username.getHeight())
-                + " usernameVisibility=" + visibilityName(username)
-                + " rectanglesOverlap=" + rectanglesOverlap
-                + " previewWidth=" + previewView.getWidth()
-                + " previewHeight=" + previewView.getHeight()
-                + " leadingWidth=" + (leadingViews == null ? -1 : leadingViews.getWidth())
-                + " leadingHeight=" + (leadingViews == null ? -1 : leadingViews.getHeight())
-                + " leadingHeightParam=" + layoutHeightParam(leadingViews));
+        });
     }
 
     @Nullable
@@ -652,9 +391,9 @@ public final class MessageHooks {
         return asView(usernameField == null ? null : Reflect.getField(binding, usernameField));
     }
 
-    private static int layoutHeightParam(@Nullable View view) {
-        ViewGroup.LayoutParams params = view == null ? null : view.getLayoutParams();
-        return params == null ? -1 : params.height;
+    private static int textLength(TextView view) {
+        CharSequence text = view.getText();
+        return text == null ? 0 : text.length();
     }
 
     private static String visibilityName(@Nullable View view) {
@@ -816,7 +555,8 @@ public final class MessageHooks {
                             // 内容身份映射由显式绑定/渲染入口建立；此处只读取并应用已有状态。
                             HookBridge.get().rememberContent(messageId, source);
 
-                            StateStore.Entry e = StateStore.get().peek(messageId);
+                            StateStore.Entry e = HookBridge.get()
+                                    .existingReferencedMessageState(messageId, source);
                             String translated = (e != null
                                     && e.status == StateStore.Status.TRANSLATED
                                     && !e.showingOriginal) ? e.translatedText : null;

@@ -44,8 +44,8 @@ io.github.wxmyyds.discordautotranslate
 
 | `versionCode` | 必需消息 Hook | 可选 Hook | 正文渲染与转换 |
 |---|---|---|---|
-| `340013` | 消息绑定、正文渲染、文本转换、回复引用 | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
-| `352017` | `MessageView.f` 对引用预览先使用模型正文；模型缺正文时，以 Discord 绑定后的预览 `TextView` 实际可见文本作为输入，按引用消息及内容生成独立状态键，通过唯一翻译链处理。译文写回后调用 `MessageViewReplyPreview.q()` 重算前导视图高度和预览布局，避免多行译文与被引用用户名重叠 | Embed、帖子预览、Poll 仍待核实 | `MessageContentView` 静态方法（View 为显式参数）；`kl.b.B0` 静态转换方法；`c8.i` 系统回复纯文本直绘分支 |
+| `340013` | 消息绑定、正文渲染、文本转换（回复消费者映射未提供） | Embed、帖子预览、Poll | `MessageContentView` 实例方法；`TextUtilsKt.toSpannable` |
+| `352017` | `MessageView.f` 建立引用消息正文身份并登记预览消费者；回复只读取该消息已有状态，不创建状态或请求 | Embed、帖子预览、Poll 仍待核实 | 正文 `MessageContentView.c`；回复 `af.i` 直接调用 `kl.b.B0`，添加首行 `LeadingMarginSpan` 后交给 Drawee，模块不覆盖 `TextView` |
 
 必需 Hook ID 与数量由 profile 声明；安装前逐项解析并检查所有必需目标，安装后逐项确认这些 ID 均已创建 Hook，缺少任一项时回滚已创建的 Hook。
 
@@ -76,6 +76,6 @@ io.github.wxmyyds.discordautotranslate
 
 ## 能力范围（按 profile）
 
-- `340013`：正文（含 Markdown/提及/表情/代码/链接/标题/列表）、回复引用、富 Embed、帖子预览标题与投票卡片。
-- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经同一个 `message.render` / `message.textConversion` 链路读取其翻译状态，不安装独立回复 Hook。回复设备行为仍待实测；Embed、帖子预览和 Poll 待各自目标核实。
+- `340013`：保留原正文、Embed、帖子预览及投票配置；旧独立回复 Hook 已移除，当前 profile 未提供统一回复消费者映射，不声称回复支持。
+- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。回复设备行为仍待实测；Embed、帖子预览和 Poll 待各自目标核实。
 - 两个 profile 都保留失败时的原始节点树；用户可通过图标重试或切换原文/译文。

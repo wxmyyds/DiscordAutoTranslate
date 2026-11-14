@@ -171,11 +171,23 @@ public final class RerenderRegistry {
                     continue;
                 }
                 HookBridge.get().requestRerender(contentView, messageId,
-                        invocationTarget, target.method, target.args);
+                        invocationTarget, target.method, target.args,
+                        () -> isCurrentRegistration(messageId, target));
             }
             if (list.isEmpty()) {
                 TARGETS.remove(messageId, list);
             }
+        }
+    }
+
+    /** A queued callback must not replay parameters from an earlier bind of the same view. */
+    private static boolean isCurrentRegistration(String messageId, Target expected) {
+        List<Target> current = TARGETS.get(messageId);
+        if (current == null) {
+            return false;
+        }
+        synchronized (current) {
+            return current.contains(expected);
         }
     }
 

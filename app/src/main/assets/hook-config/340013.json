@@ -4,8 +4,7 @@
   "requiredHooks": [
     "message.bind",
     "message.render",
-    "message.textConversion",
-    "message.reply"
+    "message.textConversion"
   ],
   "iconClick": {
     "enabled": false,
@@ -54,21 +53,6 @@
       },
       "contentArgument": 0,
       "contextArgument": 1
-    },
-    "message.reply": {
-      "target": {
-        "class": "com.discord.chat.presentation.message.MessageViewReplyPreview",
-        "namePrefix": "configureReply",
-        "static": false,
-        "parameterCount": 3
-      },
-      "referencedMessageArgument": 0,
-      "referencedMessageClass": "com.discord.chat.bridge.referencedmessage.LoadedReferencedMessage",
-      "referencedMessageGetter": "getMessage",
-      "messageIdGetter": "getId",
-      "contentGetter": "getContent",
-      "bindingField": "binding",
-      "textViewField": "replyText"
     },
     "embed.bind": {
       "target": {
