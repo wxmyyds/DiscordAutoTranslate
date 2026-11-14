@@ -17,7 +17,9 @@ import org.json.JSONObject;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -28,6 +30,22 @@ import io.github.libxposed.api.XposedModule;
  * 本类负责稳定的翻译与重渲染行为，并返回句柄供热重载清理。
  */
 public final class MessageHooks {
+
+    /** Raw visible reply text retained across Discord's bind-driven rerenders. */
+    private static final Map<View, ReplyPreviewSnapshot> REPLY_PREVIEW_SNAPSHOTS =
+            java.util.Collections.synchronizedMap(new WeakHashMap<>());
+
+    private static final class ReplyPreviewSnapshot {
+        final String referencedMessageId;
+        final String stateKey;
+        final String originalText;
+
+        ReplyPreviewSnapshot(String referencedMessageId, String stateKey, String originalText) {
+            this.referencedMessageId = referencedMessageId;
+            this.stateKey = stateKey;
+            this.originalText = originalText;
+        }
+    }
 
     private MessageHooks() {
     }
@@ -240,19 +258,24 @@ public final class MessageHooks {
         if (referenced != null && HookBridge.looksLikeSnowflake(referenced.messageId)) {
             // The preview belongs to the referenced message even when Discord has not
             // supplied its text yet. Never bind it to the containing/replying message.
-            HookBridge.get().bindView(previewText, referenced.messageId);
-            RerenderRegistry.register(referenced.messageId, previewText, row,
-                    bind, bindArgs);
             Object previewContent = referenced.previewContent();
             if (previewContent != null) {
+                REPLY_PREVIEW_SNAPSHOTS.remove(previewText);
+                HookBridge.get().bindView(previewText, referenced.messageId);
+                RerenderRegistry.register(referenced.messageId, previewText, row,
+                        bind, bindArgs);
                 HookBridge.get().rememberContent(referenced.messageId, previewContent);
                 // Start/reuse work only through the canonical message state pipeline.
                 HookBridge.get().onMessageBound(previewText, referenced.messageId, previewContent);
                 HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithContent",
                         "message.bind reply preview target registered; content available");
-            } else {
-                HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithoutContent",
-                        "message.bind reply preview target registered; content unavailable, awaiting canonical message bind");
+            } else if (!captureRenderedReplyPreview(previewText, row, bind, bindArgs,
+                    referenced.messageId)) {
+                // Keep its identity, but don't fabricate text or attribute it to the reply author.
+                HookBridge.get().bindView(previewText, referenced.messageId);
+                RerenderRegistry.register(referenced.messageId, previewText, row, bind, bindArgs);
+                HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithoutText",
+                        "message.bind reply preview target registered; no source text available");
             }
             return;
         }
@@ -279,6 +302,7 @@ public final class MessageHooks {
         }
 
         RerenderRegistry.unregister(previewText);
+        REPLY_PREVIEW_SNAPSHOTS.remove(previewText);
         Object rawValue = Reflect.getField(referenced, contentField);
         String rawText = rawValue instanceof String ? (String) rawValue : null;
         String rowId = Reflect.callString(model, spec.optString("messageIdGetter", null));
@@ -296,22 +320,71 @@ public final class MessageHooks {
         RerenderRegistry.register(stateKey, previewText, row, bind, bindArgs);
         HookBridge.get().rememberContent(stateKey, wrapped);
         HookBridge.get().onMessageBound(previewText, stateKey, wrapped);
-        applySystemReferencedTranslation((TextView) previewText, stateKey);
+        applyReplyPreviewTranslation((TextView) previewText, stateKey, true);
         HookDiagnostics.infoOnce("message.bind.systemReplyPreview.registered",
                 "system reply preview uses shared translation state");
         return true;
     }
 
-    /** c8.i is rendered as a styled String rather than through the StructurableText converter. */
-    private static void applySystemReferencedTranslation(TextView view, String stateKey) {
+    /** Use Discord's bound TextView as the authoritative visible source when the model omits it. */
+    private static boolean captureRenderedReplyPreview(View preview, View row, Method bind,
+                                                       Object[] bindArgs, String referencedId) {
+        if (!(preview instanceof TextView)) {
+            return false;
+        }
+        TextView textView = (TextView) preview;
+        CharSequence displayed = textView.getText();
+        String visibleText = displayed == null ? null : displayed.toString();
+        ReplyPreviewSnapshot previous = REPLY_PREVIEW_SNAPSHOTS.get(preview);
+        if (previous != null && !previous.referencedMessageId.equals(referencedId)) {
+            previous = null;
+            REPLY_PREVIEW_SNAPSHOTS.remove(preview);
+        }
+        if (previous != null) {
+            StateStore.Entry previousEntry = StateStore.get().peek(previous.stateKey);
+            boolean isOurTranslation = previousEntry != null
+                    && previousEntry.translatedText != null
+                    && previousEntry.translatedText.equals(visibleText);
+            if (isOurTranslation || visibleText == null || visibleText.trim().isEmpty()) {
+                visibleText = previous.originalText;
+            }
+        }
+        if (visibleText == null || visibleText.trim().isEmpty()) {
+            HookDiagnostics.infoOnce("message.bind.replyVisibleText.absent",
+                    "reply preview model omitted content and bound view has no visible text");
+            return false;
+        }
+
+        Object wrapped = StructurableTextFactory.primitive(visibleText);
+        if (wrapped == null) {
+            return false;
+        }
+        String stateKey = HookBridge.get().embedTextStateKey(referencedId, visibleText);
+        if (stateKey == null) {
+            return false;
+        }
+        REPLY_PREVIEW_SNAPSHOTS.put(preview,
+                new ReplyPreviewSnapshot(referencedId, stateKey, visibleText));
+        HookBridge.get().bindView(preview, stateKey);
+        RerenderRegistry.register(stateKey, preview, row, bind, bindArgs);
+        HookBridge.get().rememberContent(stateKey, wrapped);
+        HookBridge.get().onMessageBound(preview, stateKey, wrapped);
+        applyReplyPreviewTranslation(textView, stateKey, false);
+        HookDiagnostics.infoOnce("message.bind.replyVisibleText.captured",
+                "reply preview translated from bound visible text via shared state pipeline");
+        return true;
+    }
+
+    /** Apply a ready preview translation after Discord finishes its own bind. */
+    private static void applyReplyPreviewTranslation(TextView view, String stateKey,
+                                                     boolean boldSystemText) {
         StateStore.Entry entry = StateStore.get().peek(stateKey);
         if (entry == null || entry.status != StateStore.Status.TRANSLATED
                 || entry.showingOriginal || entry.translatedText == null) {
             return;
         }
         SpannableStringBuilder styled = new SpannableStringBuilder(entry.translatedText);
-        if (styled.length() > 0) {
-            // af/g applies StyleSpan(2) to the entire original system-reference string.
+        if (boldSystemText && styled.length() > 0) {
             styled.setSpan(new StyleSpan(2), 0, styled.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
