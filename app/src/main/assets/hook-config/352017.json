@@ -58,7 +58,8 @@
         "messageField": "a",
         "messageIdGetter": "getId",
         "contentField": "b",
-        "messageContentGetter": "getContent"
+        "messageContentGetter": "getContent",
+        "hasAttachmentsOrEmbedsGetter": "hasAttachmentsOrEmbeds"
       },
       "replyPreviewField": "v",
       "replyPreviewBindingField": "P",

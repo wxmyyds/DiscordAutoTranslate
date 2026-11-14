@@ -77,5 +77,5 @@ io.github.wxmyyds.discordautotranslate
 ## 能力范围（按 profile）
 
 - `340013`：保留原正文、Embed、帖子预览及投票配置；旧独立回复 Hook 已移除，当前 profile 未提供统一回复消费者映射，不声称回复支持。
-- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。回复设备行为仍待实测；Embed、帖子预览和 Poll 待各自目标核实。
+- `352017`：正文翻译与重渲染；回复预览复用引用消息 ID，经 `message.textConversion` 读取其翻译状态（预览不经过正文 `message.render`），不安装独立回复 Hook。普通回复译文复用及用户名避让已由用户设备复测确认；带图片/Embed 的引用预览未跟随翻译仍在排查。独立 Embed、帖子预览和 Poll 待各自目标核实。
 - 两个 profile 都保留失败时的原始节点树；用户可通过图标重试或切换原文/译文。

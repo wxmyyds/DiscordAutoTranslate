@@ -12,6 +12,7 @@ import androidx.annotation.Nullable;
 import io.github.wxmyyds.discordautotranslate.core.HookConfiguration;
 import io.github.wxmyyds.discordautotranslate.core.Reflect;
 import io.github.wxmyyds.discordautotranslate.core.StateStore;
+import io.github.wxmyyds.discordautotranslate.core.TextExtractor;
 
 import org.json.JSONObject;
 
@@ -152,11 +153,14 @@ public final class MessageHooks {
         final String messageId;
         final Object systemContent;
         final Object messageContent;
+        final boolean hasAttachmentsOrEmbeds;
 
-        ReferencedContent(String messageId, Object systemContent, Object messageContent) {
+        ReferencedContent(String messageId, Object systemContent, Object messageContent,
+                          boolean hasAttachmentsOrEmbeds) {
             this.messageId = messageId;
             this.systemContent = systemContent;
             this.messageContent = messageContent;
+            this.hasAttachmentsOrEmbeds = hasAttachmentsOrEmbeds;
         }
     }
 
@@ -240,7 +244,11 @@ public final class MessageHooks {
         Object systemContent = Reflect.getField(referenced, contentField);
         Object messageContent = Reflect.call(Reflect.findMethodExact(message.getClass(),
                 messageContentGetter, 0), message);
-        ReferencedContent content = new ReferencedContent(messageId, systemContent, messageContent);
+        String mediaGetter = spec.optString("hasAttachmentsOrEmbedsGetter", null);
+        Object media = mediaGetter == null ? null : Reflect.call(
+                Reflect.findMethodExact(message.getClass(), mediaGetter, 0), message);
+        ReferencedContent content = new ReferencedContent(messageId, systemContent, messageContent,
+                Boolean.TRUE.equals(media));
         return new ReferencedContentRead(content,
                 HookBridge.looksLikeSnowflake(messageId) ? "loaded" : "message-id-invalid",
                 actualReferenceClass);
@@ -305,8 +313,20 @@ public final class MessageHooks {
         if (entry != null && entry.status == StateStore.Status.TRANSLATING) {
             bridge.trackReplyPreviewState(replySource.messageId, replyTrace);
         }
+        StateStore.Entry canonical = StateStore.get().peek(replySource.messageId);
+        TextExtractor.Result modelBody = TextExtractor.extract(replySource.messageContent);
+        TextExtractor.Result systemBody = TextExtractor.extract(replySource.systemContent);
         HookDiagnostics.info("replyPreview.consumer trace=" + replyTrace
                 + " state=" + (entry == null ? "missing-or-stale" : entry.status.name())
+                + " canonicalState=" + (canonical == null ? "missing" : canonical.status.name())
+                + " hasAttachmentsOrEmbeds=" + replySource.hasAttachmentsOrEmbeds
+                + " canonicalLength=" + (canonical == null || canonical.originalText == null
+                ? -1 : canonical.originalText.length())
+                + " modelLength=" + (modelBody == null ? -1 : modelBody.text.length())
+                + " modelSegments=" + (modelBody == null ? -1 : modelBody.segmentCount)
+                + " systemLength=" + (systemBody == null ? -1 : systemBody.text.length())
+                + " bodyTextMatches=" + (canonical != null && modelBody != null
+                && modelBody.text.equals(canonical.originalText))
                 + " route=native-converter requestSubmitted=false");
         if (previewText instanceof TextView) {
             observeReplyPreviewLayout((TextView) previewText, row, spec, replyTrace);
@@ -362,6 +382,10 @@ public final class MessageHooks {
                         + " textWidth=" + textView.getWidth()
                         + " textHeight=" + textView.getHeight()
                         + " textLines=" + textView.getLineCount()
+                        + " maxLines=" + textView.getMaxLines()
+                        + " ellipsize=" + textView.getEllipsize()
+                        + " lastLineEllipsisCount=" + (layout == null || layout.getLineCount() == 0
+                        ? -1 : layout.getEllipsisCount(layout.getLineCount() - 1))
                         + " usernameX=" + (username == null ? -1 : nameLocation[0])
                         + " usernameWidth=" + (username == null ? -1 : username.getWidth())
                         + " usernameVisibility=" + visibilityName(username)

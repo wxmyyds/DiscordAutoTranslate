@@ -33,7 +33,9 @@
 - 原生回调在转换结果上添加 `LeadingMarginSpan.Standard(前导区实测宽度, 0)`，再交给 `setDraweeSpanStringBuilder`。用户名与正文视图矩形相交属于设计允许的情况，是否避让必须看首行 span 和文字布局，不能仅看视图矩形。
 - 模块不得在回调之后用普通 `TextView.setText` 覆盖结果，否则会丢失首行避让和 Drawee 富文本。预览布局及 `q()` 测量继续由 Discord 自己执行。
 - `getContent()` 与 `getContent$annotations()` 是不同方法；反射成员必须精确匹配，不能把元数据方法返回的 null 当成“模型正文缺失”。
-- 没有规范消息译文时保持原生原文；本次修改的设备行为仍须复测。
+- 普通回复的译文复用和用户名避让已由用户设备复测确认；带图片/Embed 的消息引用未随正文翻译仍在排查，不能将其归因于图片标记本身。
+- 从设备 Discord 352.17 APK 的 `res/layout/message_view_reply_preview.xml` 核实，正文 `MessageContentView` 设置 `maxLines=2`、`ellipsize=END`、`singleLine=false`。保留该原生设置；不按字符裁剪、不拼接省略号。诊断只读取实际行数、行数上限、截断方式与末行省略数。
+- 预览消费日志区分规范状态是否存在、模型正文长度/片段数、正文是否匹配，以及是否带附件/Embed；不输出正文、消息 ID 或内容哈希。没有规范消息译文时保持原生原文。
 
 ## 结构约束
 
