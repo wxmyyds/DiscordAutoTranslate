@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -30,6 +31,10 @@ import io.github.libxposed.api.XposedModule;
  * 本类负责稳定的翻译与重渲染行为，并返回句柄供热重载清理。
  */
 public final class MessageHooks {
+
+    private static final AtomicLong REPLY_PREVIEW_TRACE_SEQUENCE = new AtomicLong();
+    private static final Map<View, Long> REPLY_PREVIEW_TRACE_IDS =
+            java.util.Collections.synchronizedMap(new WeakHashMap<>());
 
     /** Raw visible reply text retained across Discord's bind-driven rerenders. */
     private static final Map<View, ReplyPreviewSnapshot> REPLY_PREVIEW_SNAPSHOTS =
@@ -94,6 +99,7 @@ public final class MessageHooks {
                 .setId("dat.bind")
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> {
+                    long replyTrace = REPLY_PREVIEW_TRACE_SEQUENCE.incrementAndGet();
                     try {
                         bindPre(chain, spec);
                     } catch (Throwable t) {
@@ -103,7 +109,7 @@ public final class MessageHooks {
                     Object[] bindArgs = chain.getArgs().toArray();
                     Object result = chain.proceed();
                     try {
-                        bindPost(chain, bind, spec, bindArgs);
+                        bindPost(chain, bind, spec, bindArgs, replyTrace);
                     } catch (Throwable t) {
                         HookDiagnostics.warnOnce("message.bind.postException",
                                 "message.bind post-processing failed with "
@@ -227,7 +233,7 @@ public final class MessageHooks {
 
     /** After Discord has bound the preview, register it on the shared translation/render path. */
     private static void bindPost(XposedInterface.Chain chain, Method bind, JSONObject spec,
-                                 Object[] bindArgs) {
+                                 Object[] bindArgs, long replyTrace) {
         int modelArgument = spec.optInt("modelArgument", -1);
         if (modelArgument < 0 || modelArgument >= chain.getArgs().size()) {
             return;
@@ -242,12 +248,23 @@ public final class MessageHooks {
             return;
         }
 
+        REPLY_PREVIEW_TRACE_IDS.put(previewText, replyTrace);
         if (bindArgs == null) {
             bindArgs = chain.getArgs().toArray();
         }
+        ReferencedContent replySource = readReferencedContent(model,
+                spec.optJSONObject("referencedMessage"));
+        HookDiagnostics.info("replyPreview.bind trace=" + replyTrace
+                + " sourceClass=" + (replySource == null ? "unavailable"
+                : replySource.systemContent != null ? "system-structured"
+                : replySource.messageContent != null ? "message-structured" : "missing")
+                + " textViewPresent=" + (previewText instanceof TextView)
+                + " textLength=" + (previewText instanceof TextView
+                ? textLength((TextView) previewText) : -1));
         // SystemReferencedMessage(c8.i) carries plain String content and Discord draws
         // it directly, bypassing kl.b.B0. Route that source through the same state engine.
-        if (bindSystemReferencedPreview(model, row, previewText, bind, bindArgs, spec)) {
+        if (bindSystemReferencedPreview(model, row, previewText, bind, bindArgs, spec,
+                replyTrace)) {
             return;
         }
 
@@ -264,13 +281,16 @@ public final class MessageHooks {
                 HookBridge.get().bindView(previewText, referenced.messageId);
                 RerenderRegistry.register(referenced.messageId, previewText, row,
                         bind, bindArgs);
-                HookBridge.get().rememberContent(referenced.messageId, previewContent);
-                // Start/reuse work only through the canonical message state pipeline.
-                HookBridge.get().onMessageBound(previewText, referenced.messageId, previewContent);
+                String status = bindReplySource(previewText, referenced.messageId,
+                        previewContent, replyTrace);
+                HookDiagnostics.info("replyPreview.source trace=" + replyTrace
+                        + " source=model-structured state=" + status);
                 HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithContent",
                         "message.bind reply preview target registered; content available");
             } else if (!captureRenderedReplyPreview(previewText, row, bind, bindArgs,
-                    referenced.messageId, spec)) {
+                    referenced.messageId, spec, replyTrace)) {
+                HookDiagnostics.info("replyPreview.source trace=" + replyTrace
+                        + " outcome=waiting-canonical-bind");
                 // Keep its identity, but don't fabricate text or attribute it to the reply author.
                 HookBridge.get().bindView(previewText, referenced.messageId);
                 RerenderRegistry.register(referenced.messageId, previewText, row, bind, bindArgs);
@@ -287,7 +307,7 @@ public final class MessageHooks {
     /** Handle the c8.i SystemReferencedMessage(String) branch that bypasses kl.b.B0. */
     private static boolean bindSystemReferencedPreview(Object model, View row, View previewText,
                                                        Method bind, Object[] bindArgs,
-                                                       JSONObject spec) {
+                                                       JSONObject spec, long replyTrace) {
         JSONObject systemSpec = spec.optJSONObject("systemReferencedMessage");
         JSONObject referenceSpec = spec.optJSONObject("referencedMessage");
         String accessor = referenceSpec == null ? null : referenceSpec.optString("accessor", null);
@@ -318,8 +338,10 @@ public final class MessageHooks {
 
         HookBridge.get().bindView(previewText, stateKey);
         RerenderRegistry.register(stateKey, previewText, row, bind, bindArgs);
-        HookBridge.get().rememberContent(stateKey, wrapped);
-        HookBridge.get().onMessageBound(previewText, stateKey, wrapped);
+        String status = bindReplySource(previewText, stateKey, wrapped, replyTrace);
+        HookDiagnostics.info("replyPreview.source trace=" + replyTrace
+                + " source=system-plain textLength=" + rawText.length()
+                + " state=" + status);
         applyReplyPreviewTranslation((TextView) previewText, stateKey, true, row, spec);
         HookDiagnostics.infoOnce("message.bind.systemReplyPreview.registered",
                 "system reply preview uses shared translation state");
@@ -329,7 +351,7 @@ public final class MessageHooks {
     /** Use Discord's bound TextView as the authoritative visible source when the model omits it. */
     private static boolean captureRenderedReplyPreview(View preview, View row, Method bind,
                                                        Object[] bindArgs, String referencedId,
-                                                       JSONObject spec) {
+                                                       JSONObject spec, long replyTrace) {
         if (!(preview instanceof TextView)) {
             return false;
         }
@@ -351,8 +373,8 @@ public final class MessageHooks {
             }
         }
         if (visibleText == null || visibleText.trim().isEmpty()) {
-            HookDiagnostics.infoOnce("message.bind.replyVisibleText.absent",
-                    "reply preview model omitted content and bound view has no visible text");
+            HookDiagnostics.info("replyPreview.capture trace=" + replyTrace
+                    + " outcome=empty textViewPresent=true textLength=0");
             return false;
         }
 
@@ -368,12 +390,36 @@ public final class MessageHooks {
                 new ReplyPreviewSnapshot(referencedId, stateKey, visibleText));
         HookBridge.get().bindView(preview, stateKey);
         RerenderRegistry.register(stateKey, preview, row, bind, bindArgs);
-        HookBridge.get().rememberContent(stateKey, wrapped);
-        HookBridge.get().onMessageBound(preview, stateKey, wrapped);
+        String status = bindReplySource(preview, stateKey, wrapped, replyTrace);
+        HookDiagnostics.info("replyPreview.capture trace=" + replyTrace
+                + " outcome=visible-text textLength=" + visibleText.length()
+                + " lineCount=" + textView.getLineCount()
+                + " state=" + status);
         applyReplyPreviewTranslation(textView, stateKey, false, row, spec);
-        HookDiagnostics.infoOnce("message.bind.replyVisibleText.captured",
-                "reply preview translated from bound visible text via shared state pipeline");
         return true;
+    }
+
+    private static String bindReplySource(View view, String stateKey,
+                                          Object content, long replyTrace) {
+        HookBridge bridge = HookBridge.get();
+        bridge.trackReplyPreviewState(stateKey, replyTrace);
+        bridge.rememberContent(stateKey, content);
+        bridge.onMessageBound(view, stateKey, content);
+        String status = stateStatus(stateKey);
+        if (!StateStore.Status.TRANSLATING.name().equals(status)) {
+            bridge.clearReplyPreviewState(stateKey, replyTrace);
+        }
+        return status;
+    }
+
+    private static int textLength(TextView view) {
+        CharSequence text = view.getText();
+        return text == null ? 0 : text.length();
+    }
+
+    private static String stateStatus(String stateKey) {
+        StateStore.Entry entry = StateStore.get().peek(stateKey);
+        return entry == null ? "missing" : entry.status.name();
     }
 
     /** Apply a ready preview translation after Discord finishes its own bind. */
@@ -396,16 +442,43 @@ public final class MessageHooks {
 
     /** Re-run Discord's reply-preview measurement after its text height changes. */
     private static void refreshReplyPreviewLayout(TextView textView, View row, JSONObject spec) {
+        Long traceId = REPLY_PREVIEW_TRACE_IDS.get(textView);
+        long replyTrace = traceId == null ? 0L : traceId;
         String previewField = spec.optString("replyPreviewField", null);
         String layoutMethodName = spec.optString("replyPreviewLayoutMethod", null);
         Object preview = previewField == null ? null : Reflect.getField(row, previewField);
         if (!(preview instanceof View) || layoutMethodName == null) {
+            HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
+                    + " skipped=preview-or-method-unavailable"
+                    + " previewPresent=" + (preview instanceof View)
+                    + " methodConfigured=" + (layoutMethodName != null));
             return;
         }
         View previewView = (View) preview;
         Runnable refresh = () -> {
             Method layoutMethod = Reflect.findMethodExact(previewView.getClass(), layoutMethodName, 0);
-            Reflect.call(layoutMethod, previewView);
+            boolean invocationSucceeded = false;
+            String invocationError = "none";
+            if (layoutMethod == null) {
+                invocationError = "method-not-found";
+            } else {
+                try {
+                    layoutMethod.invoke(previewView);
+                    invocationSucceeded = true;
+                } catch (Throwable t) {
+                    Throwable cause = t.getCause() == null ? t : t.getCause();
+                    invocationError = cause.getClass().getSimpleName();
+                }
+            }
+            HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
+                    + " methodFound=" + (layoutMethod != null)
+                    + " invocationSucceeded=" + invocationSucceeded
+                    + " errorClass=" + invocationError
+                    + " textWidth=" + textView.getWidth()
+                    + " textLines=" + textView.getLineCount()
+                    + " textHeight=" + textView.getHeight()
+                    + " previewWidth=" + previewView.getWidth()
+                    + " previewHeight=" + previewView.getHeight());
             textView.requestLayout();
             previewView.requestLayout();
             row.requestLayout();
@@ -414,6 +487,8 @@ public final class MessageHooks {
         if (textView.getWidth() > 0) {
             refresh.run();
         } else {
+            HookDiagnostics.info("replyPreview.layout trace=" + replyTrace
+                    + " invocation=posted textWidth=" + textView.getWidth());
             textView.post(refresh);
         }
     }

@@ -56,6 +56,9 @@ public final class HookBridge {
     /** 消息 ID → 最近承载它的视图（弱引用，避免消息状态反向固定 View）。 */
     private final Map<String, java.lang.ref.WeakReference<View>> lastView = boundedMap(512);
 
+    /** Reply-preview trace tokens keyed by internal translation state identity; IDs are never logged. */
+    private final Map<String, Long> replyPreviewTraceByState = boundedMap(512);
+
     /** 按引用身份反查消息 ID；Discord StructurableText 的 equals() 是按内容比较。 */
     private final IdentityMessageMap contentIdentityToMessageId = new IdentityMessageMap();
 
@@ -162,6 +165,7 @@ public final class HookBridge {
         contentIdentityToMessageId.clear();
         iconOnlyContentToKey.clear();
         embedIconKeys.clear();
+        replyPreviewTraceByState.clear();
     }
 
     private static <K, V> Map<K, V> boundedMap(int maxEntries) {
@@ -523,12 +527,35 @@ public final class HookBridge {
                         onTranslateResult(id, accepted, translated, error));
     }
 
-    /** 翻译结果回写（主线程）。 */
+    public void trackReplyPreviewState(String stateKey, long trace) {
+        if (stateKey != null && trace > 0) {
+            replyPreviewTraceByState.put(stateKey, trace);
+        }
+    }
+
+    public void clearReplyPreviewState(String stateKey, long trace) {
+        if (stateKey == null || trace <= 0) {
+            return;
+        }
+        synchronized (replyPreviewTraceByState) {
+            Long current = replyPreviewTraceByState.get(stateKey);
+            if (current != null && current == trace) {
+                replyPreviewTraceByState.remove(stateKey);
+            }
+        }
+    }
+
+    /** 按 profile 决定的统一翻译结果回写。 */
     private void onTranslateResult(String id, boolean accepted,
                                    @Nullable String translated, @Nullable Throwable error) {
+        Long replyTrace;
+        synchronized (replyPreviewTraceByState) {
+            replyTrace = replyPreviewTraceByState.remove(id);
+        }
         HookDiagnostics.info("translation result received accepted=" + accepted
                 + " translatedPresent=" + (translated != null && !translated.isEmpty())
-                + " errorClass=" + (error == null ? "none" : error.getClass().getSimpleName()));
+                + " errorClass=" + (error == null ? "none" : error.getClass().getSimpleName())
+                + (replyTrace == null ? "" : " replyPreviewTrace=" + replyTrace));
         StateStore.Entry cur = StateStore.get().peek(id);
         if (cur == null) {
             HookDiagnostics.info("translation result ignored reason=missingState");
