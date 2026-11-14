@@ -224,26 +224,28 @@ public final class MessageHooks {
         RerenderRegistry.unregister(previewText);
         ReferencedContent referenced = readReferencedContent(model,
                 spec.optJSONObject("referencedMessage"));
-        Object previewContent = referenced == null ? null : referenced.previewContent();
-        if (referenced != null && previewContent != null
-                && HookBridge.looksLikeSnowflake(referenced.messageId)) {
-            HookBridge.get().rememberContent(referenced.messageId, previewContent);
+        if (referenced != null && HookBridge.looksLikeSnowflake(referenced.messageId)) {
+            // The preview belongs to the referenced message even when Discord has not
+            // supplied its text yet. Never bind it to the containing/replying message.
             HookBridge.get().bindView(previewText, referenced.messageId);
             RerenderRegistry.register(referenced.messageId, previewText, row,
                     bind, bindArgs);
-            // Reuse the one message state/cache/request pipeline; no converter-side request.
-            HookBridge.get().onMessageBound(previewText, referenced.messageId, previewContent);
-            HookDiagnostics.infoOnce("message.bind.replyTarget.registered",
-                    "message.bind reply preview target registered on shared pipeline");
+            Object previewContent = referenced.previewContent();
+            if (previewContent != null) {
+                HookBridge.get().rememberContent(referenced.messageId, previewContent);
+                // Start/reuse work only through the canonical message state pipeline.
+                HookBridge.get().onMessageBound(previewText, referenced.messageId, previewContent);
+                HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithContent",
+                        "message.bind reply preview target registered; content available");
+            } else {
+                HookDiagnostics.infoOnce("message.bind.replyTarget.registeredWithoutContent",
+                        "message.bind reply preview target registered; content unavailable, awaiting canonical message bind");
+            }
             return;
         }
 
-        String parentId = Reflect.callString(model, spec.optString("messageIdGetter", null));
-        if (parentId != null && HookBridge.looksLikeSnowflake(parentId)) {
-            HookBridge.get().bindView(previewText, parentId);
-        } else {
-            HookBridge.get().unbindView(previewText);
-        }
+        // Unknown reference identity is not permission to associate the preview with its parent row.
+        HookBridge.get().unbindView(previewText);
     }
 
     @Nullable
